@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Environment } from '../world/Environment.js';
 import { Sky } from '../world/Sky.js';
 import { Terrain } from '../world/Terrain.js';
-import { Clouds } from '../world/Clouds.js';
+import { CloudVolume } from '../world/CloudVolume.js';
 import { terrainHeight, maxHeightAlong } from '../world/heightfield.js';
 import { FlightFx } from '../fx/FlightFx.js';
 import { Audio } from '../fx/Audio.js';
@@ -51,9 +51,8 @@ export class Game {
     engine.scene.add(this.terrain.group);
     this.terrain.setQuality(settings.tier);
 
-    this.clouds = new Clouds(this.environment);
-    this.clouds.setQuality(settings.tier);
-    engine.scene.add(this.clouds.mesh);
+    this.clouds = new CloudVolume(this.environment, engine.camera);
+    engine.setClouds(this.clouds);
 
     this.fx = new FlightFx(this.environment);
     this.fx.setQuality(settings.tier);
@@ -205,7 +204,6 @@ export class Game {
     this.settings.setTier(tier);
     this.engine.applySettings();
     this.terrain.setQuality(this.settings.tier);
-    this.clouds.setQuality(this.settings.tier);
     this.fx.setQuality(this.settings.tier);
     this.screens.setQuality(tier);
   }
@@ -250,7 +248,6 @@ export class Game {
       case 'briefing':
         this._updateCinematic(dt);
         this.terrain.update(this.engine.camera.position, this.settings.tier.terrainBudget);
-        this.clouds.update(dt, this.engine.camera.position);
         break;
 
       case 'flying':
@@ -337,7 +334,6 @@ export class Game {
     }
 
     this.terrain.update(flight.position, this.settings.tier.terrainBudget);
-    this.clouds.update(dt, flight.position);
     this.fx.update(dt, flight, this.engine.camera.position);
 
     // Closing rate between camera and aircraft, for the Doppler shift. The

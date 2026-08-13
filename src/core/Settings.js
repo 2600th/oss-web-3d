@@ -29,6 +29,9 @@ export const TIERS = {
     terrainBudget: 1,
     terrainRes: 129,
     shadowSteps: 10,
+    cloudSteps: 24,
+    cloudLightSteps: 3,
+    cloudDistance: 26000,
   },
   low: {
     name: 'low',
@@ -45,6 +48,9 @@ export const TIERS = {
     terrainBudget: 2,
     terrainRes: 129,
     shadowSteps: 14,
+    cloudSteps: 32,
+    cloudLightSteps: 4,
+    cloudDistance: 32000,
   },
   medium: {
     name: 'medium',
@@ -61,6 +67,9 @@ export const TIERS = {
     terrainBudget: 3,
     terrainRes: 193,
     shadowSteps: 18,
+    cloudSteps: 44,
+    cloudLightSteps: 4,
+    cloudDistance: 40000,
   },
   high: {
     name: 'high',
@@ -77,6 +86,9 @@ export const TIERS = {
     terrainBudget: 4,
     terrainRes: 257,
     shadowSteps: 20,
+    cloudSteps: 56,
+    cloudLightSteps: 5,
+    cloudDistance: 46000,
   },
 };
 

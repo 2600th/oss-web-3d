@@ -12,6 +12,7 @@ import {
   BlendFunction,
 } from 'postprocessing';
 import { DitherEffect } from './DitherEffect.js';
+import { CloudVolume } from '../world/CloudVolume.js';
 
 /**
  * Renderer, camera, post chain and the frame loop.
@@ -108,6 +109,11 @@ export class Engine {
     }
     const tier = this.settings.tier;
     const effects = [];
+    // Clouds first: they are scene radiance, so they must be in the image
+    // before bloom decides what is bright and before the tone curve is applied.
+    // Putting them after tone mapping would make them immune to exposure and
+    // let them bloom on their own midtones.
+    if (this.clouds) effects.push(this.clouds);
     if (tier.bloom) effects.push(this.bloom);
     effects.push(this.toneMapping, this.vignette);
     if (tier.smaa) effects.push(this.smaa);
@@ -118,7 +124,21 @@ export class Engine {
     this.composer.addPass(this.effectPass);
   }
 
+  /**
+   * Attach the volumetric clouds.
+   *
+   * They need the environment and camera, which the Game owns, so they are
+   * installed after construction rather than built here. Rebuilding the effect
+   * pass is what actually inserts them into the chain.
+   */
+  setClouds(clouds) {
+    this.clouds = clouds;
+    this.clouds.setQuality(this.settings.tier);
+    this._buildEffectPass();
+  }
+
   applySettings() {
+    if (this.clouds) this.clouds.setQuality(this.settings.tier);
     this._buildEffectPass();
     this.renderScale = Math.min(1, this.settings.tier.pixelRatio);
     this.resize();

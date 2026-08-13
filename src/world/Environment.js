@@ -32,10 +32,15 @@ export class Environment {
       uHazeBase: { value: 2600.0 },
       uSunIntensity: { value: 1.5 },
       uTime: { value: 0 },
-      uCloudCover: { value: 0.46 },
-      uCloudScale: { value: 1.0 / 9000.0 },
-      uCloudShadowStrength: { value: 0.5 },
       uWind: { value: new THREE.Vector2(11.0, 4.5) },
+      // Cloud field. Shared by the volumetric march and the terrain's cloud
+      // shadows so both describe the same weather; see clouds.glsl.js.
+      uCloudBase: { value: 4600.0 },
+      uCloudTop: { value: 6450.0 },
+      uCloudCoverage: { value: 0.00055 },
+      uCloudDensity: { value: 0.0042 },
+      uCloudWind: { value: new THREE.Vector2(3.8, 1.6) },
+      uCloudTime: { value: 0 },
       uCameraPos: { value: new THREE.Vector3() },
     };
 
@@ -64,6 +69,7 @@ export class Environment {
 
   update(dt, cameraPos) {
     this.uniforms.uTime.value += dt;
+    this.uniforms.uCloudTime.value += dt;
     this.uniforms.uCameraPos.value.copy(cameraPos);
     // Keep the directional light anchored to the camera so its (unused for
     // shadows, but used for specular) direction stays stable in a moving world.

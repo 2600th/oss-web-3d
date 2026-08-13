@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TERRAIN_NOISE_GLSL } from './terrainNoise.glsl.js';
 import { ATMOSPHERE_GLSL, ATMOSPHERE_UNIFORMS_GLSL } from './atmosphere.glsl.js';
+import { CLOUD_GLSL } from './clouds.glsl.js';
 
 /**
  * Effectively infinite terrain, drawn as a GPU geometry clipmap.
@@ -513,12 +514,10 @@ export class Terrain {
         uniform float uDetailFade;
         uniform float uTime;
         uniform vec2 uWind;
-        uniform float uCloudCover;
-        uniform float uCloudScale;
-        uniform float uCloudShadowStrength;
         uniform vec3 uCameraPos;
         ${ATMOSPHERE_UNIFORMS_GLSL}
         ${ATMOSPHERE_GLSL}
+        ${CLOUD_GLSL}
 
         const float RES = ${RES.toFixed(1)};
         const float HALF = ${HALF.toFixed(1)};
@@ -566,16 +565,11 @@ export class Terrain {
           return v;
         }
 
-        // Shadows cast by the cloud layer. Projected along the sun direction so
-        // they slide across ridges correctly rather than lying flat on the map.
-        float cloudShadow(vec3 world) {
-          float layerY = 6400.0;
-          float t = (layerY - world.y) / max(uSunDir.y, 0.15);
-          vec2 p = (world.xz + uSunDir.xz * t) * uCloudScale + uWind * uTime * 0.00006;
-          float n = fbm2(p * 3.0, 3) * 0.5 + 0.5;
-          float cov = smoothstep(0.62 - uCloudCover * 0.45, 0.86 - uCloudCover * 0.32, n);
-          return 1.0 - uCloudShadowStrength * cov;
-        }
+        // Cloud shadows come from cloudShadowAt() in the shared cloud field, so
+        // the shadow on the ground is cast by the cloud that is actually in the
+        // sky. This used to be its own cheaper noise, which meant the two never
+        // agreed: you could fly under a bank in full sunlight, or through a
+        // shadow with nothing above you.
 
         void main() {
           int vLevel = int(vLevelF + 0.5);
@@ -736,7 +730,7 @@ export class Terrain {
           float ndl = dot(N, uSunDir);
           // Cast shadow never goes fully black: high-altitude air scatters a
           // little direct sun sideways, and a hard zero reads as a hole.
-          float shadow = cloudShadow(vWorld) * mix(0.12, 1.0, sunVis);
+          float shadow = cloudShadowAt(vWorld, uSunDir) * mix(0.12, 1.0, sunVis);
           // Snow scatters light forward through its top layer, so it stays lit
           // a little past the terminator. Kept modest: too much wrap and the
           // peaks lose all their shape and read as poured cream.
