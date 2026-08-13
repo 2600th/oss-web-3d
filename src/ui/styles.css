@@ -1140,3 +1140,163 @@ body {
   border-radius: 1px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
+
+/* ---------------------------------------------------------------- touch --
+   Hidden entirely unless a coarse pointer is detected, so a desktop session
+   never pays for the markup. Positions use safe-area insets: on a notched
+   phone in landscape the stick would otherwise sit under the rounded corner,
+   and the throttle strip under the home indicator. */
+#touch {
+  position: fixed;
+  inset: 0;
+  display: none;
+  z-index: 40;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#touch.show { display: block; }
+
+.touch-zone {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stick-zone {
+  left: max(0px, env(safe-area-inset-left));
+  bottom: 0;
+  width: min(42vw, 340px);
+  height: min(46vh, 300px);
+}
+.stick-ring,
+.stick-nub {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+  will-change: transform;
+}
+.stick-ring {
+  width: 128px;
+  height: 128px;
+  margin: -64px 0 0 -64px;
+  border: 1px solid rgba(184, 216, 196, 0.30);
+  background: rgba(8, 14, 20, 0.16);
+}
+.stick-nub {
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border: 1px solid rgba(184, 216, 196, 0.65);
+  background: rgba(184, 216, 196, 0.16);
+}
+
+.throttle-zone {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(96px, env(safe-area-inset-bottom));
+  width: 58px;
+  height: min(40vh, 260px);
+  border: 1px solid rgba(184, 216, 196, 0.28);
+  background: rgba(8, 14, 20, 0.28);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.throttle-zone > i {
+  position: absolute;
+  inset: 0;
+  transform-origin: bottom;
+  transform: scaleY(0.72);
+  background: linear-gradient(to top, rgba(184, 216, 196, 0.34), rgba(184, 216, 196, 0.14));
+}
+.throttle-label {
+  position: absolute;
+  bottom: 6px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 600 10px/1 var(--mono, monospace);
+  letter-spacing: 0.14em;
+  color: var(--instrument, #b8d8c4);
+  opacity: 0.75;
+}
+
+.touch-btn {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  font: 600 11px/1 var(--mono, monospace);
+  letter-spacing: 0.14em;
+  color: var(--instrument, #b8d8c4);
+  background: rgba(8, 14, 20, 0.34);
+  border: 1px solid rgba(184, 216, 196, 0.30);
+  border-radius: 3px;
+  padding: 0;
+}
+.touch-btn:active { background: rgba(184, 216, 196, 0.20); }
+.recon-btn {
+  right: max(84px, calc(env(safe-area-inset-right) + 84px));
+  bottom: max(96px, env(safe-area-inset-bottom));
+  width: 84px;
+  height: 46px;
+}
+.recon-btn.active {
+  background: rgba(184, 216, 196, 0.26);
+  border-color: rgba(184, 216, 196, 0.72);
+}
+/* Shutter and zoom only matter with the recon camera up, so they stay out of
+   the way until it is. */
+.shutter-btn,
+.zoom-btn { opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
+#touch.recon-open .shutter-btn,
+#touch.recon-open .zoom-btn { opacity: 1; pointer-events: auto; }
+.shutter-btn {
+  right: max(84px, calc(env(safe-area-inset-right) + 84px));
+  bottom: max(150px, calc(env(safe-area-inset-bottom) + 54px));
+  width: 84px;
+  height: 46px;
+}
+.zoom-btn { width: 40px; height: 40px; font-size: 16px; }
+.zoom-in {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(368px, calc(env(safe-area-inset-bottom) + 272px));
+}
+.zoom-out {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(322px, calc(env(safe-area-inset-bottom) + 226px));
+}
+
+/* Phone layout.
+   Two things have to give. The tapes are sized for a desktop window and on a
+   390px-tall screen they dominate it, so they shrink and lose their minimum
+   height. And the right-hand tape sits exactly where the throttle strip and
+   recon button live, so it moves inboard — a HUD element under a thumb is
+   both unreadable and un-pressable. */
+@media (pointer: coarse) {
+  #hud { font-size: 0.74em; }
+
+  .tape {
+    width: 62px;
+    height: 46vh;
+    min-height: 0;
+  }
+  .tape.left { left: 2vw; }
+  .tape.right { right: 92px; }
+
+  .tape-readout { font-size: 15px; }
+
+  /* Objectives and target callout pull in from the corners the controls own. */
+  #hud .objectives { right: 92px; bottom: 6px; }
+  #hud .target-callout { bottom: 4px; }
+}
+
+/* Very short viewports (a phone held in landscape with browser chrome) need
+   the tapes shorter still or they run under the compass. */
+@media (pointer: coarse) and (max-height: 420px) {
+  .tape { height: 52vh; width: 54px; }
+  #hud { font-size: 0.68em; }
+}

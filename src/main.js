@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { Engine } from './core/Engine.js';
-import { Settings, guessTier } from './core/Settings.js';
+import { Settings, guessTier, isTouchDevice } from './core/Settings.js';
 import { Input } from './core/Input.js';
+import { TouchControls } from './core/TouchControls.js';
 import { Game } from './game/Game.js';
+import { configureTerrain } from './world/Terrain.js';
 import { terrainHeight } from './world/heightfield.js';
 import { TERRAIN_NOISE_GLSL } from './world/terrainNoise.glsl.js';
 
@@ -10,10 +12,29 @@ const canvas = document.getElementById('viewport');
 const settings = new Settings();
 const engine = new Engine(canvas, settings);
 if (!settings.autoDetected) settings.setTier(guessTier(engine.renderer));
+
+// Terrain grid resolution has to be fixed before Terrain is constructed — it
+// sets buffer sizes and constants compiled into the shaders — so it is applied
+// here rather than through the usual applySettings path, and changing it later
+// requires a reload. Every other quality knob stays live.
+configureTerrain({ res: settings.tier.terrainRes });
 engine.applySettings();
 
 const input = new Input();
 const game = new Game(engine, settings, input);
+
+const touch = new TouchControls(input, document.getElementById('ui'));
+touch.setEnabled(isTouchDevice());
+// Touch counts as the gesture that unlocks audio, which iOS requires and which
+// the keyboard path would otherwise never receive on a phone.
+if (isTouchDevice()) {
+  const unlock = () => {
+    game.audio.start();
+    game.audio.resume();
+  };
+  window.addEventListener('pointerdown', unlock, { once: true });
+  window.addEventListener('touchend', unlock, { once: true });
+}
 
 const debug = document.createElement('div');
 debug.id = 'debug';

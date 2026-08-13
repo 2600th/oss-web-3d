@@ -3,12 +3,33 @@
  * run, overridable from the pause menu, persisted in localStorage.
  *
  * The knobs are ordered by cost: pixel ratio dominates, then cloud fill, then
- * the postprocessing chain. Terrain triangle count is deliberately *not* a
- * knob — the clipmap is already fixed-cost and dropping levels would shrink
- * the view distance, which is the one thing this experience cannot afford.
+ * the postprocessing chain.
+ *
+ * terrainRes is the exception and has to be set before Terrain is built, since
+ * it fixes buffer sizes and shader constants. Dropping clipmap *levels* is
+ * still refused — that shrinks view distance, the one thing this experience
+ * cannot afford — but grid resolution is fair game: it costs vertices, not
+ * range. Desktop measured 257 as free (the renderer is fragment-bound), and a
+ * phone cannot afford the million triangles that produces.
  */
 
 export const TIERS = {
+  phone: {
+    name: 'phone',
+    label: 'Phone',
+    pixelRatio: 0.7,
+    maxPixelRatio: 1.0,
+    bloom: false,
+    smaa: false,
+    cloudCount: 60,
+    cloudLayers: 4,
+    terrainDetail: 0.0,
+    contrails: false,
+    speedParticles: 120,
+    terrainBudget: 1,
+    terrainRes: 129,
+    shadowSteps: 10,
+  },
   low: {
     name: 'low',
     label: 'Low',
@@ -22,6 +43,8 @@ export const TIERS = {
     contrails: false,
     speedParticles: 220,
     terrainBudget: 2,
+    terrainRes: 129,
+    shadowSteps: 14,
   },
   medium: {
     name: 'medium',
@@ -36,6 +59,8 @@ export const TIERS = {
     contrails: true,
     speedParticles: 420,
     terrainBudget: 3,
+    terrainRes: 193,
+    shadowSteps: 18,
   },
   high: {
     name: 'high',
@@ -50,6 +75,8 @@ export const TIERS = {
     contrails: true,
     speedParticles: 700,
     terrainBudget: 4,
+    terrainRes: 257,
+    shadowSteps: 20,
   },
 };
 
@@ -111,14 +138,44 @@ export class Settings {
  * Deliberately conservative: it is much better to start at medium and let the
  * adaptive resolution scaler climb than to open at high and stutter.
  */
+/**
+ * Is this a touch-first device?
+ *
+ * Deliberately a *capability* query rather than user-agent sniffing. The
+ * pointer media query reports how accurate the primary input is, so a phone and
+ * a tablet answer "coarse" while a laptop with a touchscreen still answers
+ * "fine" — which is the distinction that matters, since that laptop wants the
+ * desktop renderer and keyboard controls. maxTouchPoints is the fallback for
+ * browsers that do not support the query.
+ */
+export function isTouchDevice() {
+  const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+  const touch = (navigator.maxTouchPoints ?? 0) > 0;
+  const noHover = window.matchMedia?.('(hover: none)').matches ?? false;
+  return (coarse && touch) || (noHover && touch);
+}
+
 export function guessTier(renderer) {
   const gl = renderer.getContext();
+  // WEBGL_debug_renderer_info is being withdrawn for fingerprinting reasons and
+  // is already masked or absent in several browsers, so it is treated as a hint
+  // when present rather than as the basis of the decision.
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const name = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
   const lower = name.toLowerCase();
 
+  // A phone is decided by input and screen, which are observable and not
+  // masked. Getting this wrong in the safe direction costs some sharpness;
+  // getting it wrong the other way hands a 1M-triangle scene to a phone.
+  if (isTouchDevice()) {
+    const wide = Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0);
+    const cores = navigator.hardwareConcurrency ?? 4;
+    const roomy = wide >= 1024 && cores >= 6;
+    return roomy ? 'low' : 'phone';
+  }
+
   const integrated = /(intel|uhd graphics|iris|adreno|mali|apple a\d|powervr)/.test(lower);
-  const strong = /(rtx|radeon rx|geforce gtx 1[06-9]|arc a|apple m[1-9])/.test(lower);
+  const strong = /(rtx|radeon rx|geforce (gtx|rtx) 1[06-9]|arc a|apple m[1-9])/.test(lower);
 
   if (strong) return 'high';
   if (integrated) return 'medium';

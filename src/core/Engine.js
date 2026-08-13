@@ -11,6 +11,7 @@ import {
   SMAAPreset,
   BlendFunction,
 } from 'postprocessing';
+import { DitherEffect } from './DitherEffect.js';
 
 /**
  * Renderer, camera, post chain and the frame loop.
@@ -76,6 +77,10 @@ export class Engine {
 
     this.smaa = new SMAAEffect({ preset: SMAAPreset.MEDIUM });
 
+    // Slightly above one 8-bit step. The sky is a near-flat gradient across
+    // most of the frame and bands hard without this.
+    this.dither = new DitherEffect(1.4 / 255);
+
     this._buildEffectPass();
 
     // THREE.Clock is deprecated in r185 and warns on construction. Timer is the
@@ -106,6 +111,9 @@ export class Engine {
     if (tier.bloom) effects.push(this.bloom);
     effects.push(this.toneMapping, this.vignette);
     if (tier.smaa) effects.push(this.smaa);
+    // Last, and after tone mapping: dither applied earlier gets compressed by
+    // the curve along with the signal, losing the amplitude it exists to keep.
+    effects.push(this.dither);
     this.effectPass = new EffectPass(this.camera, ...effects);
     this.composer.addPass(this.effectPass);
   }

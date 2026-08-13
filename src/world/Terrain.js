@@ -28,9 +28,35 @@ import { ATMOSPHERE_GLSL, ATMOSPHERE_UNIFORMS_GLSL } from './atmosphere.glsl.js'
  * hands over to. No skirts, no popping, no cracks.
  */
 
-const RES = 257; // vertices (and heightmap texels) per side
-const CELLS = RES - 1; // 256
-const HALF = CELLS / 2; // 128
+/**
+ * Clipmap grid resolution, in vertices per side.
+ *
+ * Mutable, and set once at boot before Terrain is constructed, because it is
+ * the single biggest lever on both quality and cost and it cannot be changed
+ * later: it fixes buffer sizes, render target dimensions and constants baked
+ * into the shader source. Desktop wants 257 — measured free there, since this
+ * renderer is fragment-bound — and a phone emphatically does not.
+ *
+ * Cell size at distance d is about d/HALF, so this is also the *only* knob
+ * that controls how triangulated the range looks at range.
+ */
+let RES = 257;
+let CELLS = RES - 1;
+let HALF = CELLS / 2;
+let HOLE = CELLS / 4 + 2;
+let TEMP_RES = RES + 2;
+
+/** Must be called before constructing Terrain; a no-op afterwards. */
+export function configureTerrain({ res, levels }) {
+  if (res) {
+    RES = res;
+    CELLS = RES - 1;
+    HALF = CELLS / 2;
+    HOLE = CELLS / 4 + 2;
+    TEMP_RES = RES + 2;
+  }
+  if (levels) TERRAIN_LEVELS = levels;
+}
 
 /**
  * Where a ring's hole starts, in cell indices.
@@ -43,17 +69,15 @@ const HALF = CELLS / 2; // 128
  * further in guarantees coverage; the fragment discard still trims it to the
  * exact boundary, so nothing is drawn twice.
  */
-const HOLE = CELLS / 4 + 2; // 66
-const TEMP_RES = RES + 2; // 1-texel margin so normals have valid neighbours
 
 /** NDC depth nudge per clipmap level, so finer rings win inside the overlap. */
 const DEPTH_BIAS = '1.2e-5';
 
-export const TERRAIN_LEVELS = 10;
+export let TERRAIN_LEVELS = 10;
 export const TERRAIN_BASE_CELL = 4.0;
 
 /** Half-extent, in metres, covered by the whole clipmap. */
-export const TERRAIN_RADIUS = HALF * TERRAIN_BASE_CELL * 2 ** (TERRAIN_LEVELS - 1);
+export const terrainRadius = () => HALF * TERRAIN_BASE_CELL * 2 ** (TERRAIN_LEVELS - 1);
 
 function buildGrid(skipHole) {
   const geometry = new THREE.InstancedBufferGeometry();
@@ -399,6 +423,15 @@ export class Terrain {
         precision highp float;
         precision highp sampler2DArray;
 
+        // Apple's Metal backend compiles shaders with fast-math enabled, which
+        // is free to reorder floating-point arithmetic. On world coordinates in
+        // the tens of thousands of metres that reordering changes the result
+        // enough to show as vertex jitter, and it does so differently between
+        // the two draws that share this material -- so the ring and the block
+        // disagree along their shared edge (WebKit 237434). invariant pins the
+        // computation.
+        invariant gl_Position;
+
         in float aLevel;
 
         uniform sampler2DArray uHeightMap;
@@ -407,8 +440,15 @@ export class Terrain {
 
         out vec3 vWorld;
         out float vMorph;
-        flat out int vLevel;
-        flat out int vNextLevel;
+        // Plain interpolated floats rather than flat ints, and not by choice.
+        // A flat varying crashes the GPU process on iOS 18 once a draw passes
+        // roughly 30k vertices (WebKit 289601), and this mesh is an order of
+        // magnitude past that. Interpolation is exact here anyway: the level is
+        // a per-instance attribute, so all three vertices of every triangle
+        // carry the same value and barycentric interpolation returns it
+        // unchanged.
+        out float vLevelF;
+        out float vNextLevelF;
 
         const float RES = ${RES.toFixed(1)};
         const float HALF = ${HALF.toFixed(1)};
@@ -442,8 +482,8 @@ export class Terrain {
 
           vWorld = vec3(world.x, h, world.y);
           vMorph = k;
-          vLevel = L;
-          vNextLevel = Ln;
+          vLevelF = float(L);
+          vNextLevelF = float(Ln);
 
           gl_Position = projectionMatrix * modelViewMatrix * vec4(vWorld, 1.0);
 
@@ -462,8 +502,8 @@ export class Terrain {
 
         in vec3 vWorld;
         in float vMorph;
-        flat in int vLevel;
-        flat in int vNextLevel;
+        in float vLevelF;
+        in float vNextLevelF;
 
         out vec4 fragColor;
 
@@ -538,6 +578,9 @@ export class Terrain {
         }
 
         void main() {
+          int vLevel = int(vLevelF + 0.5);
+          int vNextLevel = int(vNextLevelF + 0.5);
+
           // Layout is (height, normal.x, normal.z, sun visibility). Normal Y is
           // recovered rather than stored — it is always positive on a
           // heightfield — which buys the alpha channel for baked shadows.

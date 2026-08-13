@@ -21,6 +21,14 @@ export class Input {
     this.reconHeld = false;
     this.enabled = true;
 
+    // Touch state. `touchActive` latches on first use so a desktop session is
+    // never affected by these being present.
+    this.touchActive = false;
+    this.touchRecon = false;
+    this._touchPitch = undefined;
+    this._touchRoll = undefined;
+    this._touchThrottle = undefined;
+
     this._pitchTarget = 0;
     this._rollTarget = 0;
     this._yawTarget = 0;
@@ -56,6 +64,35 @@ export class Input {
     target.addEventListener('blur', this._onBlur);
     target.addEventListener('mousemove', this._onMouseMove);
     this._target = target;
+  }
+
+  // ------------------------------------------------------------- touch --
+  //
+  // Touch writes into the same targets the keyboard does, so the smoothing,
+  // the flight model and the game state machine never learn which input is
+  // driving. The only difference is that touch axes are analogue and arrive
+  // pre-shaped, so update() must not overwrite them with key state.
+
+  setTouchAxes(pitch, roll) {
+    this.touchActive = true;
+    this._touchPitch = pitch;
+    this._touchRoll = roll;
+  }
+
+  setTouchThrottle(t) {
+    this.touchActive = true;
+    this._touchThrottle = t;
+  }
+
+  toggleTouchRecon() {
+    this.touchRecon = !this.touchRecon;
+    this.touchActive = true;
+  }
+
+  /** Fire an edge-triggered action from an on-screen button. */
+  pressTouch(code) {
+    this.touchActive = true;
+    this._pressed.add(code);
   }
 
   /** True once, on the frame a key went down. */
@@ -108,6 +145,16 @@ export class Input {
         r = Math.max(-1, Math.min(1, this._mouseX * 2.6));
       }
 
+      // Touch overrides, applied last so an on-screen stick wins over the
+      // (absent) keys rather than being averaged with them. Only axes the
+      // player is actually touching are taken: with no thumb down the stick
+      // reports zero, which is what a released stick should mean.
+      if (this.touchActive) {
+        if (this._touchPitch !== undefined) p = this._touchPitch;
+        if (this._touchRoll !== undefined) r = this._touchRoll;
+        if (this._touchThrottle !== undefined) this.throttle = this._touchThrottle;
+      }
+
       this._pitchTarget = invertPitch ? -p : p;
       this._rollTarget = r;
       this._yawTarget = y;
@@ -119,7 +166,8 @@ export class Input {
         this.throttle = Math.max(0, this.throttle - dt * 0.62);
       }
       this.brake = k.has('KeyZ') ? 1 : 0;
-      this.reconHeld = k.has('Space') || !!this.gamepad?.buttons[5]?.value;
+      this.reconHeld =
+        k.has('Space') || !!this.gamepad?.buttons[5]?.value || this.touchRecon === true;
     }
 
     this.pitch = approach(this.pitch, this._pitchTarget, dt);
