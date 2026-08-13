@@ -60,6 +60,7 @@ export class Settings {
     this.tierName = 'high';
     this.invertPitch = false;
     this.masterVolume = 0.8;
+    this.musicVolume = 0.75;
     this.load();
   }
 
@@ -81,6 +82,7 @@ export class Settings {
       if (TIERS[data.tierName]) this.tierName = data.tierName;
       if (typeof data.invertPitch === 'boolean') this.invertPitch = data.invertPitch;
       if (typeof data.masterVolume === 'number') this.masterVolume = data.masterVolume;
+      if (typeof data.musicVolume === 'number') this.musicVolume = data.musicVolume;
       this.autoDetected = true;
     } catch {
       /* storage unavailable — defaults are fine */
@@ -95,6 +97,7 @@ export class Settings {
           tierName: this.tierName,
           invertPitch: this.invertPitch,
           masterVolume: this.masterVolume,
+          musicVolume: this.musicVolume,
         }),
       );
     } catch {

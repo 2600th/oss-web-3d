@@ -171,6 +171,7 @@ export class Game {
     this.terrain.prime(this.flight.position);
     this.fx.reset();
     this.audio.resetEngine();
+    this.audio.music?.play('sortie');
     this.mission.begin();
     this.hud.show(true);
     this.state = 'flying';
@@ -211,6 +212,7 @@ export class Game {
 
   _finish(success) {
     this.state = success ? 'complete' : 'failed';
+    this.audio.music?.play(success ? 'return' : 'loss');
     this.hud.show(false);
     this.reconActive = false;
     this.screens.showDebrief(this.mission, success);

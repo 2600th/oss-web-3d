@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Music } from './Music.js';
 
 /**
  * Synthesised soundtrack. No audio files ship with this experience.
@@ -77,6 +78,13 @@ export class Audio {
     this.limiter.attack.value = 0.004;
     this.limiter.release.value = 0.18;
     this.limiter.connect(this.master);
+
+    // Music goes to the master directly rather than through the limiter. The
+    // limiter exists to stop reheat, wind and a warning tone summing into
+    // clipping; routing the score through it would let every throttle push
+    // pump the music, which is the classic game-audio tell.
+    this.music = new Music(ctx, this.master);
+    this.music.setVolume(this.settings.musicVolume ?? 0.75);
 
     const noise = this._noiseBuffer();
 
@@ -252,6 +260,11 @@ export class Audio {
     // with speed, which is what stops wind from merely getting louder.
     this.windFilter.frequency.setTargetAtTime(170 + 4.7 * flight.airspeed, t, smooth);
     this.windGain.gain.setTargetAtTime(Math.pow(speedT, 3.0) * 0.40 * thin, t, smooth);
+
+    // Duck the score under the engine. Full reheat at low level is the loudest
+    // the game gets and the moment a melody is least wanted, so the music steps
+    // back instead of fighting for the same band.
+    this.music?.setIntensity(Math.max(throttle * 0.7, reheat) * 0.85 + speedT * 0.15);
 
     // Warning tone: a slow beep for terrain, a lower one for stall.
     if (warning === 'none' || flight.crashed) {
