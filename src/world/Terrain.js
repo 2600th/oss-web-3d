@@ -615,7 +615,7 @@ export class Terrain {
           // bright cold blue — nothing like the near-black an unlit surface
           // would suggest. Getting this term too low is what makes procedural
           // snow read as grey plastic.
-          vec3 skyUp = uZenithColor * 1.6 + vec3(0.06, 0.11, 0.20);
+          vec3 skyUp = uZenithColor * 1.5 + vec3(0.10, 0.16, 0.26);
           vec3 bounce = mix(vec3(0.12, 0.115, 0.112), vec3(0.52, 0.58, 0.68), snow);
           vec3 ambient =
             mix(bounce, skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.62 * (0.80 + 0.20 * sunVis);

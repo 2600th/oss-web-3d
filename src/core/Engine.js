@@ -78,8 +78,12 @@ export class Engine {
 
     this._buildEffectPass();
 
-    this.clock = new THREE.Clock();
+    // THREE.Clock is deprecated in r185 and warns on construction. Timer is the
+    // replacement; it has no delta clamp of its own, so the caller still has to
+    // bound the step after a tab switch.
+    this.timer = new THREE.Timer();
     this._frameTimes = new Float32Array(30);
+    this._sorted = new Float32Array(30);
     this._frameIndex = 0;
     this._frameCount = 0;
     this.renderScale = 1;
@@ -128,7 +132,16 @@ export class Engine {
     this.composer.setSize(w, h);
   }
 
-  /** Smooth frame time and nudge render scale to defend 60 fps. */
+  /**
+   * Nudge render scale to defend 60 fps, from the *median* frame time.
+   *
+   * The mean was the obvious choice and it is the wrong one. Chrome throttles
+   * requestAnimationFrame to about 1 Hz whenever the tab is occluded or the
+   * window changes state, and a single second-long frame drags a 30-frame mean
+   * far enough to trip the downscale — so alt-tabbing away and back left the
+   * game running at its minimum resolution for no reason. A median ignores
+   * those spikes completely while still tracking genuine sustained load.
+   */
   _adapt(dt) {
     this._frameTimes[this._frameIndex] = dt;
     this._frameIndex = (this._frameIndex + 1) % this._frameTimes.length;
@@ -136,20 +149,22 @@ export class Engine {
 
     if (this._frameCount < this._frameTimes.length) return;
 
-    let sum = 0;
-    for (let i = 0; i < this._frameTimes.length; i++) sum += this._frameTimes[i];
-    const avg = sum / this._frameTimes.length;
-    this.fps = 1 / Math.max(avg, 1e-4);
+    this._sorted.set(this._frameTimes);
+    this._sorted.sort();
+    const median = this._sorted[this._sorted.length >> 1];
+    this.fps = 1 / Math.max(median, 1e-4);
 
     this._scaleCooldown -= dt;
     if (this._scaleCooldown > 0) return;
+    // Never adapt while hidden; those frames say nothing about our cost.
+    if (document.hidden) return;
 
     const min = 0.62;
-    if (avg > 1 / 52 && this.renderScale > min) {
+    if (median > 1 / 52 && this.renderScale > min) {
       this.renderScale = Math.max(min, this.renderScale - 0.08);
       this._scaleCooldown = 1.1;
       this.resize();
-    } else if (avg < 1 / 75 && this.renderScale < 1) {
+    } else if (median < 1 / 75 && this.renderScale < 1) {
       this.renderScale = Math.min(1, this.renderScale + 0.05);
       this._scaleCooldown = 2.2;
       this.resize();

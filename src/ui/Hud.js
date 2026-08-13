@@ -207,7 +207,14 @@ export class Hud {
 
   show(on) {
     toggle(this.root, 'show', on);
-    if (!on) toggle(this.recon, 'show', false);
+    if (!on) {
+      toggle(this.recon, 'show', false);
+      // The photo card lives outside #hud so it can sit above the gate, which
+      // means hiding the HUD does not hide it — it would otherwise linger over
+      // the debrief.
+      toggle(this.photoPop, 'show', false);
+      this._popTimer = 0;
+    }
   }
 
   showPhoto(post, shot) {

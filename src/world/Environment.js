@@ -21,8 +21,11 @@ export class Environment {
     this.uniforms = {
       uSunDir: { value: this.sunDir },
       uSunColor: { value: new THREE.Color(1.0, 0.94, 0.84) },
-      uZenithColor: { value: new THREE.Color(0.055, 0.16, 0.42) },
-      uHorizonColor: { value: new THREE.Color(0.66, 0.755, 0.87) },
+      // Deep, dark zenith. At 7 km there is a third of the atmosphere overhead
+      // and the sky really is close to navy — and without that depth, white
+      // cloud over white mountain has nothing to read against.
+      uZenithColor: { value: new THREE.Color(0.028, 0.088, 0.30) },
+      uHorizonColor: { value: new THREE.Color(0.56, 0.68, 0.85) },
       uHazeDensity: { value: 5.2e-5 },
       uHazeHeight: { value: 2500.0 },
       // Haze is measured from just below the valley floors, not sea level.

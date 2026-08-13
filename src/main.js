@@ -26,7 +26,10 @@ await game.load();
 // does not resolve until the player skips or the last card fades, so awaiting
 // it here would leave the page on a single static frame with no render loop.
 function frame() {
-  const dt = Math.min(engine.clock.getDelta(), 0.1);
+  engine.timer.update();
+  // Bound the step: returning from a background tab hands back a delta of
+  // several seconds, which would teleport the aircraft through a mountain.
+  const dt = Math.min(engine.timer.getDelta(), 0.1);
   game.update(dt);
   engine.render(dt);
 
@@ -88,6 +91,25 @@ window.__perf = async (ms = 1500) => {
     throttled: rafFps < 25,
   };
 };
+
+/*
+ * A note on measuring performance here, because three plausible approaches were
+ * tried and two of them lie.
+ *
+ *   gl.finish() does not block in Chrome's WebGL — commands go to the GPU
+ *   process asynchronously — so a loop bracketed with it measured 0.45 ms per
+ *   frame, i.e. 2200 fps, for a scene that plainly was not running that fast.
+ *
+ *   EXT_disjoint_timer_query_webgl2 should be authoritative, but under
+ *   automation with the tab backgrounded its results did not scale with pixel
+ *   count at all: 0.43 MP measured 4.3 ms and 6.8 MP measured 0.7 ms. Whatever
+ *   it was timing, it was not the work.
+ *
+ * __perf() below is the one to trust: it reports what the browser actually
+ * delivered, and it self-reports when requestAnimationFrame is being throttled
+ * so a bogus reading cannot be mistaken for a real one. Take the measurement
+ * with the tab genuinely in the foreground.
+ */
 
 /** Jump straight into flight at a chosen place, skipping the title. */
 window.__fly = (p = {}) => {

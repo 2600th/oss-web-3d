@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { Environment } from '../world/Environment.js';
 import { Sky } from '../world/Sky.js';
 import { Terrain } from '../world/Terrain.js';
+import { Clouds } from '../world/Clouds.js';
 import { terrainHeight } from '../world/heightfield.js';
+import { FlightFx } from '../fx/FlightFx.js';
+import { Audio } from '../fx/Audio.js';
 import { FlightModel } from '../flight/FlightModel.js';
 import { Aircraft } from '../flight/Aircraft.js';
 import { ChaseCamera } from '../flight/ChaseCamera.js';
@@ -47,6 +50,16 @@ export class Game {
     this.terrain = new Terrain(engine.renderer, this.environment);
     engine.scene.add(this.terrain.group);
     this.terrain.setQuality(settings.tier);
+
+    this.clouds = new Clouds(this.environment);
+    this.clouds.setQuality(settings.tier);
+    engine.scene.add(this.clouds.mesh);
+
+    this.fx = new FlightFx(this.environment);
+    this.fx.setQuality(settings.tier);
+    engine.scene.add(this.fx.group);
+
+    this.audio = new Audio(settings);
 
     this.envMap = this.sky.bakeEnvironment(engine.renderer, this.environment);
     engine.scene.environment = this.envMap;
@@ -108,6 +121,10 @@ export class Game {
     this.screens.hideLoading();
     this.state = 'title';
     await this.screens.playTitle(this.skipSignal);
+    // Guard against the title resolving after something else has already moved
+    // the game on — skipping straight into flight would otherwise be undone by
+    // this line landing a frame later.
+    if (this.state !== 'title') return;
     this.state = 'briefing';
     this.screens.show(this.screens.briefingLayer);
   }
@@ -152,6 +169,7 @@ export class Game {
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
     this.terrain.prime(this.flight.position);
+    this.fx.reset();
     this.mission.begin();
     this.hud.show(true);
     this.state = 'flying';
@@ -185,6 +203,8 @@ export class Game {
     this.settings.setTier(tier);
     this.engine.applySettings();
     this.terrain.setQuality(this.settings.tier);
+    this.clouds.setQuality(this.settings.tier);
+    this.fx.setQuality(this.settings.tier);
     this.screens.setQuality(tier);
   }
 
@@ -198,6 +218,13 @@ export class Game {
   update(dt) {
     const input = this.input;
     input.update(dt, this.settings.invertPitch);
+
+    // Browsers require a gesture before audio can start, so the first key press
+    // of the session is what brings the engine up.
+    if (input.anyPress() || input.keys.size) {
+      this.audio.start();
+      this.audio.resume();
+    }
 
     if (this.state === 'title' && input.anyPress()) {
       for (const fn of [...this._skipHandlers]) fn();
@@ -220,6 +247,7 @@ export class Game {
       case 'briefing':
         this._updateCinematic(dt);
         this.terrain.update(this.engine.camera.position, this.settings.tier.terrainBudget);
+        this.clouds.update(dt, this.engine.camera.position);
         break;
 
       case 'flying':
@@ -292,6 +320,23 @@ export class Game {
     }
 
     this.terrain.update(flight.position, this.settings.tier.terrainBudget);
+    this.clouds.update(dt, flight.position);
+    this.fx.update(dt, flight, this.engine.camera.position);
+
+    // Closing rate between camera and aircraft, for the Doppler shift. The
+    // chase camera trails, so hard acceleration opens the gap and drops the
+    // engine note fractionally.
+    const closing = _tmp.subVectors(flight.position, this.engine.camera.position);
+    const distance = closing.length();
+    const closingRate =
+      distance > 1 ? flight.velocity.dot(closing) / distance - flight.airspeed : 0;
+    this.audio.update(
+      dt,
+      flight,
+      closingRate,
+      this.terrainWarning ? 'terrain' : flight.stalling ? 'stall' : 'none',
+    );
+
     this._updateHud(dt);
 
     if (flight.crashed) {
@@ -327,16 +372,16 @@ export class Game {
     }
     if (evaluation.score >= CAPTURE_THRESHOLD && !post.captured) {
       post.captured = true;
-      this.onCapture?.(post, shot);
     }
     this.hud.showPhoto(post, shot);
-    this.onShutter?.(evaluation.score);
+    this.audio.shutter();
+    if (post.captured) this.audio.confirm();
   }
 
   onCrash() {
     this.crashTimer = 0;
     this.mission.fail('terrain');
-    this.onImpact?.(this.flight);
+    this.audio.impact(Math.min(1, this.flight.impactSpeed / 320));
   }
 
   _updateHud(dt) {
@@ -378,3 +423,4 @@ export class Game {
 }
 
 const _euler = new THREE.Euler();
+const _tmp = new THREE.Vector3();
