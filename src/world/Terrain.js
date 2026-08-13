@@ -621,7 +621,46 @@ export class Terrain {
           vec3 rock = mix(rockDark, rockLight, clamp(0.5 + 0.7 * rough, 0.0, 1.0));
           rock = mix(rock, vec3(0.115, 0.090, 0.066), smoothstep(0.1, 0.6, band) * 0.55);
 
+          // Bedding planes. Himalayan rock is strongly banded, and those bands
+          // are the main thing that reads as *stone* at close range rather than
+          // as a brown surface with noise on it. Far Cry 5's terrain talk
+          // extrudes strata of varying thickness; the analytic equivalent is a
+          // sawtooth through a slightly tilted plane, domain-warped so the beds
+          // are not mathematically straight.
+          //
+          // They earn their cost twice. Perceived self-motion tracks *edge
+          // rate* -- how many discontinuities cross the eye per second -- more
+          // strongly than smooth optical flow does (Larish & Flach, 1990), and
+          // smooth gradient noise contributes nothing to that while hard edges
+          // do. This is the cheapest sense-of-speed cue available to a renderer
+          // whose whole world is analytic.
+          //
+          // Band-limited on the screen-space derivative of the bedding
+          // coordinate: once a pixel spans a large fraction of one bed the
+          // pattern is past Nyquist and has to fade to its average, or it
+          // crawls and sparkles at exactly the distances a jet spends its time.
+          // The dip direction rotates from massif to massif, and that is not a
+          // flourish. A single global bedding plane that is nearly horizontal
+          // makes dot(worldPos, planeNormal) track elevation, so every band
+          // follows a contour and the range reads as a topographic map rather
+          // than as rock. Giving each region its own strike and a genuine dip
+          // breaks that, which is also what real folded terrain does. Bed
+          // thickness varies with the same roughness field.
+          float dipAngle = vnoise(vWorld.xz * 0.00013) * 6.2832;
+          vec3 bedNormal = normalize(vec3(cos(dipAngle) * 0.55, 1.0, sin(dipAngle) * 0.55));
+          float bedding = dot(vWorld, bedNormal) / (17.0 + 24.0 * abs(rough))
+                        + vnoise(vWorld.xz * 0.0011) * 3.1;
+          float bedFade = (1.0 - smoothstep(0.20, 0.72, fwidth(bedding))) * uDetailFade;
           vec3 scree = mix(vec3(0.096, 0.089, 0.081), vec3(0.142, 0.128, 0.110), rough * 0.5 + 0.5);
+          if (bedFade > 0.004) {
+            float f = fract(bedding);
+            float edge = smoothstep(0.0, 0.10, f) * smoothstep(1.0, 0.90, f);
+            float tone = vnoise(vec2(floor(bedding) * 1.7, 3.3));
+            float strata = 1.0 + bedFade * ((tone - 0.5) * 0.44 - (1.0 - edge) * 0.30);
+            rock *= strata;
+            scree *= mix(1.0, strata, 0.35); // scree is loose, so only faintly bedded
+          }
+
           float screeAmt = 1.0 - smoothstep(0.16, 0.46, slope);
           vec3 ground = mix(rock, scree, clamp(screeAmt, 0.0, 1.0));
 
@@ -672,6 +711,13 @@ export class Terrain {
           vec3 ambient =
             mix(bounce, skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.62 * (0.80 + 0.20 * sunVis);
 
+          // No per-channel penumbra tint here, though it is the standard trick
+          // (iq, Outdoors Lighting). Raising diffuse to per-channel powers
+          // above 1 reduces the sun term everywhere it is not saturated, which
+          // let the blue sky ambient dominate and pulled the whole range cold
+          // and murky — it undid the ambient balance that was tuned to stop
+          // shadowed snow crushing to grey. The blue-shadow cue it exists to
+          // produce is already carried by the sky term below.
           vec3 color = albedo * (uSunColor * uSunIntensity * diffuse + ambient);
 
           // Specular glint off wind-packed snow.
