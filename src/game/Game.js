@@ -306,15 +306,17 @@ export class Game {
     // the point of being useful, and never at all in the case that matters
     // most. Sampling the highest ground along the projected path catches rising
     // terrain while there is still room to pull.
+    // Deliberately *not* a function of current altitude. Flying a valley at
+    // 200 m is the fantasy this game is built around, and gating on AGL lit the
+    // warning permanently through ordinary low-level flight — measured at 100%
+    // of samples over a level run at 230 m, which trains the player to ignore
+    // it. What matters is whether the path ahead still clears the ground on it.
     const look = 7.5; // seconds of flight path
     const aheadX = flight.position.x + flight.velocity.x * look;
     const aheadZ = flight.position.z + flight.velocity.z * look;
     const ridge = maxHeightAlong(flight.position.x, flight.position.z, aheadX, aheadZ, 10);
-    const lowestClearance = Math.min(
-      flight.agl,
-      flight.position.y + flight.velocity.y * look - ridge,
-    );
-    this.terrainWarning = !flight.crashed && lowestClearance < 260;
+    const projectedClearance = flight.position.y + flight.velocity.y * look - ridge;
+    this.terrainWarning = !flight.crashed && projectedClearance < 120;
 
     if (this.reconActive) {
       this.recon.update(dt, flight);
