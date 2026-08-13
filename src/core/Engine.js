@@ -89,6 +89,7 @@ export class Engine {
     this.renderScale = 1;
     this._scaleCooldown = 0;
     this.fps = 60;
+    this.adaptEnabled = true;
 
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
@@ -143,6 +144,15 @@ export class Engine {
    * those spikes completely while still tracking genuine sustained load.
    */
   _adapt(dt) {
+    // Reject implausible samples outright rather than letting them into the
+    // window. Nothing this renderer does costs a quarter of a second a frame,
+    // so a sample that long is the browser not calling us — Chrome throttles
+    // requestAnimationFrame to about 1 Hz for occluded windows, and it does so
+    // without ever setting document.hidden. Dropping resolution cannot buy back
+    // time we were never spending, and adapting on those samples pinned the
+    // game at its minimum scale for as long as the window stayed covered.
+    if (dt > 0.25) return;
+
     this._frameTimes[this._frameIndex] = dt;
     this._frameIndex = (this._frameIndex + 1) % this._frameTimes.length;
     this._frameCount++;
@@ -158,6 +168,11 @@ export class Engine {
     if (this._scaleCooldown > 0) return;
     // Never adapt while hidden; those frames say nothing about our cost.
     if (document.hidden) return;
+    // Held off during visual testing, where the harness drives the page from a
+    // window the compositor treats as occluded: frame times measured then are
+    // the browser's, not ours, and letting them move render scale changes what
+    // the screenshot shows for reasons that have nothing to do with the scene.
+    if (!this.adaptEnabled) return;
 
     const min = 0.62;
     if (median > 1 / 52 && this.renderScale > min) {

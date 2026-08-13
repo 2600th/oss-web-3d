@@ -544,7 +544,8 @@ export class Terrain {
           vec4 s0 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vLevel), float(vLevel)));
           vec4 s1 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vNextLevel), float(vNextLevel)));
           vec4 s = mix(s0, s1, vMorph);
-          vec3 N = normalize(vec3(s.g, sqrt(max(1.0 - s.g * s.g - s.b * s.b, 1e-4)), s.b));
+          vec3 macroN = normalize(vec3(s.g, sqrt(max(1.0 - s.g * s.g - s.b * s.b, 1e-4)), s.b));
+          vec3 N = macroN;
           float sunVis = s.a;
 
           vec3 toCam = uCameraPos - vWorld;
@@ -552,18 +553,59 @@ export class Terrain {
           vec3 viewDir = -toCam / dist;
 
           // Close-range detail bump, from the analytic gradient of a two-octave
-          // field rather than four finite-difference fbm evaluations. Faded out
-          // quickly so it never aliases at distance and costs nothing on the
-          // far rings, where the branch is uniform across the whole draw.
-          float detail = uDetailFade * (1.0 - smoothstep(220.0, 1100.0, dist));
-          if (detail > 0.002) {
-            vec3 d0 = vnoised(vWorld.xz * 0.115);
-            vec3 d1 = vnoised(vWorld.xz * 0.043 + 17.0);
-            vec2 grad = d0.yz * 0.115 * 0.55 + d1.yz * 0.043 * 1.35;
-            N = normalize(N + vec3(-grad.x, 0.0, -grad.y) * detail * 9.0);
+          // field rather than four finite-difference fbm evaluations.
+          //
+          // Each octave fades at its own distance rather than both together.
+          // The limit is when an octave's period approaches a pixel, and the two
+          // are 9 m and 23 m, so they reach it a long way apart: fading both by
+          // 1.1 km threw away the coarse one while it was still resolved by a
+          // wide margin. That mattered most at recon range, where a ridge 1.5 km
+          // out is drawn with 32 m cells — about 20 pixels a triangle — and read
+          // as flat shaded facets in every photograph.
+          float detailFine = uDetailFade * (1.0 - smoothstep(220.0, 900.0, dist));
+          float detailCoarse = uDetailFade * (1.0 - smoothstep(850.0, 3000.0, dist));
+          if (detailFine + detailCoarse > 0.002) {
+            vec2 grad = vec2(0.0);
+            if (detailFine > 0.002) {
+              grad += vnoised(vWorld.xz * 0.115).yz * (0.115 * 0.55 * detailFine);
+            }
+            if (detailCoarse > 0.002) {
+              grad += vnoised(vWorld.xz * 0.043 + 17.0).yz * (0.043 * 1.35 * detailCoarse);
+            }
+            N = normalize(N + vec3(-grad.x, 0.0, -grad.y) * 9.0);
           }
 
-          float slope = clamp(1.0 - N.y, 0.0, 1.0);
+          // Steepness for the material mix, corrected for LOD.
+          //
+          // The stored normal is a central difference over this level's cell, so
+          // the steepness it reports collapses as cells grow. Measured against
+          // this terrain's own height function, the median gradient falls from
+          // 1.23 at 8 m sampling to 0.41 at 512 m, and the fraction of ground
+          // steeper than 0.54 goes from 25% to essentially nothing. Mixing the
+          // material straight off that normal is what painted every range in the
+          // middle distance solid white: the shader was asking how steep the
+          // ground is and being told, correctly, that a 500 m average is gentle.
+          //
+          // Fractal terrain has a well-defined gradient scaling exponent, so one
+          // per-level factor fixes it without storing a second surface. The
+          // exponent was measured rather than assumed: g(eps) ~ eps^-0.25 held
+          // to within a few percent from 16 m out to 2 km, and rescaling by
+          // (cell/8)^0.25 reproduces the 8 m slope distribution at every level.
+          // Interpolating the factor across the morph band keeps the material
+          // continuous where two levels meet.
+          //
+          // Taken from the macro normal, before the detail bump. The bump is a
+          // decorative high-frequency perturbation for shading; feeding it into
+          // the material pushed patches of ordinary snowfield over the rock
+          // threshold and mottled whole faces into something like camouflage.
+          //
+          // Lighting keeps the uncorrected normal for the opposite reason: it
+          // has to match the geometry actually on screen, and a fine-scale
+          // normal at 30 km would alias into noise.
+          float matCell = mix(uCells[vLevel], uCells[vNextLevel], vMorph);
+          vec2 matGrad =
+            vec2(macroN.x, macroN.z) / max(macroN.y, 1e-3) * pow(matCell * 0.125, 0.25);
+          float slope = clamp(1.0 - inversesqrt(1.0 + dot(matGrad, matGrad)), 0.0, 1.0);
           float h = vWorld.y;
 
           float rough = vnoise(vWorld.xz * 0.0016) * 0.62 + vnoise(vWorld.xz * 0.0041) * 0.3;
@@ -586,10 +628,20 @@ export class Terrain {
           // ---- snow --------------------------------------------------------
           float snowLine = 4450.0 + 620.0 * band + 210.0 * rough;
           float snow = smoothstep(snowLine - 700.0, snowLine + 280.0, h);
-          // Snow does not hold on near-vertical faces; ridge crests get scoured.
-          snow *= 1.0 - smoothstep(0.30, 0.66, slope);
-          // Patchy edge rather than a hard contour line.
-          snow = clamp(snow + 0.9 * rough * snow * (1.0 - snow) * 4.0, 0.0, 1.0);
+          // Snow does not hold on steep faces. In the Dras and Kargil sectors
+          // that threshold is low — anything past roughly 35 degrees is barren
+          // rock and scree — and it is precisely that exposed structure which
+          // gives the range its geology instead of a smooth white dome.
+          snow *= 1.0 - smoothstep(0.20, 0.54, slope);
+          // Break the snow line into patches rather than a drawn contour.
+          //
+          // This term used to add 0.9 * rough * snow * (1-snow) * 4.0, whose
+          // effective coefficient of 3.6 saturated snow to 1.0 for any positive
+          // rough. Since rough is roughly symmetric about zero, that erased the
+          // slope relationship over half the map and the whole range read as
+          // poured cream. It is a perturbation, so it stays bounded well under
+          // the signal, and peaks where the mix is genuinely ambiguous.
+          snow = clamp(snow + rough * 0.30 * (1.0 - abs(2.0 * snow - 1.0)), 0.0, 1.0);
 
           // Wind-blown drifts collect in the lee of gullies at any altitude.
           float drift = smoothstep(0.42, 0.05, slope) * smoothstep(3900.0, 4700.0, h);

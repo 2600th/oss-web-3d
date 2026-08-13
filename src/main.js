@@ -92,24 +92,68 @@ window.__perf = async (ms = 1500) => {
   };
 };
 
-/*
- * A note on measuring performance here, because three plausible approaches were
- * tried and two of them lie.
+/**
+ * Cost of one rendered frame, measured without relying on requestAnimationFrame.
  *
- *   gl.finish() does not block in Chrome's WebGL — commands go to the GPU
- *   process asynchronously — so a loop bracketed with it measured 0.45 ms per
- *   frame, i.e. 2200 fps, for a scene that plainly was not running that fast.
+ * This exists because __perf above cannot be trusted under automation, and two
+ * other plausible approaches were tried and both lie:
  *
- *   EXT_disjoint_timer_query_webgl2 should be authoritative, but under
- *   automation with the tab backgrounded its results did not scale with pixel
- *   count at all: 0.43 MP measured 4.3 ms and 6.8 MP measured 0.7 ms. Whatever
- *   it was timing, it was not the work.
+ *   gl.finish() does not block in Chrome's WebGL — commands are handed to the
+ *   GPU process asynchronously — so a loop bracketed with it measured 0.45 ms
+ *   per frame, i.e. 2200 fps, for a scene that plainly was not running that
+ *   fast.
  *
- * __perf() below is the one to trust: it reports what the browser actually
- * delivered, and it self-reports when requestAnimationFrame is being throttled
- * so a bogus reading cannot be mistaken for a real one. Take the measurement
- * with the tab genuinely in the foreground.
+ *   EXT_disjoint_timer_query_webgl2 should be authoritative, but with the
+ *   window occluded its results did not scale with pixel count at all: 0.43 MP
+ *   measured 4.3 ms and 6.8 MP measured 0.7 ms. Whatever it timed, it was not
+ *   the work.
+ *
+ * gl.readPixels does block, because it has to return data the GPU has not
+ * produced yet, so bracketing a burst of renders with one read gives a real
+ * number. The check that this is measuring anything at all is that the result
+ * must scale with pixel count — see __benchScaling.
  */
+window.__gpuBench = (frames = 45) => {
+  const gl = engine.renderer.getContext();
+  const px = new Uint8Array(4);
+  const drain = () => {
+    engine.renderer.setRenderTarget(null);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  };
+
+  engine.composer.render(1 / 60);
+  drain(); // flush anything already queued before starting the clock
+
+  const t0 = performance.now();
+  for (let i = 0; i < frames; i++) engine.composer.render(1 / 60);
+  drain();
+  const ms = (performance.now() - t0) / frames;
+
+  const w = engine.renderer.domElement.width;
+  const h = engine.renderer.domElement.height;
+  return {
+    frameMs: +ms.toFixed(2),
+    fps: +(1000 / ms).toFixed(0),
+    megapixels: +((w * h) / 1e6).toFixed(2),
+    drawingBuffer: [w, h],
+    renderScale: +engine.renderScale.toFixed(2),
+    tier: settings.tierName,
+  };
+};
+
+/** Validate __gpuBench by checking its result actually tracks pixel count. */
+window.__benchScaling = () => {
+  const original = engine.renderScale;
+  const out = [];
+  for (const scale of [0.5, 0.75, 1.0]) {
+    engine.renderScale = scale;
+    engine.resize();
+    out.push(window.__gpuBench(30));
+  }
+  engine.renderScale = original;
+  engine.resize();
+  return out;
+};
 
 /** Jump straight into flight at a chosen place, skipping the title. */
 window.__fly = (p = {}) => {
@@ -168,6 +212,53 @@ window.__toPost = (index = 0, range = 2000) => {
     approachVisibility: +best.visibility.toFixed(2),
   };
 };
+
+/**
+ * Fly to a post and enter recon mode the way the pilot does.
+ *
+ * Worth a hook rather than a few lines at the console, because there are two
+ * ways to get this wrong and both look like product bugs. Recon is a *held*
+ * key, and Input recomputes reconHeld from the pressed-key set every frame, so
+ * assigning input.reconHeld or game.reconActive is overwritten before it is
+ * ever read. And the recon camera is the engine camera — the chase camera owns
+ * it until recon mode takes over — so calling recon.evaluate() outside recon
+ * mode scores the chase camera's pose at its 58 degree field of view, which
+ * reports zero screen coverage and looks exactly like broken scoring.
+ */
+window.__recon = async (index = 0, range = 1500, zoom = 2) => {
+  const approach = window.__toPost(index, range);
+  if (!approach || approach.error) return approach;
+  // Hiding the title screens moves focus, and the blur handler clears the
+  // pressed-key set, so a keydown sent too early is silently dropped. When that
+  // happens the evaluation comes back null, which reads like broken scoring.
+  // Resend until the mode actually latches rather than guessing a delay.
+  for (let i = 0; i < 20 && !game.reconActive; i++) {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  game.recon.setZoom(zoom);
+  game.recon._fovSmoothed = game.recon.fov; // skip the ease, so a probe is deterministic
+  await new Promise((r) => setTimeout(r, 400));
+  const ev = game.evaluation;
+  return {
+    approach,
+    evaluation: ev && {
+      callsign: ev.post.callsign,
+      inFrame: ev.inFrame,
+      range: Math.round(ev.range),
+      visibility: +ev.visibility.toFixed(3),
+      framing: +ev.framing.toFixed(3),
+      coverage: +ev.coverage.toFixed(3),
+      rangeQuality: +ev.rangeQuality.toFixed(3),
+      angleQuality: +ev.angleQuality.toFixed(3),
+      score: +ev.score.toFixed(3),
+    },
+  };
+};
+
+/** Release the recon key again. */
+window.__reconEnd = () =>
+  window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }));
 
 window.__mission = () =>
   game.mission.posts.map((p) => ({

@@ -224,9 +224,14 @@ export class FlightFx {
       this.streakPositions[v + 4] = this.streakOrigins[o + 1] - vy * length;
       this.streakPositions[v + 5] = this.streakOrigins[o + 2] - vz * length;
 
-      // Fade with distance so they never form a visible box edge.
-      const fade = 1 - distSq / spreadSq;
-      this.streakAlpha[i * 2] = fade * 0.85;
+      // Fade at both ends. The far fade stops the spawn sphere showing up as a
+      // box edge. The near fade matters more: a streak a few metres off the
+      // lens is drawn tens of metres long, so it sweeps most of the frame in
+      // one frame and reads as a scratch on the canopy rather than as speed.
+      const dist = Math.sqrt(distSq);
+      const near = THREE.MathUtils.smoothstep(dist, 22, 60);
+      const fade = (1 - distSq / spreadSq) * near;
+      this.streakAlpha[i * 2] = fade * 0.6;
       this.streakAlpha[i * 2 + 1] = 0;
     }
 
