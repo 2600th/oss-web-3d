@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { terrainHeight, terrainSlope } from '../world/heightfield.js';
 
 /**
- * Speed streaks and wingtip trails.
+ * Speed streaks, wingtip trails and ridge spindrift.
  *
  * Both exist to solve the same problem: at 250 m/s over terrain a kilometre
  * below, there is nothing close to the camera for the eye to measure motion
@@ -21,6 +22,144 @@ export class FlightFx {
 
     this._buildStreaks();
     this._buildTrails();
+    this._buildSpindrift();
+  }
+
+  // ------------------------------------------------------------ spindrift --
+
+  /**
+   * Snow streaming off the ridge crests.
+   *
+   * The streaks above are near-field reference that happens to be near the
+   * camera; this is near-field reference *attached to the terrain*, which is
+   * the stronger cue. Perceived speed tracks how many discontinuities cross
+   * the eye per second, and a plume that is anchored to a ridge and sweeps past
+   * as the aircraft crosses it gives the eye something with a known position to
+   * measure against — which streaks floating in a sphere around the camera
+   * cannot. It also does what the brief asks for directly, and it is the reason
+   * flying a ridgeline reads differently from flying a valley.
+   *
+   * Particles seed only on genuinely wind-scoured ground: steep, high, and
+   * within a short distance of the aircraft, so the cost is bounded regardless
+   * of altitude.
+   */
+  _buildSpindrift(max = 260) {
+    this.maxDrift = max;
+    this.driftCount = max;
+    this.driftPos = new Float32Array(max * 3);
+    this.driftVel = new Float32Array(max * 3);
+    this.driftAge = new Float32Array(max);
+    this.driftLife = new Float32Array(max);
+    this.driftAlpha = new Float32Array(max);
+    this.driftSize = new Float32Array(max);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(this.driftPos, 3));
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.driftAlpha, 1));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(this.driftSize, 1));
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
+
+    const material = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+      uniforms: { uScale: { value: 700 } },
+      vertexShader: /* glsl */ `
+        precision highp float;
+        in float aAlpha;
+        in float aSize;
+        uniform float uScale;
+        out float vAlpha;
+        void main() {
+          vAlpha = aAlpha;
+          vec4 view = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * view;
+          gl_PointSize = max(2.0, aSize * uScale / max(-view.z, 1.0));
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        in float vAlpha;
+        out vec4 fragColor;
+        void main() {
+          vec2 d = gl_PointCoord * 2.0 - 1.0;
+          float r = dot(d, d);
+          if (r > 1.0) discard;
+          fragColor = vec4(vec3(0.93, 0.95, 1.0), vAlpha * (1.0 - r) * 0.55);
+        }
+      `,
+    });
+
+    this.spindrift = new THREE.Points(geometry, material);
+    this.spindrift.frustumCulled = false;
+    this.spindrift.renderOrder = 13;
+    this.group.add(this.spindrift);
+    this._driftMaterial = material;
+  }
+
+  _respawnDrift(i, flight) {
+    const o = i * 3;
+    // Look for scoured ground a little ahead of the aircraft, biased along the
+    // flight path so plumes appear before they are passed rather than behind.
+    const ahead = 260 + Math.random() * 900;
+    const spread = 620;
+    const fx = flight.position.x + flight.forward.x * ahead + (Math.random() - 0.5) * spread;
+    const fz = flight.position.z + flight.forward.z * ahead + (Math.random() - 0.5) * spread;
+    const h = terrainHeight(fx, fz);
+
+    // Only crests hold blowing snow: steep enough to be scoured, high enough to
+    // be snow rather than rock. Failures cost one height sample and the slot is
+    // simply retried next frame.
+    if (h < 4600 || terrainSlope(fx, fz, 24) < 0.22) {
+      this.driftAlpha[i] = 0;
+      this.driftLife[i] = 0;
+      return;
+    }
+
+    const wind = this.environment.uniforms.uWind.value;
+    this.driftPos[o] = fx;
+    this.driftPos[o + 1] = h + 2 + Math.random() * 14;
+    this.driftPos[o + 2] = fz;
+    this.driftVel[o] = wind.x * (0.7 + Math.random() * 0.7);
+    this.driftVel[o + 1] = 3 + Math.random() * 9;
+    this.driftVel[o + 2] = wind.y * (0.7 + Math.random() * 0.7);
+    this.driftAge[i] = 0;
+    this.driftLife[i] = 1.6 + Math.random() * 2.2;
+    this.driftSize[i] = 5 + Math.random() * 16;
+  }
+
+  _updateSpindrift(dt, flight) {
+    // A low-level effect on purpose. Seen from altitude these would be
+    // sub-pixel specks costing height samples for nothing.
+    const near = 1 - THREE.MathUtils.smoothstep(flight.agl, 420, 1500);
+    this.spindrift.visible = this.driftsEnabled !== false && near > 0.01;
+    if (!this.spindrift.visible) return;
+
+    for (let i = 0; i < this.driftCount; i++) {
+      if (this.driftLife[i] <= 0) {
+        this._respawnDrift(i, flight);
+        continue;
+      }
+      const o = i * 3;
+      this.driftAge[i] += dt;
+      const t = this.driftAge[i] / this.driftLife[i];
+      if (t >= 1) {
+        this.driftLife[i] = 0;
+        this.driftAlpha[i] = 0;
+        continue;
+      }
+      this.driftPos[o] += this.driftVel[o] * dt;
+      this.driftPos[o + 1] += this.driftVel[o + 1] * dt;
+      this.driftPos[o + 2] += this.driftVel[o + 2] * dt;
+      this.driftVel[o + 1] -= 1.6 * dt; // the plume settles as it loses the crest
+      // Fade in fast, out slow, so a plume looks lifted rather than switched on.
+      this.driftAlpha[i] = Math.min(1, t * 6) * (1 - t) * near;
+    }
+
+    this.spindrift.geometry.attributes.position.needsUpdate = true;
+    this.spindrift.geometry.attributes.aAlpha.needsUpdate = true;
+    this.spindrift.geometry.attributes.aSize.needsUpdate = true;
   }
 
   // --------------------------------------------------------------- streaks --
@@ -164,6 +303,11 @@ export class FlightFx {
     this.streaks.geometry.setDrawRange(0, this.streakCount * 2);
     this.trailsEnabled = tier.contrails;
     for (const t of this.trails) t.mesh.visible = tier.contrails;
+    // Spindrift costs CPU height samples rather than fill, so it scales with
+    // the same budget that governs the other near-field particles.
+    this.driftCount = Math.min(this.maxDrift, Math.round(tier.speedParticles * 0.4));
+    this.driftsEnabled = this.driftCount > 0;
+    this.spindrift.geometry.setDrawRange(0, this.driftCount);
   }
 
   reset() {
@@ -174,6 +318,8 @@ export class FlightFx {
       t.mesh.geometry.attributes.aAlpha.needsUpdate = true;
     }
     this._streaksSeeded = false;
+    this.driftLife.fill(0);
+    this.driftAlpha.fill(0);
   }
 
   /**
@@ -183,6 +329,7 @@ export class FlightFx {
   update(dt, flight, cameraPos) {
     this._updateStreaks(dt, flight, cameraPos);
     if (this.trailsEnabled !== false) this._updateTrails(dt, flight);
+    this._updateSpindrift(dt, flight);
   }
 
   _updateStreaks(dt, flight, cameraPos) {
