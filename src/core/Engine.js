@@ -1,0 +1,169 @@
+import * as THREE from 'three';
+import {
+  EffectComposer,
+  EffectPass,
+  RenderPass,
+  BloomEffect,
+  ToneMappingEffect,
+  ToneMappingMode,
+  VignetteEffect,
+  SMAAEffect,
+  SMAAPreset,
+  BlendFunction,
+} from 'postprocessing';
+
+/**
+ * Renderer, camera, post chain and the frame loop.
+ *
+ * Depth: the near/far pair is extreme (4 m .. 750 km) but a plain depth buffer
+ * is still the right call. Terrain is a heightfield, so it can never self-
+ * intersect, and the only places precision gets thin are ridges 80 km+ out
+ * which are already 90% dissolved into haze. A logarithmic buffer would force
+ * gl_FragDepth writes in the terrain shader and cost more than it returns.
+ *
+ * Resolution scaling is adaptive: frame time is smoothed and render scale
+ * nudged, because a stable 60 with a slightly soft image is a far better
+ * flight experience than a crisp 45.
+ */
+export class Engine {
+  constructor(canvas, settings) {
+    this.settings = settings;
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      powerPreference: 'high-performance',
+      stencil: false,
+      depth: true,
+      alpha: false,
+    });
+    this.renderer.autoClear = true;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.setClearColor(0x000000, 1);
+
+    this.scene = new THREE.Scene();
+
+    this.camera = new THREE.PerspectiveCamera(58, 1, 4, 750000);
+    this.camera.rotation.order = 'YXZ';
+
+    this.composer = new EffectComposer(this.renderer, {
+      frameBufferType: THREE.HalfFloatType,
+      multisampling: 0,
+    });
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(this.renderPass);
+
+    this.bloom = new BloomEffect({
+      blendFunction: BlendFunction.ADD,
+      // Restrained on purpose: only the sun disc, afterburner and hard snow
+      // glints should ever bloom.
+      luminanceThreshold: 0.88,
+      luminanceSmoothing: 0.24,
+      mipmapBlur: true,
+      intensity: 0.72,
+      radius: 0.62,
+    });
+
+    this.toneMapping = new ToneMappingEffect({
+      mode: ToneMappingMode.AGX,
+      resolution: 256,
+      whitePoint: 8.0,
+      middleGrey: 0.45,
+    });
+
+    this.vignette = new VignetteEffect({ offset: 0.32, darkness: 0.44 });
+
+    this.smaa = new SMAAEffect({ preset: SMAAPreset.MEDIUM });
+
+    this._buildEffectPass();
+
+    this.clock = new THREE.Clock();
+    this._frameTimes = new Float32Array(30);
+    this._frameIndex = 0;
+    this._frameCount = 0;
+    this.renderScale = 1;
+    this._scaleCooldown = 0;
+    this.fps = 60;
+
+    this._onResize = () => this.resize();
+    window.addEventListener('resize', this._onResize);
+    this.resize();
+  }
+
+  _buildEffectPass() {
+    if (this.effectPass) {
+      this.composer.removePass(this.effectPass);
+      this.effectPass.dispose();
+    }
+    const tier = this.settings.tier;
+    const effects = [];
+    if (tier.bloom) effects.push(this.bloom);
+    effects.push(this.toneMapping, this.vignette);
+    if (tier.smaa) effects.push(this.smaa);
+    this.effectPass = new EffectPass(this.camera, ...effects);
+    this.composer.addPass(this.effectPass);
+  }
+
+  applySettings() {
+    this._buildEffectPass();
+    this.renderScale = Math.min(1, this.settings.tier.pixelRatio);
+    this.resize();
+  }
+
+  get maxPixelRatio() {
+    return this.settings.tier.maxPixelRatio;
+  }
+
+  resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, this.maxPixelRatio) * this.renderScale;
+
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(w, h, false);
+    this.composer.setSize(w, h);
+  }
+
+  /** Smooth frame time and nudge render scale to defend 60 fps. */
+  _adapt(dt) {
+    this._frameTimes[this._frameIndex] = dt;
+    this._frameIndex = (this._frameIndex + 1) % this._frameTimes.length;
+    this._frameCount++;
+
+    if (this._frameCount < this._frameTimes.length) return;
+
+    let sum = 0;
+    for (let i = 0; i < this._frameTimes.length; i++) sum += this._frameTimes[i];
+    const avg = sum / this._frameTimes.length;
+    this.fps = 1 / Math.max(avg, 1e-4);
+
+    this._scaleCooldown -= dt;
+    if (this._scaleCooldown > 0) return;
+
+    const min = 0.62;
+    if (avg > 1 / 52 && this.renderScale > min) {
+      this.renderScale = Math.max(min, this.renderScale - 0.08);
+      this._scaleCooldown = 1.1;
+      this.resize();
+    } else if (avg < 1 / 75 && this.renderScale < 1) {
+      this.renderScale = Math.min(1, this.renderScale + 0.05);
+      this._scaleCooldown = 2.2;
+      this.resize();
+    }
+  }
+
+  render(dt) {
+    this._adapt(dt);
+    this.composer.render(dt);
+  }
+
+  dispose() {
+    window.removeEventListener('resize', this._onResize);
+    this.composer.dispose();
+    this.renderer.dispose();
+  }
+}

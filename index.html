@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0d12" />
+    <title>Safed Sagar — A Reconnaissance Flight Experience</title>
+    <meta
+      name="description"
+      content="Fly a MiG-21 reconnaissance sortie through the high Himalayas. A fictional flight experience inspired by the courage of the Indian Armed Forces."
+    />
+    <link rel="preload" as="fetch" href="./models/mig21.glb" crossorigin />
+    <link rel="stylesheet" href="./src/ui/styles.css" />
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <div id="ui"></div>
+    <noscript>
+      <p class="noscript">This experience requires JavaScript and a WebGL2-capable browser.</p>
+    </noscript>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

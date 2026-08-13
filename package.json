@@ -1,0 +1,26 @@
+{
+  "name": "safed-sagar",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Safed Sagar - a browser-based MiG-21 reconnaissance flight experience over procedurally generated Himalayan terrain.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "optimize:model": "node tools/optimize-model.mjs"
+  },
+  "dependencies": {
+    "postprocessing": "^6.39.4",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.4.2",
+    "@gltf-transform/extensions": "^4.4.2",
+    "@gltf-transform/functions": "^4.4.2",
+    "meshoptimizer": "^1.2.0",
+    "sharp": "^0.35.3",
+    "vite": "^8.2.1"
+  }
+}
