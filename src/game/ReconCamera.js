@@ -207,16 +207,24 @@ export class ReconCamera {
     const previousToneMapping = renderer.toneMapping;
     const previousExposure = renderer.toneMappingExposure;
 
-    // The main path tone-maps in the post chain, which this offscreen render
-    // bypasses; without this the thumbnail comes out blown out and linear.
-    renderer.toneMapping = THREE.AgXToneMapping;
-    renderer.toneMappingExposure = 1.0;
-    renderer.setRenderTarget(this.captureTarget);
-    renderer.render(scene, this.camera);
-    renderer.readRenderTargetPixels(this.captureTarget, 0, 0, 512, 288, this._pixels);
-    renderer.setRenderTarget(previousTarget);
-    renderer.toneMapping = previousToneMapping;
-    renderer.toneMappingExposure = previousExposure;
+    // Restored in a finally: if the offscreen render throws — a lost context,
+    // a shader that failed to compile on this driver — leaving the renderer
+    // pointed at the capture buffer means every subsequent frame goes to a
+    // 512x288 texture nobody displays, and the game appears to freeze on the
+    // last good frame with no error that explains it.
+    try {
+      // The main path tone-maps in the post chain, which this offscreen render
+      // bypasses; without this the thumbnail comes out blown out and linear.
+      renderer.toneMapping = THREE.AgXToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.setRenderTarget(this.captureTarget);
+      renderer.render(scene, this.camera);
+      renderer.readRenderTargetPixels(this.captureTarget, 0, 0, 512, 288, this._pixels);
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      renderer.toneMapping = previousToneMapping;
+      renderer.toneMappingExposure = previousExposure;
+    }
 
     const image = this._ctx.createImageData(512, 288);
     // GL reads bottom-up; canvas expects top-down.

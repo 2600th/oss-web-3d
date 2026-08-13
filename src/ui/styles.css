@@ -1129,3 +1129,14 @@ body {
     animation: none;
   }
 }
+
+/* Inline tricolour, used where the platform has no country-flag glyph. */
+.jaihind .flag {
+  display: inline-block;
+  width: 1.15em;
+  height: auto;
+  vertical-align: -0.12em;
+  margin-left: 0.12em;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}

@@ -281,7 +281,11 @@ export class FlightModel {
   checkTerrainCollision(dt, clearance = 12) {
     if (this.crashed) return false;
     const steps = 4;
-    for (let i = 1; i <= steps; i++) {
+    // Starts at i = 0, the current position. update() has already moved the
+    // aircraft by the time this runs, so beginning at i = 1 skipped the whole
+    // step just travelled: a jet that ended the frame inside a ridge went
+    // undetected whenever the four predictive samples came out the far side.
+    for (let i = 0; i <= steps; i++) {
       const t = (dt * i) / steps;
       const x = this.position.x + this.velocity.x * t;
       const y = this.position.y + this.velocity.y * t;
@@ -292,6 +296,14 @@ export class FlightModel {
         terrainNormal(x, z, 8, _n);
         this.impactNormal = new THREE.Vector3(_n.x, _n.y, _n.z);
         this.impactSpeed = this.velocity.length();
+        // Put the aircraft on the ground it just hit. update() returns early
+        // once crashed, so without this the jet hangs wherever the step left it
+        // — often a hundred metres clear of the slope, in mid-air — and holds
+        // that pose for the two seconds before the failure screen. Detecting
+        // the impact a fraction of a second early is what buys the margin; the
+        // aircraft still has to arrive.
+        this.position.set(x, this.impactPoint.y + clearance * 0.35, z);
+        this.velocity.set(0, 0, 0);
         return true;
       }
     }

@@ -175,11 +175,17 @@ export class Engine {
     if (!this.adaptEnabled) return;
 
     const min = 0.62;
+    // The recovery threshold has to sit just above the vsync interval, not
+    // below it. It was 1/75 s, which a 60 Hz display can never deliver — frames
+    // are quantised to 16.67 ms — so scale could only ever go down. One passing
+    // hitch left the rest of the session permanently soft with no way back.
+    // 1/57 s leaves about 5% of headroom over 16.67 ms; the asymmetric
+    // cooldowns damp the oscillation that costs.
     if (median > 1 / 52 && this.renderScale > min) {
       this.renderScale = Math.max(min, this.renderScale - 0.08);
       this._scaleCooldown = 1.1;
       this.resize();
-    } else if (median < 1 / 75 && this.renderScale < 1) {
+    } else if (median < 1 / 57 && this.renderScale < 1) {
       this.renderScale = Math.min(1, this.renderScale + 0.05);
       this._scaleCooldown = 2.2;
       this.resize();

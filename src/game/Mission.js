@@ -49,7 +49,9 @@ export class Mission {
   }
 
   get complete() {
-    return this.captured >= this.posts.length;
+    // The length check is not redundant: an empty post list would otherwise
+    // report complete on the first frame and end the sortie before it started.
+    return this.posts.length > 0 && this.captured >= this.posts.length;
   }
 
   /** The post the HUD is currently steering toward. */
@@ -204,6 +206,41 @@ function findPostSites(origin, count) {
       if (chosen.length >= count) break;
       if (chosen.some((p) => Math.hypot(p.x - c.x, p.z - c.z) < relax)) continue;
       chosen.push(c);
+    }
+  }
+
+  // Last resort: scoreSite rejects anything that is not a genuine overlook, so
+  // on unusually gentle ground the candidate list itself can come up short and
+  // no amount of relaxing separation will help. Widen the search on relaxed
+  // criteria rather than returning a short list — the brief calls for four to
+  // six objectives, and shipping three would be a silently wrong sortie. Zero
+  // is worse still: mission.complete is `captured >= posts.length`, so an empty
+  // set finishes the sortie the instant it begins.
+  if (chosen.length < count) {
+    const fallback = [];
+    const rings = 34;
+    const spokes = 52;
+    for (let r = 0; r < rings && fallback.length < 4000; r++) {
+      const range = SEARCH_MIN_RANGE + ((SEARCH_MAX_RANGE * 1.6 - SEARCH_MIN_RANGE) * r) / (rings - 1);
+      for (let s = 0; s < spokes; s++) {
+        const a = ((s + r * 0.37) / spokes) * Math.PI * 2;
+        const x = origin.x + Math.cos(a) * range;
+        const z = origin.z + Math.sin(a) * range;
+        const h = terrainHeight(x, z);
+        if (h < MIN_ALTITUDE - 900 || h > MAX_ALTITUDE + 900) continue;
+        if (terrainSlope(x, z) > MAX_SLOPE * 1.8) continue;
+        fallback.push({ x, z, score: -terrainSlope(x, z), range, h });
+      }
+    }
+    fallback.sort((a, b) => b.h - a.h);
+    let spacing = MIN_SEPARATION;
+    while (chosen.length < count && spacing > 400) {
+      for (const c of fallback) {
+        if (chosen.length >= count) break;
+        if (chosen.some((p) => Math.hypot(p.x - c.x, p.z - c.z) < spacing)) continue;
+        chosen.push(c);
+      }
+      spacing *= 0.6;
     }
   }
 

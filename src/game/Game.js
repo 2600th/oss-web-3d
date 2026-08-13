@@ -3,7 +3,7 @@ import { Environment } from '../world/Environment.js';
 import { Sky } from '../world/Sky.js';
 import { Terrain } from '../world/Terrain.js';
 import { Clouds } from '../world/Clouds.js';
-import { terrainHeight } from '../world/heightfield.js';
+import { terrainHeight, maxHeightAlong } from '../world/heightfield.js';
 import { FlightFx } from '../fx/FlightFx.js';
 import { Audio } from '../fx/Audio.js';
 import { FlightModel } from '../flight/FlightModel.js';
@@ -298,11 +298,23 @@ export class Game {
     this.aircraft.update(dt, flight);
     this.mission.update(dt, flight.position);
 
-    // Terrain proximity: warn on closure rate, not just height, so a shallow
-    // approach to rising ground triggers before it is too late to pull.
-    const closure = Math.max(0, -flight.velocity.y);
-    const secondsToGround = flight.agl / Math.max(closure, 1);
-    this.terrainWarning = !flight.crashed && flight.agl < 420 && secondsToGround < 7;
+    // Terrain proximity, measured against the ground actually ahead.
+    //
+    // This used to divide AGL by descent rate, which sounds like closure and is
+    // not: flying level at a wall of rock has a descent rate of zero, so the
+    // expression pinned to AGL / 1 and only warned below about 7 m — long past
+    // the point of being useful, and never at all in the case that matters
+    // most. Sampling the highest ground along the projected path catches rising
+    // terrain while there is still room to pull.
+    const look = 7.5; // seconds of flight path
+    const aheadX = flight.position.x + flight.velocity.x * look;
+    const aheadZ = flight.position.z + flight.velocity.z * look;
+    const ridge = maxHeightAlong(flight.position.x, flight.position.z, aheadX, aheadZ, 10);
+    const lowestClearance = Math.min(
+      flight.agl,
+      flight.position.y + flight.velocity.y * look - ridge,
+    );
+    this.terrainWarning = !flight.crashed && lowestClearance < 260;
 
     if (this.reconActive) {
       this.recon.update(dt, flight);

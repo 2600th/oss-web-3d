@@ -41,7 +41,53 @@ function supportsFlagEmoji() {
   }
 }
 
-const JAI_HIND = supportsFlagEmoji() ? 'Jai Hind. \u{1F1EE}\u{1F1F3}' : 'Jai Hind.';
+const JAI_HIND = 'Jai Hind.';
+const HAS_FLAG_GLYPH = supportsFlagEmoji();
+
+/**
+ * Write "Jai Hind." followed by the flag into an element.
+ *
+ * Where the emoji composes, it is used directly. Where it does not, the line
+ * previously just lost the flag — but the flag is part of the specified copy,
+ * so dropping it on the platform most players are on is not an acceptable
+ * fallback. An inline tricolour draws the same thing with no font dependency.
+ */
+function writeJaiHind(node) {
+  node.textContent = '';
+  node.appendChild(document.createTextNode(JAI_HIND + ' '));
+  if (HAS_FLAG_GLYPH) {
+    node.appendChild(document.createTextNode('\u{1F1EE}\u{1F1F3}'));
+    return;
+  }
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 27 18');
+  svg.setAttribute('class', 'flag');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Flag of India');
+  const bands = [
+    ['0', '#ff9933'],
+    ['6', '#ffffff'],
+    ['12', '#138808'],
+  ];
+  for (const [y, fill] of bands) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', '0');
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', '27');
+    rect.setAttribute('height', '6');
+    rect.setAttribute('fill', fill);
+    svg.appendChild(rect);
+  }
+  const wheel = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  wheel.setAttribute('cx', '13.5');
+  wheel.setAttribute('cy', '9');
+  wheel.setAttribute('r', '2.4');
+  wheel.setAttribute('fill', 'none');
+  wheel.setAttribute('stroke', '#000080');
+  wheel.setAttribute('stroke-width', '0.7');
+  svg.appendChild(wheel);
+  node.appendChild(svg);
+}
 
 const DISCLAIMER =
   'A work of fiction. Not affiliated with, endorsed by, or representing the Indian Air Force, ' +
@@ -122,7 +168,7 @@ export class Screens {
         'support of soldiers fighting on the ground.',
     );
     el('p', '', ded, 'In remembrance of all those who made the supreme sacrifice in service of India.');
-    el('div', 'jaihind', this.t3, JAI_HIND);
+    writeJaiHind(el('div', 'jaihind', this.t3));
 
     this.titlePrompt = el('div', 'prompt', stack, 'Press any key to continue');
     el('div', 'disclaimer', layer, DISCLAIMER);
@@ -242,18 +288,38 @@ export class Screens {
     const stack = el('div', 'stack debrief', centre);
     stack.style.setProperty('--gap', '1.5rem');
 
-    this.resultTitle = el('h2', 'result-title', stack, '');
-    this.resultLine = el('div', 'result-line', stack, '');
-    this.resultQuote = el('div', 'lede', stack, '');
-    this.resultJai = el('div', 'jaihind', stack, '');
-    this.contactSheet = el('div', 'contact-sheet', stack);
-    this.statsRow = el('div', 'stats', stack);
+    // Two separate cards, and the separation is the point rather than a layout
+    // preference. The closing lines are real remembrance; graded photographs,
+    // imagery quality and a stopwatch are a fictional sortie's results. Stacking
+    // them together put "In remembrance" directly above a letter grade, which is
+    // exactly the gamification of sacrifice the brief rules out. The ending is
+    // shown alone, and the record is a deliberate second step the player asks
+    // for. A failed sortie carries no remembrance line, so it skips straight to
+    // the record.
+    this.endingCard = el('div', 'stack', stack);
+    this.resultTitle = el('h2', 'result-title', this.endingCard, '');
+    this.resultLine = el('div', 'result-line', this.endingCard, '');
+    this.resultQuote = el('div', 'lede', this.endingCard, '');
+    this.resultJai = el('div', 'jaihind', this.endingCard, '');
+    const endingMenu = el('div', 'menu', this.endingCard);
+    this.continueButton = el('button', '', endingMenu, 'Continue');
+    this.continueButton.addEventListener('click', () => this._showRecord());
 
-    const menu = el('div', 'menu', stack);
+    this.recordCard = el('div', 'stack', stack);
+    el('div', 'eyebrow', this.recordCard, 'Sortie record — fictional');
+    this.contactSheet = el('div', 'contact-sheet', this.recordCard);
+    this.statsRow = el('div', 'stats', this.recordCard);
+    const menu = el('div', 'menu', this.recordCard);
     this.debriefButton = el('button', '', menu, 'Retry Sortie');
     this.debriefButton.addEventListener('click', () => this.callbacks.onRestart());
 
     this.debriefLayer = layer;
+  }
+
+  _showRecord() {
+    this.endingCard.style.display = 'none';
+    this.recordCard.style.display = '';
+    this.debriefButton.focus();
   }
 
   showDebrief(mission, success) {
@@ -265,9 +331,17 @@ export class Screens {
     this.resultQuote.textContent = success
       ? 'For those who flew into impossible skies, and those who held the mountains below.'
       : 'Regroup. Return to the skies.';
-    this.resultJai.textContent = success ? JAI_HIND : '';
     this.resultJai.style.display = success ? '' : 'none';
+    if (success) writeJaiHind(this.resultJai);
+    else this.resultJai.textContent = '';
     this.debriefButton.textContent = success ? 'Fly Again' : 'Retry Sortie';
+
+    // Only a completed sortie gets the remembrance card; a failed one has no
+    // memorial line to keep apart, and making the player click past a card that
+    // ends "Regroup. Return to the skies." before they can retry is friction
+    // for nothing.
+    this.endingCard.style.display = success ? '' : 'none';
+    this.recordCard.style.display = success ? 'none' : '';
 
     this.contactSheet.innerHTML = '';
     for (const post of mission.posts) {
