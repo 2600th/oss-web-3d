@@ -55,6 +55,37 @@ export class Music {
     this._step = 0;
     this._volume = 1;
     this._duck = 1;
+    // Live voices, so a cue change can silence what the previous one booked.
+    this._voices = new Set();
+  }
+
+  /**
+   * Register a voice's output gain and its sources so the cue can be cut short.
+   *
+   * Without this, stopping a cue only cancelled the scheduler: notes already
+   * scheduled kept playing. The sortie drone runs 26 seconds, so reaching the
+   * debrief left it droning underneath the ending, and raising the shared
+   * output gain for the new cue made it audible again rather than hiding it.
+   */
+  _register(amp, sources, endsAt) {
+    const entry = { amp, sources };
+    this._voices.add(entry);
+    setTimeout(() => this._voices.delete(entry), (endsAt - this.ctx.currentTime + 0.5) * 1000);
+  }
+
+  /** Fade out and stop everything the previous cue scheduled. */
+  _silenceVoices(fade) {
+    const now = this.ctx.currentTime;
+    for (const v of this._voices) {
+      try {
+        v.amp.gain.cancelScheduledValues(now);
+        v.amp.gain.setTargetAtTime(0.0001, now, Math.max(fade, 0.05) / 3);
+        for (const src of v.sources) src.stop(now + fade + 0.2);
+      } catch {
+        /* already stopped */
+      }
+    }
+    this._voices.clear();
   }
 
   setVolume(v) {
@@ -95,6 +126,7 @@ export class Music {
   stop(fade = 1.2) {
     if (!this.cue) return;
     this.cue = null;
+    this._silenceVoices(fade);
     this.out.gain.setTargetAtTime(0, this.ctx.currentTime, fade / 3);
     clearInterval(this._timer);
     this._timer = null;
@@ -204,6 +236,7 @@ export class Music {
 
     burst.start(when);
     burst.stop(when + period * 1.5);
+    this._register(amp, [burst], when + seconds);
     setTimeout(() => {
       try {
         delay.disconnect();
@@ -271,10 +304,12 @@ export class Music {
     breath.connect(breathBand).connect(breathGain).connect(amp);
     amp.connect(this.tone);
 
-    for (const node of [osc, colour, vibrato, breath]) {
+    const voices = [osc, colour, vibrato, breath];
+    for (const node of voices) {
       node.start(when);
       node.stop(when + seconds + 0.1);
     }
+    this._register(amp, voices, when + seconds);
     osc.onended = () => {
       try {
         amp.disconnect();
@@ -315,6 +350,7 @@ export class Music {
       v.start(when);
       v.stop(when + seconds + 0.1);
     }
+    this._register(amp, voices, when + seconds);
     voices[0].onended = () => {
       try {
         filter.disconnect();
@@ -353,6 +389,7 @@ export class Music {
       v.start(when);
       v.stop(when + seconds + 0.1);
     }
+    this._register(amp, voices, when + seconds);
     voices[0].onended = () => {
       try {
         filter.disconnect();

@@ -92,11 +92,23 @@ export class TouchControls {
       this.stickNub.style.opacity = '0';
       // Release returns the stick to neutral. The flight model already smooths
       // control input, so this reads as easing off rather than snapping.
-      this.input.setTouchAxes(0, 0);
+      this.input.releaseTouch();
       e.preventDefault();
     };
     stick.addEventListener('pointerup', end);
     stick.addEventListener('pointercancel', end);
+    // Capture can be lost without a pointerup — a system gesture, the tab going
+    // to the background — and a stick stuck at full deflection is the classic
+    // mobile-web flight bug.
+    stick.addEventListener('lostpointercapture', end);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this._stickId = null;
+        this.stickRing.style.opacity = '0';
+        this.stickNub.style.opacity = '0';
+        this.input.releaseTouch();
+      }
+    });
 
     // ---- throttle -------------------------------------------------------
     const thr = this.throttleZone;

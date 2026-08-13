@@ -169,8 +169,19 @@ export class Game {
     this.chase.reset(this.flight);
     this.terrain.prime(this.flight.position);
     this.fx.reset();
+    // Launch is always reached through a gesture (click or key), which is what
+    // browsers require to create an AudioContext. Starting audio here rather
+    // than relying on a prior keypress fixes a mouse-only launch, where the
+    // context did not exist yet so the sortie cue was simply dropped and the
+    // score never played for that flight.
+    this.audio.start();
+    this.audio.resume();
     this.audio.resetEngine();
     this.audio.music?.play('sortie');
+    // A latched recon toggle must not survive into a new sortie, or the camera
+    // is already up before the player has touched anything.
+    this.input.touchRecon = false;
+    this.input.releaseTouch();
     this.mission.begin();
     this.hud.show(true);
     this.state = 'flying';

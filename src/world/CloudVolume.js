@@ -99,7 +99,9 @@ export class CloudVolume extends Effect {
     u.get('uSunIntensity').value = env.uSunIntensity.value;
     u.get('uZenithColor').value.copy(env.uZenithColor.value);
     u.get('uHorizonColor').value.copy(env.uHorizonColor.value);
-    u.get('uCloudWind').value.copy(env.uWind.value).multiplyScalar(0.35);
+    // Copied, not re-derived: a slightly different wind here would drift the
+    // volume out of step with the shadows that share its density field.
+    u.get('uCloudWind').value.copy(env.uCloudWind.value);
   }
 }
 
@@ -176,11 +178,22 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
 
   // Intersect the cloud slab. Both ends are needed: the camera can be below it,
   // inside it, or above it looking down, and all three happen in this game.
-  float tBottom = (uCloudBase - uCamPos.y) / dir.y;
-  float tTop = (uCloudTop - uCamPos.y) / dir.y;
-  float tNear = min(tBottom, tTop);
-  float tFar = max(tBottom, tTop);
-  if (dir.y == 0.0) { tNear = 0.0; tFar = uCamPos.y > uCloudBase && uCamPos.y < uCloudTop ? uMaxDistance : -1.0; }
+  // Guard before dividing, not after. A near-horizontal ray gives 1/dir.y of
+  // enormous magnitude and an exactly horizontal one gives Inf -- or NaN when
+  // the camera sits precisely on a slab boundary, since that is 0/0. Computing
+  // those first and overwriting them afterwards still lets the NaN through on
+  // any driver that propagates it through min/max.
+  float tNear, tFar;
+  if (abs(dir.y) < 1e-5) {
+    bool inside = uCamPos.y > uCloudBase && uCamPos.y < uCloudTop;
+    tNear = 0.0;
+    tFar = inside ? uMaxDistance : -1.0;
+  } else {
+    float tBottom = (uCloudBase - uCamPos.y) / dir.y;
+    float tTop = (uCloudTop - uCamPos.y) / dir.y;
+    tNear = min(tBottom, tTop);
+    tFar = max(tBottom, tTop);
+  }
   tNear = max(tNear, 0.0);
   tFar = min(tFar, min(sceneDist, uMaxDistance));
 
@@ -230,11 +243,15 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
     // Energy-conserving analytic integration over the step, rather than a plain
     // sum. Without this the result depends on step size and a low step count
     // reads as thin and flickery.
-    float clamped = max(density, 1e-5);
-    float stepTransmittance = exp(-clamped * stepSize);
-    vec3 integrated = (luminance - luminance * stepTransmittance) / clamped;
-
-    scattering += transmittance * integrated;
+    //
+    // The source term is proportional to density (scattering coefficient scales
+    // with how much water is there), so the density in the numerator and the
+    // one in the analytic denominator cancel exactly. Writing the division out
+    // literally -- as this did -- divides by density a second time, and since
+    // (1 - T) tends to density * stepSize for small density, the result tends
+    // to luminance * stepSize: wisps contributed as much light as solid cloud.
+    float stepTransmittance = exp(-density * stepSize);
+    scattering += transmittance * luminance * (1.0 - stepTransmittance);
     transmittance *= stepTransmittance;
   }
 

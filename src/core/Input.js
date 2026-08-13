@@ -25,9 +25,9 @@ export class Input {
     // never affected by these being present.
     this.touchActive = false;
     this.touchRecon = false;
-    this._touchPitch = undefined;
-    this._touchRoll = undefined;
-    this._touchThrottle = undefined;
+    this._touchPitch = null;
+    this._touchRoll = null;
+    this._touchThrottle = null;
 
     this._pitchTarget = 0;
     this._rollTarget = 0;
@@ -52,6 +52,10 @@ export class Input {
     this._onBlur = () => {
       this.keys.clear();
       this._pitchTarget = this._rollTarget = this._yawTarget = 0;
+      // Also release the touch stick. Losing the window mid-gesture otherwise
+      // leaves it held at whatever deflection it had, and the aircraft keeps
+      // turning while the player is looking at something else.
+      this.releaseTouch();
     };
     this._onMouseMove = (e) => {
       if (!this.mouseMode) return;
@@ -73,20 +77,30 @@ export class Input {
   // driving. The only difference is that touch axes are analogue and arrive
   // pre-shaped, so update() must not overwrite them with key state.
 
+  /**
+   * @param {number|null} pitch  null when the stick is released
+   * @param {number|null} roll
+   */
   setTouchAxes(pitch, roll) {
-    this.touchActive = true;
+    this.touchActive = pitch !== null;
     this._touchPitch = pitch;
     this._touchRoll = roll;
   }
 
   setTouchThrottle(t) {
-    this.touchActive = true;
     this._touchThrottle = t;
   }
 
   toggleTouchRecon() {
     this.touchRecon = !this.touchRecon;
     this.touchActive = true;
+  }
+
+  /** Drop all held touch input; used on blur, capture loss and sortie start. */
+  releaseTouch() {
+    this.touchActive = false;
+    this._touchPitch = null;
+    this._touchRoll = null;
   }
 
   /** Fire an edge-triggered action from an on-screen button. */
@@ -145,14 +159,25 @@ export class Input {
         r = Math.max(-1, Math.min(1, this._mouseX * 2.6));
       }
 
-      // Touch overrides, applied last so an on-screen stick wins over the
-      // (absent) keys rather than being averaged with them. Only axes the
-      // player is actually touching are taken: with no thumb down the stick
-      // reports zero, which is what a released stick should mean.
-      if (this.touchActive) {
-        if (this._touchPitch !== undefined) p = this._touchPitch;
-        if (this._touchRoll !== undefined) r = this._touchRoll;
-        if (this._touchThrottle !== undefined) this.throttle = this._touchThrottle;
+      // Touch overrides, applied last so an on-screen stick wins over the keys
+      // rather than being averaged with them — but ONLY while a thumb is
+      // actually down.
+      //
+      // This used to latch: touchActive was set on first use and never cleared,
+      // and release stored zeroes rather than clearing the axes, so from the
+      // first touch onward every frame overwrote pitch and roll with 0. On a
+      // tablet with a keyboard, or a touchscreen laptop, one tap disabled the
+      // keyboard, the mouse and the gamepad for the rest of the session.
+      if (this.touchActive && this._touchPitch !== null) {
+        p = this._touchPitch;
+        r = this._touchRoll;
+      }
+      // Throttle is a position rather than a rate, so the last touched value
+      // does persist — but only until a key moves it, which the clauses below
+      // are free to do.
+      if (this._touchThrottle !== null) {
+        this.throttle = this._touchThrottle;
+        this._touchThrottle = null;
       }
 
       this._pitchTarget = invertPitch ? -p : p;
