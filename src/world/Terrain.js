@@ -95,12 +95,10 @@ export class Terrain {
     this.renderer = renderer;
     this.environment = environment;
 
-    const caps = renderer.capabilities;
     this.floatLinear = renderer.extensions.has('OES_texture_float_linear');
     if (!renderer.extensions.has('EXT_color_buffer_float')) {
       console.warn('[terrain] EXT_color_buffer_float missing; terrain will be degraded.');
     }
-    void caps;
 
     const filter = this.floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
 

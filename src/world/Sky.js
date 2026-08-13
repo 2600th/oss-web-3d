@@ -107,4 +107,60 @@ export class Sky {
     this.material.uniforms.uInvProjection.value.copy(camera.projectionMatrixInverse);
     this.material.uniforms.uInvView.value.copy(camera.matrixWorld);
   }
+
+  /**
+   * Bake the sky into a prefiltered environment map.
+   *
+   * The aircraft's converted metal/rough materials are largely bare metal, and
+   * bare metal with no environment renders black. One PMREM pass at load gives
+   * the airframe a sky to reflect and costs nothing per frame.
+   *
+   * Rendered from a cube-facing box rather than the full-screen pass, because
+   * CubeCamera drives all six faces itself and never gives us a hook to update
+   * the inverse-view uniform the screen-space version depends on.
+   */
+  bakeEnvironment(renderer, environment) {
+    const box = new THREE.BoxGeometry(2, 2, 2);
+    const material = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      side: THREE.BackSide,
+      depthWrite: false,
+      uniforms: { ...environment.uniforms },
+      vertexShader: /* glsl */ `
+        out vec3 vDir;
+        void main() {
+          vDir = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        in vec3 vDir;
+        out vec4 fragColor;
+        ${ATMOSPHERE_UNIFORMS_GLSL}
+        ${ATMOSPHERE_GLSL}
+        void main() {
+          vec3 dir = normalize(vDir);
+          vec3 col = atm_skyColor(dir);
+          float mu = clamp(dot(dir, uSunDir), -1.0, 1.0);
+          col += uSunColor * (1.0 - smoothstep(0.006, 0.02, acos(mu))) * uSunIntensity * 6.0;
+          // Ground half: snow and rock throw a lot of light back up here.
+          col = mix(col, vec3(0.30, 0.31, 0.33), smoothstep(-0.02, -0.45, dir.y));
+          fragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(box, material));
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const target = pmrem.fromScene(scene, 0, 0.1, 10);
+
+    box.dispose();
+    material.dispose();
+    pmrem.dispose();
+    return target.texture;
+  }
 }
