@@ -44,7 +44,7 @@ export class Clouds {
     geometry.setIndex([0, 1, 2, 0, 2, 3]);
 
     this.offsets = new Float32Array(count * 4); // xyz + radius
-    this.params = new Float32Array(count * 3); // opacity, seed, cluster height
+    this.params = new Float32Array(count * 3); // opacity, seed, sun transmittance
     geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(this.offsets, 4));
     geometry.setAttribute('aParams', new THREE.InstancedBufferAttribute(this.params, 3));
     geometry.instanceCount = count;
@@ -60,6 +60,8 @@ export class Clouds {
       uniforms: {
         ...environment.uniforms,
         uFieldRadius: { value: FIELD_RADIUS },
+        uNear: { value: 4 },
+        uExtinction: { value: 0.0013 },
       },
       vertexShader: /* glsl */ `
         precision highp float;
@@ -69,6 +71,8 @@ export class Clouds {
         out vec2 vUv;
         out float vOpacity;
         out float vSeed;
+        out float vRadius;
+        out float vSunLight;
         out vec3 vWorld;
         out vec3 vCentre;
 
@@ -86,6 +90,8 @@ export class Clouds {
           vUv = uv;
           vOpacity = aParams.x;
           vSeed = aParams.y;
+          vSunLight = aParams.z;
+          vRadius = radius;
           vWorld = world;
           vCentre = centre;
 
@@ -97,6 +103,8 @@ export class Clouds {
         in vec2 vUv;
         in float vOpacity;
         in float vSeed;
+        in float vRadius;
+        in float vSunLight;
         in vec3 vWorld;
         in vec3 vCentre;
         out vec4 fragColor;
@@ -104,7 +112,16 @@ export class Clouds {
         ${ATMOSPHERE_UNIFORMS_GLSL}
         uniform vec3 uCameraPos;
         uniform float uTime;
+        uniform float uNear;
+        uniform float uExtinction;
         ${ATMOSPHERE_GLSL}
+
+        // Henyey-Greenstein phase function.
+        float hg(float mu, float g) {
+          float gg = g * g;
+          float denom = 1.0 + gg - 2.0 * g * mu;
+          return (1.0 - gg) / (12.566370614 * max(denom * sqrt(max(denom, 1e-4)), 1e-4));
+        }
 
         float hash21(vec2 p) {
           p = 50.0 * fract(p * 0.3183099 + vec2(0.71, 0.113));
@@ -122,31 +139,77 @@ export class Clouds {
           float r = length(d);
           if (r > 1.0) discard;
 
-          // Soft round core, broken up by a little noise so the silhouette is
-          // not a perfect disc. Two octaves is enough at the sizes these are
-          // ever seen at.
           float n = vnoise(d * 3.1 + vSeed) * 0.5 + vnoise(d * 7.3 - vSeed) * 0.25;
-          float alpha = smoothstep(1.0, 0.10, r + n * 0.38) * vOpacity;
+
+          // Spherical billboard: alpha comes from how much cloud the view ray
+          // actually crosses, not from a painted disc.
+          //
+          // The quad stands in for a sphere, so the half-chord through it at
+          // this fragment is r_sphere * sqrt(1 - r^2). Opacity is then Beer's
+          // law over that thickness. Two artifacts disappear together: the puff
+          // no longer reads as a flat card, because density genuinely thins
+          // toward the rim; and flying through a bank no longer pops, because
+          // clipping the chord at the near plane makes a puff dissolve
+          // continuously as the camera enters it. The old smoothstep disc
+          // needed a hand-tuned distance fade to hide the same popping.
+          // Umenhoffer et al., Spherical Billboards for Rendering Volumetric
+          // Data (ShaderX5 / GI 2006).
+          // The noise displaces the silhouette, not just the density. Driving
+          // Beer's law off the exact analytic chord alone gives a perfect
+          // circle of near-opaque cloud with a hard rim — a solid egg, which is
+          // a worse read than the soft smear it replaced. Real cumulus edges
+          // are not soft, they are fractal, so the radius itself is perturbed
+          // and the chord is taken through the perturbed sphere.
+          float rn = clamp(r + (n - 0.36) * 0.62, 0.0, 1.0);
+          if (rn > 0.998) discard;
+
+          float omega = vRadius * sqrt(max(1.0 - rn * rn, 0.0));
+          float toCentre = length(uCameraPos - vCentre);
+          float entry = max(toCentre - omega, uNear);
+          float thickness = max(toCentre + omega - entry, 0.0);
+
+          float density = vOpacity * clamp(0.55 + 0.60 * n, 0.0, 1.3);
+          float alpha = (1.0 - exp(-uExtinction * density * thickness))
+                      * smoothstep(1.0, 0.90, rn);
           if (alpha < 0.004) discard;
 
-          // Fake the volume: treat the offset from the puff centre as a normal.
-          // Enough to give a lit crown, a shaded base and a bright rim toward
-          // the sun, which is all a cumulus really reads as from a distance.
           vec3 toCam = normalize(uCameraPos - vWorld);
-          vec3 normal = normalize(vec3(d.x, 0.55, d.y) + toCam * 0.35);
-          float lit = clamp(dot(normal, uSunDir) * 0.5 + 0.5, 0.0, 1.0);
+          float mu = dot(-toCam, uSunDir);
 
-          // A cumulus reads almost entirely by the contrast between its lit
-          // crown and its shaded base. Over snow that contrast is the *only*
-          // thing separating it from the mountain behind, so the base is kept
-          // genuinely dark rather than politely grey.
-          vec3 shadowed = vec3(0.30, 0.36, 0.50);
-          vec3 sunlit = vec3(1.26, 1.24, 1.20);
-          vec3 col = mix(shadowed, sunlit, pow(lit, 1.9));
+          // Two lobes: a narrow forward one for the silver lining when looking
+          // into the sun, and a wide backscatter one so the body of the cloud
+          // does not go dead once the rim is bright. A single forward lobe was
+          // the obvious choice and leaves everything but the rim flat.
+          //
+          // Normalised so side-scatter is 1.0 rather than left as the raw
+          // sphere-integrating phase function, whose value at mu = 0 is about
+          // 0.027 — used directly it made every cloud not pointed at the sun
+          // almost black. The forward spike is clamped for the same reason in
+          // reverse: unclamped it is 50x side-scatter and blows out to a disc.
+          float phase = mix(hg(mu, 0.68), hg(mu, -0.25), 0.38) / 0.0265;
+          phase = min(phase, 5.5);
 
-          // Forward scattering: the rim facing the sun glows.
-          float mu = max(dot(-toCam, uSunDir), 0.0);
-          col += uSunColor * pow(mu, 5.0) * (1.0 - smoothstep(0.25, 0.95, r)) * 0.55;
+          // Powder: the dark edge on clouds seen with the sun behind the
+          // viewer. Gated on view direction on purpose — it is only visible
+          // where the view vector approaches the light vector, and applying it
+          // unconditionally (the common mistake) darkens cloud that should be
+          // bright.
+          float powder = 1.0 - exp(-uExtinction * density * thickness * 2.2);
+          float powderGate = clamp(mu * 0.5 + 0.5, 0.0, 1.0);
+
+          // Sun transmittance is per-puff, computed on the CPU by sorting the
+          // field along the sun vector, so a puff buried behind its own cluster
+          // is genuinely darker than one on the sunlit face.
+          float energy = vSunLight * mix(1.0, powder, powderGate * 0.85);
+
+          // Sky ambient rises through the cloud: the crown sees the whole dome,
+          // the base sees mostly the underside of the cloud above it. This is
+          // separate from distance haze, and it is what gives a cumulus its
+          // lit-top / dark-bottom read.
+          float heightInCloud = clamp((vWorld.y - vCentre.y) / (2.0 * vRadius) + 0.5, 0.0, 1.0);
+          vec3 ambient = mix(vec3(0.20, 0.25, 0.37), vec3(0.62, 0.68, 0.82), heightInCloud);
+
+          vec3 col = ambient + uSunColor * uSunIntensity * energy * phase * 0.37;
 
           float dist = length(uCameraPos - vWorld);
           // Clouds sit *in* the haze rather than behind all of it, and they are
@@ -155,9 +218,10 @@ export class Clouds {
           // keeps distant decks readable while still tying them to the air.
           col = atm_applyAerial(col, -toCam, dist * 0.5, uCameraPos.y, vWorld.y);
 
-          // Never let a puff slam into the near plane as the aircraft flies
-          // through the bank; fade it out instead.
-          alpha *= smoothstep(30.0, 220.0, dist);
+          // No distance fade here any more. The chord clipped at the near plane
+          // already dissolves a puff continuously as the camera enters it,
+          // which is what the old smoothstep(30, 220) was standing in for -- and
+          // that fade also erased puffs the aircraft was merely close to.
 
           fragColor = vec4(col, alpha);
         }
@@ -172,6 +236,9 @@ export class Clouds {
     this._rand = mulberry32(0x5afed5a9);
     this._centre = new THREE.Vector3();
     this._initialised = false;
+    this._order = new Int32Array(0);
+    this._keys = new Float32Array(0);
+    this._relightTimer = 0;
   }
 
   setQuality(tier) {
@@ -225,7 +292,74 @@ export class Clouds {
     const p = index * 3;
     this.params[p] = 0.66 + rand() * 0.34;
     this.params[p + 1] = rand() * 40;
-    this.params[p + 2] = cluster.y;
+    this.params[p + 2] = 1; // sun transmittance, filled in by _relight()
+  }
+
+  /**
+   * Per-puff transmittance toward the sun.
+   *
+   * This is Harris's first pass from Real-Time Cloud Rendering for Games (GDC
+   * 2002) with the expensive half removed. He sorts particles by distance to
+   * the light, renders them front-to-back and reads back the framebuffer to
+   * find how much light reaches each one. The readback is a pipeline stall and
+   * a non-starter in WebGL2 — but with only a few hundred puffs the same
+   * integral is cheap to do analytically on the CPU, and it is the single thing
+   * that makes a cluster read as one cumulus rather than ten separate blobs:
+   * puffs buried behind the sunlit face come out genuinely darker, so the bank
+   * gets a lit crown and a shadowed core for the right reason.
+   *
+   * The sun does not move, so this only runs when the field changes.
+   */
+  _relight() {
+    const active = this._activeCount ?? this.count;
+    const sun = this.environment.uniforms.uSunDir.value;
+    const order = this._order.length === active ? this._order : (this._order = new Int32Array(active));
+    for (let i = 0; i < active; i++) order[i] = i;
+
+    // Nearest the sun first, so every occluder is processed before what it
+    // shades.
+    const depthAlongSun = (i) => {
+      const o = i * 4;
+      return this.offsets[o] * sun.x + this.offsets[o + 1] * sun.y + this.offsets[o + 2] * sun.z;
+    };
+    const keys = this._keys.length === active ? this._keys : (this._keys = new Float32Array(active));
+    for (let i = 0; i < active; i++) keys[i] = depthAlongSun(i);
+    const sorted = Array.from(order).sort((a, b) => keys[b] - keys[a]);
+
+    // Deliberately far below the shader's extinction. That value is for a
+    // single view ray; this integral stands in for the light that reaches a
+    // puff after bouncing around inside the bank, and cloud is strongly
+    // multiple-scattering — a physically "correct" single-scatter extinction
+    // here drove mean transmittance to 0.18 and turned every bank into a row of
+    // dark grey eggs. The floor plays the same role: a real cumulus shadow side
+    // sits around a third of its lit side, not at zero.
+    const EXTINCTION = 0.0008;
+    for (let a = 0; a < sorted.length; a++) {
+      const i = sorted[a];
+      const io = i * 4;
+      const px = this.offsets[io];
+      const py = this.offsets[io + 1];
+      const pz = this.offsets[io + 2];
+
+      let optical = 0;
+      for (let b = 0; b < a; b++) {
+        const j = sorted[b];
+        const jo = j * 4;
+        const rj = this.offsets[jo + 3];
+        // Perpendicular distance from this puff to the sun ray through puff j.
+        const dx = px - this.offsets[jo];
+        const dy = py - this.offsets[jo + 1];
+        const dz = pz - this.offsets[jo + 2];
+        const along = dx * sun.x + dy * sun.y + dz * sun.z;
+        const perpSq = dx * dx + dy * dy + dz * dz - along * along;
+        if (perpSq >= rj * rj) continue;
+        // Chord of puff j intercepted on the way to the sun.
+        optical += 2 * Math.sqrt(rj * rj - perpSq) * this.params[j * 3];
+        if (optical > 2400) break; // already fully shadowed
+      }
+      this.params[i * 3 + 2] = 0.22 + 0.78 * Math.exp(-EXTINCTION * optical);
+    }
+    this.mesh.geometry.attributes.aParams.needsUpdate = true;
   }
 
   update(dt, focus) {
@@ -237,6 +371,7 @@ export class Clouds {
       this._initialised = true;
       attributes.aOffset.needsUpdate = true;
       attributes.aParams.needsUpdate = true;
+      this._relight();
       return;
     }
 
@@ -268,6 +403,15 @@ export class Clouds {
 
     attributes.aOffset.needsUpdate = true;
     if (dirty) attributes.aParams.needsUpdate = true;
+
+    // Relighting is O(n^2) in puffs, so it is throttled rather than run per
+    // frame. Drift is slow enough that the shading stays correct between runs,
+    // and a recycled cluster spawning with stale transmittance is off screen.
+    this._relightTimer -= dt;
+    if (dirty || this._relightTimer <= 0) {
+      this._relight();
+      this._relightTimer = 1.5;
+    }
   }
 
   dispose() {
