@@ -162,6 +162,10 @@ export class Audio {
 
     this._noise = noise;
     this._warnPhase = 0;
+    // Spool state: core and fan, both lagging the throttle. Started at idle so
+    // the first frame does not slam the engine up from silence.
+    this._n2 = 0.2;
+    this._n1 = 0.2;
   }
 
   setVolume(v) {
@@ -179,9 +183,26 @@ export class Audio {
     const t = this.ctx.currentTime;
     const smooth = 0.06;
 
-    const throttle = flight.throttleSmoothed;
+    const demand = flight.throttleSmoothed;
+
+    // Spool lag, and it is the single strongest cue that this is a jet rather
+    // than a siren. A turbofan does not follow the throttle: the core (N2)
+    // catches up in a second or so, the fan (N1) — which is most of what you
+    // actually hear — takes several, and both run down more slowly than they
+    // run up. Certification allows about eight seconds from approach idle to
+    // 95% thrust. Tracking the throttle directly, as this did, makes the note
+    // move the instant the key does, which reads as a synthesiser.
+    const spool = (current, target, tauUp, tauDown) =>
+      current + (target - current) * (1 - Math.exp(-dt / (target > current ? tauUp : tauDown)));
+    this._n2 = spool(this._n2, demand, 0.9, 1.5);
+    this._n1 = spool(this._n1, this._n2, 1.8, 2.7);
+
+    const throttle = this._n1;
+    const core = this._n2;
     const speedT = THREE.MathUtils.clamp(flight.airspeed / 480, 0, 1);
-    const reheat = THREE.MathUtils.clamp((throttle - 0.84) / 0.16, 0, 1);
+    // Reheat is the exception: the burner lights in well under a second, so it
+    // follows demand rather than the spooled fan.
+    const reheat = THREE.MathUtils.clamp((demand - 0.84) / 0.16, 0, 1);
 
     // Doppler. The chase camera trails the aircraft, so during hard
     // acceleration the gap opens and the engine note drops fractionally — a
@@ -200,15 +221,25 @@ export class Audio {
     this.whineFilter.frequency.setTargetAtTime(1100 + 1800 * throttle, t, smooth);
     this.whineGain.gain.setTargetAtTime((0.012 + 0.05 * throttle) * thin, t, smooth);
 
-    this.effluxFilter.frequency.setTargetAtTime(320 + 900 * throttle, t, smooth);
-    this.effluxGain.gain.setTargetAtTime((0.03 + 0.13 * throttle) * thin, t, smooth);
+    // Combustion and efflux come off the core, which leads the fan — so a
+    // throttle push is heard as the core picking up first and the fan
+    // following, rather than as one block of sound changing volume.
+    this.effluxFilter.frequency.setTargetAtTime(320 + 900 * core, t, smooth);
+    this.effluxGain.gain.setTargetAtTime((0.03 + 0.13 * core) * thin, t, smooth);
 
     this.reheatFilter.frequency.setTargetAtTime(180 + 260 * reheat, t, smooth);
     this.reheatGain.gain.setTargetAtTime(0.32 * reheat * thin, t, 0.12);
 
     // Wind rises steeply with airspeed and thins with altitude.
-    this.windFilter.frequency.setTargetAtTime(420 + 1500 * speedT, t, smooth);
-    this.windGain.gain.setTargetAtTime(Math.pow(speedT, 2.1) * 0.34 * thin, t, smooth);
+    //
+    // Airframe and boundary-layer noise is dipole radiation, so power goes as
+    // v^6 and amplitude as v^3. (The v^8 law is Lighthill's, for free-jet
+    // quadrupole turbulence — that one belongs to the exhaust, not the
+    // airframe, and applying it here is a common error.) Because aeroacoustic
+    // spectra scale on Strouhal number the centre frequency scales linearly
+    // with speed, which is what stops wind from merely getting louder.
+    this.windFilter.frequency.setTargetAtTime(170 + 4.7 * flight.airspeed, t, smooth);
+    this.windGain.gain.setTargetAtTime(Math.pow(speedT, 3.0) * 0.40 * thin, t, smooth);
 
     // Warning tone: a slow beep for terrain, a lower one for stall.
     if (warning === 'none' || flight.crashed) {
