@@ -102,7 +102,23 @@ export class Music {
 
   _pump() {
     if (!this.cue || this.ctx.state !== 'running') return;
-    const until = this.ctx.currentTime + HORIZON;
+    const now = this.ctx.currentTime;
+
+    // Resynchronise if the scheduler has fallen behind the audio clock.
+    //
+    // setInterval is not delivered while the tab is stalled — a long frame, a
+    // GC pause, a background tab — but ctx.currentTime keeps advancing. On the
+    // next tick _next is in the past, and every voice then books its envelope
+    // at a start time that has already gone. WebAudio does not reject that: it
+    // collapses the ramp into zero duration, and a filter whose frequency is
+    // ramped instantaneously reports "state is bad, probably due to unstable
+    // filter caused by fast parameter automation", which is exactly the warning
+    // this produced. Skipping ahead drops the missed bars, which is right —
+    // this is a score, not a simulation, and nobody wants a stall to be
+    // followed by nine bars played at once.
+    if (this._next < now) this._next = now + 0.05;
+
+    const until = now + HORIZON;
     let guard = 0;
     while (this._next < until && guard++ < 64) {
       const events = this.cue.at(this._step);
@@ -150,30 +166,48 @@ export class Music {
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     burst.buffer = buffer;
 
+    // No filter inside the feedback path — the loop is a pure delay and gain.
+    //
+    // Textbook Karplus-Strong puts a lowpass in the loop so high partials decay
+    // first. With a BiquadFilterNode that is not safe here: a biquad recirculated
+    // through a delay accumulates its own state, and Chrome eventually reports
+    // "state is bad, probably due to unstable filter caused by fast parameter
+    // automation" even with every parameter in range and feedback below unity.
+    // Lowering the gain and adding a DC blocker inside the loop both failed to
+    // clear it, because both left a filter in the path.
+    //
+    // A pure comb cannot diverge for gain < 1, so the tone shaping moves
+    // *outside* the loop: one lowpass on the output tap whose cutoff falls
+    // across the note. That reproduces what the in-loop filter was for — the
+    // brightness dying away faster than the fundamental — with no recirculated
+    // state at all.
     const delay = ctx.createDelay(0.05);
     delay.delayTime.value = period;
-    const loop = ctx.createBiquadFilter();
-    loop.type = 'lowpass';
-    loop.frequency.value = 2400;
+
     const feedback = ctx.createGain();
-    // Longer strings ring longer; this keeps decay roughly constant in seconds
-    // rather than in cycles, which is what a real instrument does.
-    feedback.gain.value = Math.min(0.96, 0.985 - period * 4);
+    // Longer strings ring longer, so decay stays roughly constant in seconds
+    // rather than in cycles, as it does on a real instrument.
+    feedback.gain.value = Math.min(0.955, 0.978 - period * 4);
+
+    const colour = ctx.createBiquadFilter();
+    colour.type = 'lowpass';
+    colour.frequency.setValueAtTime(4200, when);
+    colour.frequency.exponentialRampToValueAtTime(900, when + seconds * 0.85);
 
     const amp = ctx.createGain();
     amp.gain.setValueAtTime((e.gain ?? 0.5) * 0.5, when);
     amp.gain.exponentialRampToValueAtTime(0.0001, when + seconds);
 
     burst.connect(delay);
-    delay.connect(loop).connect(feedback).connect(delay);
-    delay.connect(amp).connect(this.tone);
+    delay.connect(feedback).connect(delay);
+    delay.connect(colour).connect(amp).connect(this.tone);
 
     burst.start(when);
     burst.stop(when + period * 1.5);
     setTimeout(() => {
       try {
         delay.disconnect();
-        loop.disconnect();
+        colour.disconnect();
         feedback.disconnect();
         amp.disconnect();
       } catch {
