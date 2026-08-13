@@ -28,9 +28,9 @@ import { ATMOSPHERE_GLSL, ATMOSPHERE_UNIFORMS_GLSL } from './atmosphere.glsl.js'
  * hands over to. No skirts, no popping, no cracks.
  */
 
-const RES = 129; // vertices (and heightmap texels) per side
-const CELLS = RES - 1; // 128
-const HALF = CELLS / 2; // 64
+const RES = 257; // vertices (and heightmap texels) per side
+const CELLS = RES - 1; // 256
+const HALF = CELLS / 2; // 128
 
 /**
  * Where a ring's hole starts, in cell indices.
@@ -43,13 +43,13 @@ const HALF = CELLS / 2; // 64
  * further in guarantees coverage; the fragment discard still trims it to the
  * exact boundary, so nothing is drawn twice.
  */
-const HOLE = CELLS / 4 + 2; // 34
+const HOLE = CELLS / 4 + 2; // 66
 const TEMP_RES = RES + 2; // 1-texel margin so normals have valid neighbours
 
 /** NDC depth nudge per clipmap level, so finer rings win inside the overlap. */
 const DEPTH_BIAS = '1.2e-5';
 
-export const TERRAIN_LEVELS = 11;
+export const TERRAIN_LEVELS = 10;
 export const TERRAIN_BASE_CELL = 4.0;
 
 /** Half-extent, in metres, covered by the whole clipmap. */
