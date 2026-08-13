@@ -1,5 +1,43 @@
+/*
+ * Safed Sagar — interface design system.
+ *
+ * One visual language across the title sequence, the briefing, the in-flight
+ * HUD, the photography overlay and both endings: condensed uppercase type on a
+ * tight tracking, hairline rules, hard corners, and a cold instrument palette
+ * with a single warm channel reserved for warnings. Nothing is rounded, nothing
+ * is drop-shadowed, and colour is used sparingly enough that when the tricolour
+ * appears in the dedication it carries weight.
+ *
+ * No webfonts: a condensed system stack keeps the experience self-contained and
+ * removes a network dependency from the critical path.
+ */
+
 :root {
   color-scheme: dark;
+
+  --ink: #05070a;
+  --ink-soft: #0b1016;
+  --paper: #e9eef5;
+  --paper-dim: #9aa8b8;
+  --paper-faint: #6d7b8c;
+
+  --instrument: #b8d8c4;
+  --instrument-dim: #8fae9a;
+  --caution: #e5a23c;
+  --danger: #e05a4a;
+  --confirm: #7fd6a0;
+
+  --saffron: #ff9933;
+  --india-green: #138808;
+
+  --rule: rgba(184, 216, 196, 0.42);
+  --rule-soft: rgba(184, 216, 196, 0.22);
+
+  --font: 'Barlow Condensed', 'Roboto Condensed', 'Oswald', 'Archivo Narrow',
+    'Helvetica Neue', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --track: 0.14em;
 }
 
 * {
@@ -12,10 +50,12 @@ body {
   padding: 0;
   height: 100%;
   overflow: hidden;
-  background: #05070a;
-  color: #dfe6ef;
-  font-family: 'Barlow Condensed', 'Roboto Condensed', 'Oswald', system-ui, sans-serif;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #viewport {
@@ -32,6 +72,7 @@ body {
   inset: 0;
   pointer-events: none;
   z-index: 10;
+  overflow: hidden;
 }
 
 .noscript {
@@ -40,20 +81,1051 @@ body {
   display: grid;
   place-items: center;
   font-size: 18px;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track);
   text-transform: uppercase;
 }
+
+/* ------------------------------------------------------------------ layers */
+
+.layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 700ms ease;
+}
+.layer.show {
+  opacity: 1;
+  visibility: visible;
+}
+.layer.instant {
+  transition: none;
+}
+
+.centre {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 6vh 8vw;
+}
+
+/* Letterbox bars. Used by the title sequence and both endings so the cinematic
+   moments are visually distinct from the playable ones. */
+.letterbox::before,
+.letterbox::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9vh;
+  background: var(--ink);
+  z-index: 2;
+}
+.letterbox::before {
+  top: 0;
+}
+.letterbox::after {
+  bottom: 0;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  /* Heavy enough that serif body copy reads over sunlit snow, light enough in
+     the centre that the mountains behind still register as a living scene. */
+  background:
+    radial-gradient(130% 100% at 50% 45%, rgba(5, 7, 10, 0.5), rgba(5, 7, 10, 0.94)),
+    linear-gradient(180deg, rgba(5, 7, 10, 0.55), rgba(5, 7, 10, 0.2) 40%, rgba(5, 7, 10, 0.7));
+}
+
+/* --------------------------------------------------------------- typography */
+
+.eyebrow {
+  font-size: clamp(11px, 1.15vw, 16px);
+  letter-spacing: 0.62em;
+  text-indent: 0.62em;
+  color: var(--paper-dim);
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(44px, 8.6vw, 132px);
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  line-height: 0.98;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: clamp(12px, 1.5vw, 20px);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: var(--paper-dim);
+  text-transform: uppercase;
+}
+
+.lede {
+  font-size: clamp(15px, 1.9vw, 25px);
+  font-style: italic;
+  letter-spacing: 0.04em;
+  color: var(--paper-dim);
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+.dedication {
+  max-width: 62ch;
+  margin: 0 auto;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(13px, 1.35vw, 18px);
+  line-height: 1.85;
+  color: var(--paper-dim);
+  letter-spacing: 0.015em;
+}
+.dedication p {
+  margin: 0 0 1.1em;
+}
+
+.jaihind {
+  font-size: clamp(15px, 1.8vw, 23px);
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  text-transform: uppercase;
+  color: var(--paper);
+}
+
+.tricolour {
+  width: min(320px, 46vw);
+  height: 2px;
+  margin: 0 auto;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--saffron) 18%,
+    var(--paper) 50%,
+    var(--india-green) 82%,
+    transparent
+  );
+  opacity: 0.85;
+}
+
+.stack > * + * {
+  margin-top: var(--gap, 1.6rem);
+}
+
+.prompt {
+  font-size: clamp(11px, 1.05vw, 14px);
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  color: var(--instrument-dim);
+  text-transform: uppercase;
+  animation: pulse 2.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.disclaimer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2.4vh;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--paper-faint);
+  text-transform: uppercase;
+  padding: 0 6vw;
+  line-height: 1.7;
+}
+
+/* ------------------------------------------------------------------ panels */
+
+.panel {
+  position: relative;
+  border: 1px solid var(--rule-soft);
+  background: linear-gradient(180deg, rgba(11, 16, 22, 0.82), rgba(5, 7, 10, 0.72));
+  padding: 14px 18px;
+}
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--rule);
+}
+.panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.panel::after {
+  right: -1px;
+  bottom: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.panel-title {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  color: var(--instrument-dim);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+/* --------------------------------------------------------------- briefing */
+
+.briefing {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: clamp(20px, 3vw, 54px);
+  align-items: start;
+  width: min(1080px, 88vw);
+  text-align: left;
+}
+
+.brief-heading {
+  font-size: clamp(24px, 3.4vw, 44px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+
+.brief-sub {
+  font-size: 11px;
+  letter-spacing: 0.34em;
+  color: var(--instrument);
+  text-transform: uppercase;
+  margin-bottom: 22px;
+}
+
+.brief-body {
+  font-size: clamp(13px, 1.25vw, 16px);
+  line-height: 1.75;
+  color: var(--paper-dim);
+  letter-spacing: 0.02em;
+}
+.brief-body strong {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.target-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+.target-list li {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  color: var(--paper-dim);
+}
+.target-list li:last-child {
+  border-bottom: 0;
+}
+.target-list .mark {
+  color: var(--instrument-dim);
+}
+.target-list .name {
+  color: var(--paper);
+  letter-spacing: 0.2em;
+}
+.target-list li.done .mark {
+  color: var(--confirm);
+}
+.target-list li.done .name {
+  color: var(--confirm);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--paper-dim);
+}
+.controls-grid kbd {
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--instrument);
+  border: 1px solid var(--rule);
+  padding: 2px 7px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* -------------------------------------------------------------------- HUD */
+
+#hud {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 500ms ease;
+  color: var(--instrument);
+  /* Sunlit snow is the brightest background a HUD can sit on, and thin
+     instrument-green type disappears against it. A tight dark halo restores
+     contrast everywhere without resorting to opaque panels, which would block
+     the view the pilot is trying to read the ground through. */
+  text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
+}
+#hud.show {
+  opacity: 1;
+}
+
+/* The same halo for the photography overlay, which sits over the same snow. */
+#recon {
+  text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
+}
+
+.hud-corner {
+  position: absolute;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* Airspeed and altitude tapes */
+.tape {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 92px;
+  height: 40vh;
+  min-height: 240px;
+  border-top: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  overflow: hidden;
+}
+.tape.left {
+  left: 4.5vw;
+  border-right: 1px solid var(--rule);
+}
+.tape.right {
+  right: 4.5vw;
+  border-left: 1px solid var(--rule);
+}
+
+.tape-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  will-change: transform;
+}
+.tape-tick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid var(--rule-soft);
+  box-shadow: 0 1px 1px rgba(3, 6, 10, 0.55);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--instrument-dim);
+  padding: 2px 6px;
+}
+.tape.left .tape-tick {
+  text-align: right;
+}
+.tape.right .tape-tick {
+  text-align: left;
+}
+.tape-tick.major {
+  border-top-color: var(--rule);
+  color: var(--instrument);
+}
+
+.tape-readout {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  padding: 4px 8px;
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  color: var(--paper);
+  z-index: 2;
+  min-width: 82px;
+}
+.tape.left .tape-readout {
+  right: -1px;
+  text-align: right;
+}
+.tape.right .tape-readout {
+  left: -1px;
+  text-align: left;
+}
+.tape-label {
+  position: absolute;
+  bottom: -22px;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--instrument-dim);
+}
+.tape.left .tape-label {
+  right: 0;
+}
+.tape.right .tape-label {
+  left: 0;
+}
+.tape-unit {
+  position: absolute;
+  top: -22px;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: var(--instrument-dim);
+}
+.tape.left .tape-unit {
+  right: 0;
+}
+.tape.right .tape-unit {
+  left: 0;
+}
+
+/* Heading strip */
+.heading-strip {
+  position: absolute;
+  top: 3.4vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 46vw);
+  height: 34px;
+  border-bottom: 1px solid var(--rule);
+  overflow: hidden;
+}
+.heading-inner {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  height: 100%;
+  will-change: transform;
+}
+.heading-tick {
+  position: absolute;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--rule-soft);
+  height: 8px;
+}
+.heading-tick.major {
+  height: 14px;
+  border-left-color: var(--rule);
+}
+.heading-tick span {
+  position: absolute;
+  bottom: 15px;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--instrument-dim);
+}
+.heading-caret {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 8px solid var(--paper);
+}
+.heading-readout {
+  position: absolute;
+  top: calc(3.4vh + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  color: var(--paper);
+}
+
+/* Target steering */
+.target-block {
+  position: absolute;
+  left: 50%;
+  bottom: 4.5vh;
+  transform: translateX(-50%);
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  line-height: 1.9;
+}
+.target-block .name {
+  color: var(--paper);
+  font-size: 14px;
+  letter-spacing: 0.34em;
+}
+.target-block .range {
+  color: var(--instrument);
+  font-size: 17px;
+  letter-spacing: 0.14em;
+}
+
+/* Throttle */
+.throttle {
+  position: absolute;
+  left: 4.5vw;
+  bottom: 5vh;
+  width: 92px;
+}
+.throttle-bar {
+  height: 6px;
+  border: 1px solid var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.throttle-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: var(--instrument);
+  transition: background-color 200ms ease;
+}
+.throttle-fill.reheat {
+  background: var(--caution);
+}
+.throttle-label {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--instrument-dim);
+  margin-bottom: 6px;
+}
+
+/* Objectives */
+.objectives {
+  position: absolute;
+  right: 4.5vw;
+  bottom: 5vh;
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.objectives .count {
+  color: var(--paper);
+  font-size: 20px;
+  letter-spacing: 0.1em;
+}
+.objective-pips {
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+  margin-top: 7px;
+}
+.objective-pips i {
+  width: 15px;
+  height: 3px;
+  background: var(--rule);
+  display: block;
+}
+.objective-pips i.done {
+  background: var(--confirm);
+}
+
+/* Reticle */
+.reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  opacity: 0.55;
+}
+.reticle::before,
+.reticle::after {
+  content: '';
+  position: absolute;
+  background: var(--instrument);
+}
+.reticle::before {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+.reticle::after {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+/* Warnings */
+.warnings {
+  position: absolute;
+  left: 50%;
+  top: 24vh;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.warn {
+  font-size: 15px;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  text-transform: uppercase;
+  padding: 4px 14px;
+  border: 1px solid currentColor;
+  display: none;
+}
+.warn.show {
+  display: block;
+  animation: blink 0.62s steps(2, end) infinite;
+}
+.warn.caution {
+  color: var(--caution);
+}
+.warn.danger {
+  color: var(--danger);
+}
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* --------------------------------------------------------- recon overlay */
+
+#recon {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+#recon.show {
+  opacity: 1;
+}
+
+/* Masked frame: everything outside the camera gate is dimmed. */
+.gate {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 100vmax rgba(3, 5, 8, 0.42);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    16% 20%,
+    16% 80%,
+    84% 80%,
+    84% 20%,
+    16% 20%
+  );
+}
+.gate-frame {
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  top: 20%;
+  bottom: 20%;
+  border: 1px solid rgba(184, 216, 196, 0.4);
+}
+.gate-frame span {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--instrument);
+}
+.gate-frame span:nth-child(1) {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.gate-frame span:nth-child(2) {
+  top: -1px;
+  right: -1px;
+  border-left: 0;
+  border-bottom: 0;
+}
+.gate-frame span:nth-child(3) {
+  bottom: -1px;
+  left: -1px;
+  border-right: 0;
+  border-top: 0;
+}
+.gate-frame span:nth-child(4) {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.recon-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  height: 120px;
+}
+.recon-cross::before,
+.recon-cross::after {
+  content: '';
+  position: absolute;
+  background: rgba(184, 216, 196, 0.55);
+}
+.recon-cross::before {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.recon-cross::after {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.recon-status {
+  position: absolute;
+  left: 16%;
+  top: calc(20% - 34px);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.recon-zoom {
+  position: absolute;
+  right: 16%;
+  top: calc(20% - 34px);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+
+.quality {
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  bottom: calc(20% - 42px);
+}
+.quality-bar {
+  height: 4px;
+  border: 1px solid var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.quality-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: var(--danger);
+  transition: background-color 180ms ease;
+}
+.quality-fill.ok {
+  background: var(--caution);
+}
+.quality-fill.good {
+  background: var(--confirm);
+}
+.quality-legend {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.quality-legend b {
+  font-weight: 400;
+  color: var(--paper);
+}
+
+/* Threshold marker on the quality bar. */
+.quality-threshold {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--paper-dim);
+  left: 46%;
+}
+
+.shutter-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Photo thumbnail that flies to the corner after a capture. */
+.photo-pop {
+  position: absolute;
+  right: 4.5vw;
+  top: 12vh;
+  width: 224px;
+  border: 1px solid var(--rule);
+  background: var(--ink);
+  padding: 5px;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+  transition: opacity 320ms ease, transform 320ms ease;
+}
+.photo-pop.show {
+  opacity: 1;
+  transform: none;
+}
+.photo-pop img {
+  display: block;
+  width: 100%;
+  filter: saturate(0.72) contrast(1.06);
+}
+.photo-pop .meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  padding: 6px 2px 1px;
+}
+.photo-pop .meta b {
+  font-weight: 400;
+  color: var(--confirm);
+}
+
+/* ------------------------------------------------------------- debrief */
+
+.debrief {
+  width: min(1120px, 90vw);
+  text-align: center;
+}
+
+.result-title {
+  font-size: clamp(30px, 5.6vw, 76px);
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.result-title.good {
+  color: var(--paper);
+}
+.result-title.bad {
+  color: var(--paper-dim);
+}
+
+.result-line {
+  font-size: clamp(13px, 1.5vw, 19px);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--paper-dim);
+}
+
+.contact-sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 100%;
+}
+.contact {
+  border: 1px solid var(--rule-soft);
+  padding: 5px;
+  background: var(--ink-soft);
+}
+.contact img {
+  display: block;
+  width: 100%;
+  filter: saturate(0.7) contrast(1.05);
+}
+.contact .meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  padding: 6px 2px 1px;
+}
+.contact .meta b {
+  font-weight: 400;
+  color: var(--paper);
+}
+.contact.missing {
+  display: grid;
+  place-items: center;
+  min-height: 118px;
+  color: var(--paper-faint);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--rule-soft);
+  border: 1px solid var(--rule-soft);
+}
+.stat {
+  background: var(--ink);
+  padding: 12px 10px;
+}
+.stat .k {
+  font-size: 10px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.stat .v {
+  font-size: clamp(17px, 2vw, 26px);
+  letter-spacing: 0.08em;
+  color: var(--paper);
+  margin-top: 5px;
+}
+
+/* --------------------------------------------------------------- loading */
+
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  transition: opacity 800ms ease;
+}
+#loading.done {
+  opacity: 0;
+  pointer-events: none;
+}
+.load-bar {
+  width: min(300px, 50vw);
+  height: 1px;
+  background: var(--rule-soft);
+  margin-top: 26px;
+  position: relative;
+  overflow: hidden;
+}
+.load-bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--instrument);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 400ms ease;
+}
+
+/* ---------------------------------------------------------------- pause */
+
+.menu {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  pointer-events: auto;
+}
+.menu button {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--paper);
+  font-family: var(--font);
+  font-size: 13px;
+  letter-spacing: 0.28em;
+  text-indent: 0.28em;
+  text-transform: uppercase;
+  padding: 11px 30px;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  min-width: 260px;
+}
+.menu button:hover,
+.menu button:focus-visible {
+  background: rgba(184, 216, 196, 0.1);
+  border-color: var(--instrument);
+  color: var(--instrument);
+  outline: none;
+}
+.menu .quality-row {
+  display: flex;
+  gap: 8px;
+}
+.menu .quality-row button {
+  min-width: 96px;
+  padding: 8px 12px;
+  font-size: 11px;
+}
+.menu .quality-row button[aria-pressed='true'] {
+  border-color: var(--instrument);
+  color: var(--instrument);
+  background: rgba(184, 216, 196, 0.12);
+}
+
+/* ----------------------------------------------------------------- debug */
 
 #debug {
   position: fixed;
   left: 10px;
-  top: 10px;
+  bottom: 10px;
   z-index: 100;
-  font: 12px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  color: #9fe8b0;
-  background: rgba(0, 0, 0, 0.55);
-  padding: 8px 10px;
-  border: 1px solid rgba(159, 232, 176, 0.25);
+  font: 11px/1.5 var(--mono);
+  color: rgba(159, 232, 176, 0.85);
+  background: rgba(0, 0, 0, 0.5);
+  padding: 7px 9px;
+  border: 1px solid rgba(159, 232, 176, 0.2);
   white-space: pre;
   pointer-events: none;
+  display: none;
+}
+#debug.show {
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer,
+  #hud,
+  #recon,
+  .photo-pop,
+  #loading {
+    transition-duration: 120ms;
+  }
+  .prompt,
+  .warn.show {
+    animation: none;
+  }
 }
