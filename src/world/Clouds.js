@@ -163,14 +163,19 @@ export class Clouds {
           float rn = clamp(r + (n - 0.36) * 0.62, 0.0, 1.0);
           if (rn > 0.998) discard;
 
+          // Chord along *this fragment's* ray, not the ray through the centre.
+          // Using distance-to-centre for both is only right on the optical axis
+          // and is visibly wrong for puffs close to the camera, which is
+          // exactly when a bank is being flown through and most on show.
           float omega = vRadius * sqrt(max(1.0 - rn * rn, 0.0));
-          float toCentre = length(uCameraPos - vCentre);
-          float entry = max(toCentre - omega, uNear);
-          float thickness = max(toCentre + omega - entry, 0.0);
+          vec3 ray = normalize(vWorld - uCameraPos);
+          float closest = dot(vCentre - uCameraPos, ray);
+          float entry = max(closest - omega, uNear);
+          float thickness = max(closest + omega - entry, 0.0);
 
           float density = vOpacity * clamp(0.55 + 0.60 * n, 0.0, 1.3);
           float alpha = (1.0 - exp(-uExtinction * density * thickness))
-                      * smoothstep(1.0, 0.90, rn);
+                      * (1.0 - smoothstep(0.90, 1.0, rn));
           if (alpha < 0.004) discard;
 
           vec3 toCam = normalize(uCameraPos - vWorld);

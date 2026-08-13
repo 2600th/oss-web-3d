@@ -170,6 +170,7 @@ export class Game {
     this.chase.reset(this.flight);
     this.terrain.prime(this.flight.position);
     this.fx.reset();
+    this.audio.resetEngine();
     this.mission.begin();
     this.hud.show(true);
     this.state = 'flying';
@@ -365,6 +366,11 @@ export class Game {
   _evaluateBest() {
     let best = null;
     for (const post of this.mission.posts) {
+      // A post already in the bag must not compete for the shot. Leaving them
+      // in meant flying past a captured site while lining up the next one
+      // handed the overlay to the wrong target and re-fired the capture
+      // confirmation on a post that was finished several minutes ago.
+      if (post.captured) continue;
       const ev = this.recon.evaluate(post);
       if (!ev.inFrame) continue;
       if (!best || ev.score > best.score) best = ev;
@@ -384,12 +390,15 @@ export class Game {
       post.bestScore = evaluation.score;
       post.photo = shot;
     }
-    if (evaluation.score >= CAPTURE_THRESHOLD && !post.captured) {
-      post.captured = true;
-    }
+    // Fire the confirmation on the *transition*, not on the state. Testing
+    // post.captured after the fact replayed the objective-secured cue on every
+    // subsequent photo of the same site.
+    const secured = evaluation.score >= CAPTURE_THRESHOLD && !post.captured;
+    if (secured) post.captured = true;
+
     this.hud.showPhoto(post, shot);
     this.audio.shutter();
-    if (post.captured) this.audio.confirm();
+    if (secured) this.audio.confirm();
   }
 
   onCrash() {

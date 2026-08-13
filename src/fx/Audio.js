@@ -168,6 +168,18 @@ export class Audio {
     this._n1 = 0.2;
   }
 
+  /**
+   * Put the engine back at idle for a new sortie.
+   *
+   * The spool is stateful by design, so without this a restart inherits the
+   * previous run's engine — a sortie that ended in a dive at full reheat began
+   * the next one already screaming on the runway.
+   */
+  resetEngine() {
+    this._n2 = 0.2;
+    this._n1 = 0.2;
+  }
+
   setVolume(v) {
     if (!this.ready) return;
     this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);

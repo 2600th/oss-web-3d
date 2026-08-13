@@ -113,11 +113,41 @@ function scan(source) {
   return found;
 }
 
+/**
+ * Reversed-edge smoothstep.
+ *
+ * GLSL specifies smoothstep as undefined when edge0 >= edge1. Writing
+ * smoothstep(1.0, 0.9, x) to mean "fade out" happens to work on desktop
+ * drivers, which evaluate the same clamped ratio with a negative denominator,
+ * so it survives every test until it reaches a driver that does not -- and
+ * mobile GPUs are exactly where that shows up, as a shader that compiles and
+ * renders garbage. Write 1.0 - smoothstep(low, high, x) instead.
+ */
+function reversedSmoothstep(source) {
+  const found = [];
+  const re = /smoothstep\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*,/g;
+  source.split(/\r?\n/).forEach((line, i) => {
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(line))) {
+      if (parseFloat(m[1]) >= parseFloat(m[2])) {
+        found.push({ line: i + 1, text: `smoothstep(${m[1]}, ${m[2]}, ...)` });
+      }
+    }
+  });
+  return found;
+}
+
 const problems = [];
 for await (const file of walk(ROOT)) {
   const source = await readFile(file, 'utf8');
   for (const hit of scan(source)) {
     problems.push(`${relative(ROOT, file)}:${hit.line}  backtick in shader comment -- ${hit.text}`);
+  }
+  for (const hit of reversedSmoothstep(source)) {
+    problems.push(
+      `${relative(ROOT, file)}:${hit.line}  reversed-edge smoothstep (undefined in GLSL) -- ${hit.text}`,
+    );
   }
 }
 

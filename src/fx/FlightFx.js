@@ -432,10 +432,20 @@ export class FlightFx {
       }
 
       // Rebuild the ribbon oldest-to-newest so the strip is continuous.
-      for (let i = 0; i < TRAIL_SAMPLES; i++) {
-        const index = (trail.head + i) % TRAIL_SAMPLES;
+      //
+      // Start at the oldest *valid* sample, not at head. Writes advance head,
+      // so while the buffer is still filling the live samples sit in the slots
+      // *behind* it and the slots at head are untouched. Walking from head and
+      // then drawing the first (filled - 1) quads drew exactly the uninitialised
+      // ones, so a trail did not appear at all until a full 96-sample history
+      // had accumulated — several seconds after the manoeuvre that earned it.
+      const count = trail.filled;
+      const start = (trail.head - count + TRAIL_SAMPLES) % TRAIL_SAMPLES;
+      const span = Math.max(count - 1, 1);
+      for (let i = 0; i < count; i++) {
+        const index = (start + i) % TRAIL_SAMPLES;
         const sample = trail.history[index];
-        const age = i / (TRAIL_SAMPLES - 1); // 0 = oldest
+        const age = i / span; // 0 = oldest
         const v = i * 6;
         const half = sample.w;
         trail.positions[v] = sample.p.x + sample.s.x * half;

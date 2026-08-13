@@ -654,7 +654,7 @@ export class Terrain {
           vec3 scree = mix(vec3(0.096, 0.089, 0.081), vec3(0.142, 0.128, 0.110), rough * 0.5 + 0.5);
           if (bedFade > 0.004) {
             float f = fract(bedding);
-            float edge = smoothstep(0.0, 0.10, f) * smoothstep(1.0, 0.90, f);
+            float edge = smoothstep(0.0, 0.10, f) * (1.0 - smoothstep(0.90, 1.0, f));
             float tone = vnoise(vec2(floor(bedding) * 1.7, 3.3));
             float strata = 1.0 + bedFade * ((tone - 0.5) * 0.44 - (1.0 - edge) * 0.30);
             rock *= strata;
@@ -683,7 +683,7 @@ export class Terrain {
           snow = clamp(snow + rough * 0.30 * (1.0 - abs(2.0 * snow - 1.0)), 0.0, 1.0);
 
           // Wind-blown drifts collect in the lee of gullies at any altitude.
-          float drift = smoothstep(0.42, 0.05, slope) * smoothstep(3900.0, 4700.0, h);
+          float drift = (1.0 - smoothstep(0.05, 0.42, slope)) * smoothstep(3900.0, 4700.0, h);
           snow = max(snow, drift * 0.5 * smoothstep(-0.15, 0.35, band));
 
           vec3 snowCol = vec3(0.74, 0.775, 0.85);

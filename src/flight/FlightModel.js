@@ -304,6 +304,12 @@ export class FlightModel {
         // aircraft still has to arrive.
         this.position.set(x, this.impactPoint.y + clearance * 0.35, z);
         this.velocity.set(0, 0, 0);
+        // update() returns early once crashed, so this is the last chance to
+        // recompute altitude, ground height, AGL and airspeed. Without it the
+        // wreck holds the readings it had a moment before impact for the whole
+        // two seconds before the failure screen, and the HUD, camera proximity,
+        // FX and audio all keep consuming them.
+        this._updateDerived();
         return true;
       }
     }
