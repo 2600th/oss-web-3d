@@ -158,6 +158,44 @@ requestAnimationFrame(frame);
 
 window.__verifyTerrain = (level = 3) => terrain.verifyAgainst(terrainHeight, level);
 
+/**
+ * Frame-rate probe that also reports whether it can be believed.
+ *
+ * Chrome throttles requestAnimationFrame when a tab is occluded or between
+ * window state changes, and it does so while still reporting
+ * document.visibilityState === 'visible'. A measurement taken during one of
+ * those windows read 10 fps for a scene that was actually running at 116, and
+ * sent a perfectly healthy renderer to the bottom of the resolution scaler.
+ * Anything calling this must check `throttled` before drawing conclusions.
+ */
+window.__perf = async (ms = 1500) => {
+  const start = performance.now();
+  let frames = 0;
+  let worst = 0;
+  let last = start;
+  await new Promise((resolve) => {
+    const tick = (now) => {
+      frames++;
+      worst = Math.max(worst, now - last);
+      last = now;
+      if (now - start < ms) requestAnimationFrame(tick);
+      else resolve();
+    };
+    requestAnimationFrame(tick);
+  });
+  const elapsed = (performance.now() - start) / 1000;
+  const rafFps = frames / elapsed;
+  return {
+    rafFps: +rafFps.toFixed(1),
+    frameMs: +((elapsed * 1000) / frames).toFixed(2),
+    worstFrameMs: +worst.toFixed(1),
+    renderScale: +engine.renderScale.toFixed(2),
+    drawingBuffer: [engine.renderer.domElement.width, engine.renderer.domElement.height],
+    tier: settings.tierName,
+    throttled: rafFps < 25,
+  };
+};
+
 window.__pose = (p = {}) => {
   freeCamera = true;
   if (p.x !== undefined) freePos.x = p.x;

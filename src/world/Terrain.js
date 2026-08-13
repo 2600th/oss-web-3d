@@ -124,6 +124,26 @@ export class Terrain {
       generateMipmaps: false,
     });
 
+    /**
+     * Staging target for the normal + shadow pass.
+     *
+     * That pass has to *read* the height array (to march shadow rays against
+     * coarser levels) while producing the contents of one of its layers. Doing
+     * both against the same texture is a framebuffer feedback loop — the driver
+     * rejects the draw outright ("GL_INVALID_OPERATION: Feedback loop formed
+     * between Framebuffer and active Texture") and the terrain disappears. So
+     * the pass writes here, and a trivial blit copies it into the layer.
+     */
+    this.stageTarget = new THREE.WebGLRenderTarget(RES, RES, {
+      format: THREE.RGBAFormat,
+      type: THREE.FloatType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+      generateMipmaps: false,
+    });
+
     // Per-level state. `center` is what the heightmap layer currently holds;
     // `desired` is where it should be. They differ only while a regeneration is
     // queued, which keeps rendering consistent with the texture contents.
@@ -206,23 +226,123 @@ export class Terrain {
       `,
     });
 
+    /**
+     * Second generation pass: normals and sun visibility.
+     *
+     * Shadows are marched here, per heightmap texel, rather than per pixel in
+     * the terrain shader. Two reasons. Cost — a texel is shaded once per
+     * regeneration instead of every frame, and the far levels regenerate almost
+     * never. And stability — a baked result is a pure function of world
+     * position, so shadow edges do not crawl as the clipmap snaps.
+     *
+     * The march walks the heightmap array itself, one texture fetch per step
+     * instead of fourteen octaves of noise, choosing the level whose extent
+     * contains the sample. Softness uses iq's ray-marched penumbra estimate:
+     * the closest approach to the terrain, scaled by distance travelled.
+     *
+     * Normals are stored as XZ only; Y is recovered as sqrt(1 - x² - z²), which
+     * is exact for a heightfield and frees the alpha channel for visibility.
+     */
     this.normalPass = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       depthTest: false,
       depthWrite: false,
       uniforms: {
+        ...this.environment.uniforms,
         uHeights: { value: this.tempTarget.texture },
+        uHeightArray: { value: this.heightArray.texture },
+        uCenters: { value: this.centerArray },
+        uCells: { value: this.cells },
+        uCenter: { value: new THREE.Vector2() },
         uCell: { value: 1 },
         uTexel: { value: 1 / TEMP_RES },
+        uLevel: { value: 0 },
+        uShadowSteps: { value: 20 },
       },
       vertexShader,
       fragmentShader: /* glsl */ `
         precision highp float;
+        precision highp sampler2DArray;
+
         uniform sampler2D uHeights;
+        uniform sampler2DArray uHeightArray;
+        uniform vec2 uCenters[${TERRAIN_LEVELS}];
+        uniform float uCells[${TERRAIN_LEVELS}];
+        uniform vec2 uCenter;
         uniform float uCell;
         uniform float uTexel;
+        uniform int uLevel;
+        uniform int uShadowSteps;
+        uniform vec3 uSunDir;
         out vec4 fragColor;
+
+        const float RES = ${RES.toFixed(1)};
+        const float HALF = ${HALF.toFixed(1)};
+
+        // Height from the coarsest-resolution level that still contains the
+        // point. Returns a large negative value if nothing covers it, which the
+        // caller treats as "no occluder".
+        float arrayHeight(vec2 xz, float startLevel) {
+          int L = int(clamp(startLevel, 0.0, float(${TERRAIN_LEVELS - 1})));
+          for (int k = 0; k < 3; k++) {
+            vec2 d = abs(xz - uCenters[L]);
+            if (max(d.x, d.y) < uCells[L] * (HALF - 1.5)) {
+              vec2 uv = ((xz - uCenters[L]) / uCells[L] + HALF + 0.5) / RES;
+              return textureLod(uHeightArray, vec3(uv, float(L)), 0.0).r;
+            }
+            if (L >= ${TERRAIN_LEVELS - 1}) break;
+            L++;
+          }
+          return -1.0e5;
+        }
+
+        // The level currently being generated is not in the array yet, so its
+        // own heights come from the scratch target.
+        float localHeight(vec2 xz) {
+          vec2 idx = (xz - uCenter) / uCell + HALF + 1.0;
+          if (min(idx.x, idx.y) < 0.5 || max(idx.x, idx.y) > ${(TEMP_RES - 1).toFixed(1)}) return -1.0e5;
+          return texture(uHeights, (idx + 0.5) * uTexel).r;
+        }
+
+        float sunVisibility(vec3 origin, vec3 normal, float ndl) {
+          // Slope-scaled bias. A fixed offset is not enough: as the sun grazes
+          // a face, one heightmap cell spans an ever-larger vertical drop, and
+          // rays re-enter the surface they started on. That stipples sunlit
+          // slopes with sawtooth acne that follows the mesh triangulation.
+          // Scaling the lift by 1/ndl is the standard shadow-map remedy and it
+          // is what actually clears it here.
+          float slopeBias = uCell * (0.8 + 1.9 / max(ndl, 0.12));
+          vec3 o = origin + normal * slopeBias;
+
+          float t = uCell * 1.4;
+          float vis = 1.0;
+          for (int i = 0; i < 32; i++) {
+            if (i >= uShadowSteps) break;
+            vec3 p = o + uSunDir * t;
+            // Nothing above the highest possible summit can be occluded.
+            if (p.y > 7500.0) break;
+
+            float h = localHeight(p.xz);
+            if (h < -1.0e4) h = arrayHeight(p.xz, log2(max(t, 1.0) / 24.0));
+            if (h < -1.0e4) break;
+
+            // iq's ray-marched penumbra estimate: closest approach scaled by
+            // distance travelled, so shadow edges sharpen near the occluder and
+            // soften with range. Clamping instead of early-returning zero keeps
+            // the transition continuous, which matters because this value is
+            // then interpolated across triangles tens of metres wide.
+            float diff = p.y - h;
+            vis = min(vis, clamp(6.0 * diff / t + 0.04, 0.0, 1.0));
+            if (vis <= 0.001) break;
+
+            t *= 1.33;
+            if (t > 40000.0) break;
+          }
+          return clamp(vis, 0.0, 1.0);
+        }
+
         void main() {
+          vec2 texel = gl_FragCoord.xy - 0.5;
           vec2 uv = (gl_FragCoord.xy + 1.0) * uTexel;
           float h  = texture(uHeights, uv).r;
           float hl = texture(uHeights, uv - vec2(uTexel, 0.0)).r;
@@ -230,8 +350,33 @@ export class Terrain {
           float hd = texture(uHeights, uv - vec2(0.0, uTexel)).r;
           float hu = texture(uHeights, uv + vec2(0.0, uTexel)).r;
           vec3 n = normalize(vec3(hl - hr, 2.0 * uCell, hd - hu));
-          fragColor = vec4(h, n);
+
+          vec2 world = uCenter + (texel - HALF) * uCell;
+          // Faces angled away from the sun are shadowed by their own geometry;
+          // the N.L term already handles them, and marching adds only noise.
+          // Fade the march in across the terminator rather than switching, or
+          // the discontinuity shows up as a hard band in the ambient term.
+          float ndl = dot(n, uSunDir);
+          float vis = ndl <= 0.03
+            ? 1.0
+            : mix(1.0, sunVisibility(vec3(world.x, h, world.y), n, ndl), smoothstep(0.03, 0.16, ndl));
+
+          fragColor = vec4(h, n.x, n.z, vis);
         }
+      `,
+    });
+
+    this.blitPass = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      depthTest: false,
+      depthWrite: false,
+      uniforms: { uSource: { value: this.stageTarget.texture } },
+      vertexShader,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D uSource;
+        out vec4 fragColor;
+        void main() { fragColor = texelFetch(uSource, ivec2(gl_FragCoord.xy), 0); }
       `,
     });
 
@@ -393,9 +538,14 @@ export class Terrain {
         }
 
         void main() {
-          vec3 n0 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vLevel), float(vLevel))).gba;
-          vec3 n1 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vNextLevel), float(vNextLevel))).gba;
-          vec3 N = normalize(mix(n0, n1, vMorph));
+          // Layout is (height, normal.x, normal.z, sun visibility). Normal Y is
+          // recovered rather than stored — it is always positive on a
+          // heightfield — which buys the alpha channel for baked shadows.
+          vec4 s0 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vLevel), float(vLevel)));
+          vec4 s1 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vNextLevel), float(vNextLevel)));
+          vec4 s = mix(s0, s1, vMorph);
+          vec3 N = normalize(vec3(s.g, sqrt(max(1.0 - s.g * s.g - s.b * s.b, 1e-4)), s.b));
+          float sunVis = s.a;
 
           vec3 toCam = uCameraPos - vWorld;
           float dist = length(toCam);
@@ -450,7 +600,9 @@ export class Terrain {
 
           // ---- lighting ----------------------------------------------------
           float ndl = dot(N, uSunDir);
-          float shadow = cloudShadow(vWorld);
+          // Cast shadow never goes fully black: high-altitude air scatters a
+          // little direct sun sideways, and a hard zero reads as a hole.
+          float shadow = cloudShadow(vWorld) * mix(0.12, 1.0, sunVis);
           // Snow scatters light forward through its top layer, so it stays lit
           // a little past the terminator. Kept modest: too much wrap and the
           // peaks lose all their shape and read as poured cream.
@@ -458,9 +610,15 @@ export class Terrain {
           float lambert = max(ndl, 0.0);
           float diffuse = mix(lambert, wrapped, snow * 0.35) * shadow;
 
-          vec3 skyUp = uZenithColor * 1.15 + vec3(0.02, 0.04, 0.09);
-          vec3 bounce = mix(vec3(0.09, 0.085, 0.082), vec3(0.30, 0.33, 0.38), snow);
-          vec3 ambient = mix(bounce, skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.34;
+          // Sky illumination. A shadowed snowfield at 6 km is lit by the entire
+          // dome and by bounce off every lit face around it, so it stays a
+          // bright cold blue — nothing like the near-black an unlit surface
+          // would suggest. Getting this term too low is what makes procedural
+          // snow read as grey plastic.
+          vec3 skyUp = uZenithColor * 1.6 + vec3(0.06, 0.11, 0.20);
+          vec3 bounce = mix(vec3(0.12, 0.115, 0.112), vec3(0.52, 0.58, 0.68), snow);
+          vec3 ambient =
+            mix(bounce, skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.62 * (0.80 + 0.20 * sunVis);
 
           vec3 color = albedo * (uSunColor * uSunIntensity * diffuse + ambient);
 
@@ -496,6 +654,12 @@ export class Terrain {
 
     this.genQuad.material = this.normalPass;
     this.normalPass.uniforms.uCell.value = cell;
+    this.normalPass.uniforms.uCenter.value.copy(center);
+    this.normalPass.uniforms.uLevel.value = L;
+    renderer.setRenderTarget(this.stageTarget);
+    renderer.render(this.genScene, this.genCamera);
+
+    this.genQuad.material = this.blitPass;
     renderer.setRenderTarget(this.heightArray, L);
     renderer.render(this.genScene, this.genCamera);
 
@@ -592,9 +756,11 @@ export class Terrain {
   dispose() {
     this.heightArray.dispose();
     this.tempTarget.dispose();
+    this.stageTarget.dispose();
     this.material.dispose();
     this.heightPass.dispose();
     this.normalPass.dispose();
+    this.blitPass.dispose();
     this.blockMesh.geometry.dispose();
     this.ringMesh.geometry.dispose();
   }
