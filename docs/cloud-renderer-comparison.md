@@ -41,7 +41,7 @@ The [side-bank composite](../.agent/cloud-comparison/takram-final/himalayan-side
 
 The [fast-motion stop](../.agent/cloud-comparison/takram-final/fast-motion-stop.png) measures GPU median **0.721584 ms**, p95 **8.006400 ms**, and **119.0476 FPS** ([result JSON](../.agent/cloud-comparison/takram-final/fast-motion-stop-result.json)). Temporal stability remains **UNVERIFIED**: the cloud masks cover **99.9996%** and **99.9994%** of the frames, so the measurement has no valid outside-cloud pixels for a trail conclusion. It is not evidence of zero ghosting.
 
-The [chase-to-recon cut result](../.agent/cloud-comparison/takram-final/chase-to-recon-cut-result.json) records the history reset exactly at the camera cut and has clean lifecycle evidence. The [resize result](../.agent/cloud-comparison/takram-final/resize-result.json) is likewise clean. These validate the transition contracts, not the final visual-quality gate.
+The recaptured [chase-to-recon cut result](../.agent/cloud-comparison/takram-final/chase-to-recon-cut-result.json) is eligible with **500.9995626413902 m** nearest-layer clearance, records history resets at frame **0** and exactly at the frame **150** camera cut, and has `consoleIssues=[]`. The [resize result](../.agent/cloud-comparison/takram-final/resize-result.json) is likewise clean. These validate the transition contracts, not the final visual-quality gate.
 
 Context restoration is now **VERIFIED** after `a62fc43`: the live supported loss at frame **140** and restore at frame **150** reset history before rendering and fully recreate resources. The [fixed capture](../.agent/cloud-comparison/takram-final/context-restore-fixed.png) and [result JSON](../.agent/cloud-comparison/takram-final/context-restore-fixed-result.json) record GPU median **0.806544 ms**, p95 **0.823328 ms**, **120.4819 FPS**, and `consoleIssues=[]`. This replaces the archived [pre-fix context error](../.agent/cloud-comparison/takram-final/context-restore-pre-fix-error.json); it does not change the visual decision.
 
@@ -53,7 +53,7 @@ The fresh comparison-build chunks are isolated from the normal production entry 
 
 | Chunk | Raw | Gzip |
 |---|---:|---:|
-| Comparison entry | 212.59 kB | 62.88 kB |
+| Comparison entry | 212.86 kB | 62.92 kB |
 | Takram | 292.76 kB | 67.08 kB |
 | Postprocessing | 692.87 kB | 206.32 kB |
 
@@ -71,7 +71,7 @@ The fresh comparison-build chunks are isolated from the normal production entry 
 | No trail after two resolved frames | **UNVERIFIED** | Nearly full-frame masks leave no valid outside-cloud pixels for the temporal test. |
 | Zero warnings through context recovery and lifecycle | **PASS** | Verified live loss/restore has `consoleIssues=[]`, reset-before-render, and full resource recreation. |
 | Production build isolation | **PASS** | The normal production entry does not import the isolated comparison chunks. |
-| Full tests, GLSL checks, and builds | **PASS** | Fresh final verification: 271/271 tests, GLSL check, production build, isolated comparison build, and diff check passed. |
+| Full tests, GLSL checks, and builds | **PASS** | Fresh final verification: 275/275 tests, GLSL check, production build, isolated comparison build, and diff check passed. |
 
 ## Scope of comparison evidence
 
