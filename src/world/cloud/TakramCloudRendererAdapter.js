@@ -24,6 +24,10 @@ import {
   Vector2,
   Vector3,
 } from 'three';
+import {
+  getTakramCloudProfile,
+  validateTakramProfileScenario,
+} from './TakramCloudProfiles.js';
 
 export const TAKRAM_CLOUD_PROFILES = Object.freeze({
   high: Object.freeze({ name: 'high', takram: 'high', enabled: true }),
@@ -31,19 +35,6 @@ export const TAKRAM_CLOUD_PROFILES = Object.freeze({
   low: Object.freeze({ name: 'low', takram: 'low', enabled: true }),
   phone: Object.freeze({ name: 'phone', takram: 'low', enabled: false }),
 });
-
-const OPENING_CLOUD_LAYERS = Object.freeze([
-  Object.freeze({
-    channel: 'r', altitude: 6_000, height: 1_250, densityScale: 0.08,
-    weatherExponent: 1.1, coverageFilterWidth: 0.58, shadow: true,
-  }),
-  Object.freeze({
-    channel: 'g', altitude: 0, height: 0, densityScale: 0, shadow: false,
-  }),
-  Object.freeze({
-    channel: 'b', altitude: 0, height: 0, densityScale: 0,
-  }),
-]);
 
 export const TAKRAM_FALLBACK_LIGHTING = Object.freeze({
   accurateSunSkyLight: false,
@@ -256,7 +247,16 @@ function restoreRenderTargetState(renderer, state) {
 }
 
 export class TakramCloudRendererAdapter {
-  constructor({ renderer, quality, camera, scene, sunDirection, stableDepthTexture }) {
+  constructor({
+    renderer,
+    quality,
+    camera,
+    scene,
+    sunDirection,
+    stableDepthTexture,
+    profileName = 'takram-reference',
+    profileContext = null,
+  }) {
     this.renderer = renderer;
     this.camera = camera;
     this.scene = scene;
@@ -264,6 +264,8 @@ export class TakramCloudRendererAdapter {
     this.sunDirection = new Vector3().copy(sunDirection);
     this.depthTexture = stableDepthTexture;
     this.profile = profileFor(quality);
+    this.profileContext = profileContext;
+    this.cloudProfile = getTakramCloudProfile(profileName, profileContext);
     this.effect = null;
     this.generatedResources = [];
     this.fallbackAtmosphereTextures = null;
@@ -306,14 +308,11 @@ export class TakramCloudRendererAdapter {
     );
     effect.skipRendering = false;
     effect.qualityPreset = this.profile.takram;
-    effect.coverage = 0.2;
-    // Takram expresses this as tile counts across one cube-sphere face, not a
-    // world-space scale. Values near one make the entire 46 km mission sample
-    // effectively one weather texel; package-scale repeats produce local banks.
-    effect.localWeatherRepeat.set(620, 540);
+    effect.coverage = this.cloudProfile.coverage;
+    effect.localWeatherRepeat.fromArray(this.cloudProfile.localWeatherRepeat);
     effect.localWeatherOffset.set(0.18, 0.42);
-    effect.localWeatherVelocity.set(0.00035, 0.00008);
-    effect.cloudLayers.set(OPENING_CLOUD_LAYERS);
+    effect.localWeatherVelocity.fromArray(this.cloudProfile.localWeatherVelocity);
+    effect.cloudLayers.set(this.cloudProfile.layers);
     effect.sunDirection.copy(this.sunDirection).transformDirection(effect.worldToECEFMatrix);
 
     const generatedResources = [
@@ -348,6 +347,29 @@ export class TakramCloudRendererAdapter {
 
     this.effect = effect;
     this.generatedResources = generatedResources;
+  }
+
+  getProfileReport() {
+    if (this.profileContext == null) {
+      return {
+        name: this.cloudProfile.name,
+        altitudeTranslation: { ...this.cloudProfile.altitudeTranslation },
+        nearestLayerBoundaryDistance: null,
+        eligible: null,
+        reasons: ['scenario-context-unavailable'],
+      };
+    }
+    const validation = validateTakramProfileScenario(
+      this.cloudProfile,
+      this.profileContext,
+    );
+    return {
+      name: this.cloudProfile.name,
+      altitudeTranslation: { ...this.cloudProfile.altitudeTranslation },
+      nearestLayerBoundaryDistance: validation.nearestBoundaryDistance,
+      eligible: validation.eligible,
+      reasons: [...validation.reasons],
+    };
   }
 
   _setEnvironment(environment, effect = this.effect) {

@@ -49,7 +49,7 @@ function createRenderer(width = 1920, height = 1080, initialState = {}) {
   };
 }
 
-function createOptions(quality = { name: 'high' }) {
+function createOptions(quality = { name: 'high' }, overrides = {}) {
   return {
     renderer: createRenderer(),
     quality,
@@ -57,8 +57,57 @@ function createOptions(quality = { name: 'high' }) {
     scene: new Scene(),
     sunDirection: new Vector3(0.2, 0.9, -0.3).normalize(),
     stableDepthTexture: new Texture(),
+    ...overrides,
   };
 }
+
+test('applies the selected faithful cloud profile without mutating quality', () => {
+  const reference = new TakramCloudRendererAdapter(createOptions());
+  const himalayan = new TakramCloudRendererAdapter(createOptions(
+    { name: 'high' },
+    {
+      profileName: 'takram-himalayan',
+      profileContext: { terrainMin: 4700, terrainMax: 6300, cameraAltitude: 7235.246 },
+    },
+  ));
+
+  assert.equal(reference.profile.name, 'high');
+  assert.equal(reference.cloudProfile.name, 'takram-reference');
+  assert.equal(reference.effect.coverage, 0.4);
+  assert.deepEqual(reference.effect.localWeatherRepeat.toArray(), [100, 100]);
+  assert.deepEqual(reference.effect.localWeatherVelocity.toArray(), [0.001, 0]);
+  assert.deepEqual(
+    [...reference.effect.cloudLayers].map(layer => [
+      layer.channel,
+      layer.altitude,
+      layer.height,
+      layer.densityScale,
+    ]),
+    [
+      ['r', 750, 650, 0.2],
+      ['g', 1000, 1200, 0.2],
+      ['b', 7500, 500, 0.003],
+      ['a', 0, 0, 0],
+    ],
+  );
+  assert.equal(reference.activeLayerCount, 3);
+
+  assert.equal(himalayan.cloudProfile.name, 'takram-himalayan');
+  assert.deepEqual(
+    [...himalayan.effect.cloudLayers].slice(0, 3).map(layer => layer.altitude),
+    [7735.246, 7985.246, 9485.246],
+  );
+  assert.deepEqual(himalayan.getProfileReport(), {
+    name: 'takram-himalayan',
+    altitudeTranslation: { cumulus: 6985.246, cirrus: 1985.246 },
+    nearestLayerBoundaryDistance: 500,
+    eligible: true,
+    reasons: [],
+  });
+
+  reference.dispose();
+  himalayan.dispose();
+});
 
 test('constructs and preallocates the real vanilla Takram backend', () => {
   const options = createOptions();
@@ -73,7 +122,7 @@ test('constructs and preallocates the real vanilla Takram backend', () => {
   assert.strictEqual(backend.depthTexture, options.stableDepthTexture);
   assert.equal(backend.profile.name, 'high');
   assert.equal(backend.profile.enabled, true);
-  assert.equal(backend.activeLayerCount, 1);
+  assert.equal(backend.activeLayerCount, 3);
   assert.deepEqual(
     new Vector2(
       backend.effect.cloudsPass.historyRenderTarget.width,
@@ -190,39 +239,30 @@ test('maps the local Y-up world onto an unscaled ECEF tangent frame', () => {
   backend.dispose();
 });
 
-test('opening weather spans enough procedural tiles to form local cloud masses', () => {
+test('reference weather uses the pinned Takram vanilla repeat and coverage', () => {
   const backend = new TakramCloudRendererAdapter(createOptions());
   const repeat = backend.effect.localWeatherRepeat;
-  const bottomRadius = AtmosphereParameters.DEFAULT.bottomRadius;
-  const comparisonRouteSpan = 46_000;
-  const minimumTileSpan = Math.min(repeat.x, repeat.y)
-    * comparisonRouteSpan / (2 * bottomRadius);
-
-  assert.ok(minimumTileSpan >= 1.5 && minimumTileSpan <= 5,
-    `weather field spans ${minimumTileSpan.toFixed(4)} tiles across the comparison route`);
-  assert.ok(backend.effect.coverage >= 0.18 && backend.effect.coverage <= 0.22);
+  assert.deepEqual(repeat.toArray(), [100, 100]);
+  assert.equal(backend.effect.coverage, 0.4);
+  assert.deepEqual(backend.effect.localWeatherVelocity.toArray(), [0.001, 0]);
 
   backend.dispose();
 });
 
-test('authors one low cloud bank below the opening flight altitude', () => {
+test('reference profile authors the two cumulus and one cirrus default layers', () => {
   const backend = new TakramCloudRendererAdapter(createOptions());
   const layers = [];
   for (const layer of backend.effect.cloudLayers) {
     if (layer.height > 0) layers.push(layer);
   }
 
-  assert.equal(layers.length, 1);
-  assert.ok(Math.min(...layers.map(layer => layer.altitude)) >= 5_000);
-  assert.ok(Math.max(...layers.map(layer => layer.altitude + layer.height)) <= 7_250);
-  assert.equal(
-    layers.every(layer => layer.densityScale >= 0.06 && layer.densityScale <= 0.1),
-    true,
+  assert.equal(layers.length, 3);
+  assert.deepEqual(
+    layers.map(layer => [layer.altitude, layer.height, layer.densityScale]),
+    [[750, 650, 0.2], [1000, 1200, 0.2], [7500, 500, 0.003]],
   );
-  assert.equal(layers[0].height >= 1_200, true);
-  assert.equal(layers[0].altitude + layers[0].height < 7_500, true);
-  assert.equal(layers[0].shapeAmount, 1);
-  assert.equal(layers[0].shapeDetailAmount, 1);
+  assert.deepEqual(layers.map(layer => layer.shapeAmount), [1, 1, 0.4]);
+  assert.deepEqual(layers.map(layer => layer.shapeDetailAmount), [1, 1, 0]);
 
   backend.dispose();
 });
