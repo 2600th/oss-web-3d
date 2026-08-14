@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node tools/check-glsl.mjs && vite build",
+    "build:cloud-comparison": "node tools/check-glsl.mjs && vite build --config tools/cloud-comparison.vite.config.js",
     "preview": "vite preview",
     "optimize:model": "node tools/optimize-model.mjs",
     "check": "node tools/check-glsl.mjs"

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta name="theme-color" content="#05080c" />
+    <title>Safed Sagar Cloud Renderer Comparison</title>
+    <style>
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #05080c; }
+      #comparison-viewport { display: block; width: 100%; height: 100%; }
+      #comparison-error {
+        position: fixed; inset: 0; z-index: 1; display: grid; place-content: center;
+        padding: 2rem; color: #f4f6f8; background: #05080cf2;
+        font: 500 1rem/1.5 system-ui, sans-serif; text-align: center;
+      }
+      #comparison-error[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="comparison-viewport"></canvas>
+    <p id="comparison-error" role="alert" hidden></p>
+    <script type="module" src="./CloudComparisonHarness.js"></script>
+  </body>
+</html>
