@@ -1,480 +1,359 @@
 import * as THREE from 'three';
 import { terrainHeight, terrainSlope } from '../world/heightfield.js';
+import {
+  ParticleSystem,
+  ParticleShape,
+  RateEmitter,
+  DistanceEmitter,
+} from './gpu/ParticleSystem.js';
+import { Ribbon } from './gpu/Ribbon.js';
+import { frameUniforms, updateFrameUniforms } from './gpu/FrameUniforms.js';
+
+const SYSTEM_KEYS = Object.freeze([
+  'speedStreaks',
+  'condensation',
+  'spindrift',
+  'explosion',
+  'smoke',
+  'sparks',
+  'debris',
+]);
+
+const BUDGETS = Object.freeze({
+  phone: { drift: 32, condense: 32, trail: 0, explosion: 32, smoke: 64, sparks: 48, debris: 16 },
+  low: { drift: 48, condense: 56, trail: 0, explosion: 48, smoke: 96, sparks: 80, debris: 24 },
+  medium: { drift: 110, condense: 120, trail: 160, explosion: 72, smoke: 160, sparks: 144, debris: 40 },
+  high: { drift: 180, condense: 220, trail: 256, explosion: 96, smoke: 256, sparks: 240, debris: 64 },
+});
+
+const WHITE = new THREE.Color(0.94, 0.97, 1.0);
+const ICE = new THREE.Color(0.70, 0.86, 1.0);
+const FIRE = new THREE.Color(1.0, 0.24, 0.025);
+const EMBER = new THREE.Color(1.0, 0.72, 0.12);
+const SOOT = new THREE.Color(0.14, 0.16, 0.18);
+const METAL = new THREE.Color(0.34, 0.36, 0.37);
 
 /**
- * Speed streaks, wingtip trails and ridge spindrift.
- *
- * Both exist to solve the same problem: at 250 m/s over terrain a kilometre
- * below, there is nothing close to the camera for the eye to measure motion
- * against, so a fast jet reads as a slow one. Streaks give the eye near-field
- * reference; the trails give the manoeuvre a visible history. Together they do
- * more for the sense of speed than any amount of FOV or camera shake, and
- * unlike shake they do not cost the player their sense of where the horizon is.
+ * GPU-authored flight effects. The CPU only appends births to ring buffers;
+ * age, drag, gravity, wind, turbulence, spreading and fading are evaluated in
+ * shaders from the shared frame clock.
  */
-
-const TRAIL_SAMPLES = 96;
-
 export class FlightFx {
   constructor(environment) {
     this.environment = environment;
     this.group = new THREE.Group();
-    this.group.frustumCulled = false;
+    this.group.name = 'FlightFx';
 
-    this._buildStreaks();
-    this._buildTrails();
-    this._buildSpindrift();
-  }
-
-  // ------------------------------------------------------------ spindrift --
-
-  /**
-   * Snow streaming off the ridge crests.
-   *
-   * The streaks above are near-field reference that happens to be near the
-   * camera; this is near-field reference *attached to the terrain*, which is
-   * the stronger cue. Perceived speed tracks how many discontinuities cross
-   * the eye per second, and a plume that is anchored to a ridge and sweeps past
-   * as the aircraft crosses it gives the eye something with a known position to
-   * measure against — which streaks floating in a sphere around the camera
-   * cannot. It also does what the brief asks for directly, and it is the reason
-   * flying a ridgeline reads differently from flying a valley.
-   *
-   * Particles seed only on genuinely wind-scoured ground: steep, high, and
-   * within a short distance of the aircraft, so the cost is bounded regardless
-   * of altitude.
-   */
-  _buildSpindrift(max = 260) {
-    this.maxDrift = max;
-    this.driftCount = max;
-    this.driftPos = new Float32Array(max * 3);
-    this.driftVel = new Float32Array(max * 3);
-    this.driftAge = new Float32Array(max);
-    this.driftLife = new Float32Array(max);
-    this.driftAlpha = new Float32Array(max);
-    this.driftSize = new Float32Array(max);
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(this.driftPos, 3));
-    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.driftAlpha, 1));
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(this.driftSize, 1));
-    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
-
-    const material = new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.NormalBlending,
-      uniforms: { uScale: { value: 700 } },
-      vertexShader: /* glsl */ `
-        precision highp float;
-        in float aAlpha;
-        in float aSize;
-        uniform float uScale;
-        out float vAlpha;
-        void main() {
-          vAlpha = aAlpha;
-          vec4 view = modelViewMatrix * vec4(position, 1.0);
-          gl_Position = projectionMatrix * view;
-          gl_PointSize = max(2.0, aSize * uScale / max(-view.z, 1.0));
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        precision highp float;
-        in float vAlpha;
-        out vec4 fragColor;
-        void main() {
-          vec2 d = gl_PointCoord * 2.0 - 1.0;
-          float r = dot(d, d);
-          if (r > 1.0) discard;
-          fragColor = vec4(vec3(0.93, 0.95, 1.0), vAlpha * (1.0 - r) * 0.55);
-        }
-      `,
+    this.speedStreaks = new ParticleSystem({
+      name: 'speed-streaks', capacity: 700, shape: ParticleShape.STREAK,
+      additive: true, stretch: true, renderOrder: 14,
+    });
+    this.condensation = new ParticleSystem({
+      name: 'wing-condensation', capacity: 220, shape: ParticleShape.STREAK,
+      additive: false, lit: true, curl: true, stretch: true, wind: true, renderOrder: 13,
+    });
+    this.spindrift = new ParticleSystem({
+      name: 'ridge-spindrift', capacity: 180, shape: ParticleShape.SMOKE,
+      additive: false, lit: true, curl: true, wind: true, renderOrder: 12,
+    });
+    this.explosion = new ParticleSystem({
+      name: 'impact-fireball', capacity: 96, shape: ParticleShape.SOFT,
+      additive: true, curl: true, renderOrder: 15,
+    });
+    this.smoke = new ParticleSystem({
+      name: 'impact-smoke', capacity: 256, shape: ParticleShape.SMOKE,
+      additive: false, lit: true, curl: true, wind: true, renderOrder: 13,
+    });
+    this.sparks = new ParticleSystem({
+      name: 'impact-sparks', capacity: 240, shape: ParticleShape.STREAK,
+      additive: true, stretch: true, renderOrder: 16,
+    });
+    this.debris = new ParticleSystem({
+      name: 'impact-debris', capacity: 64, shape: ParticleShape.CHIP,
+      additive: false, lit: true, stretch: true, renderOrder: 14,
     });
 
-    this.spindrift = new THREE.Points(geometry, material);
-    this.spindrift.frustumCulled = false;
-    this.spindrift.renderOrder = 13;
-    this.group.add(this.spindrift);
-    this._driftMaterial = material;
+    this.trails = [0, 1].map((side) => new Ribbon({
+      name: side ? 'right-contrail' : 'left-contrail', capacity: 256, life: 28,
+    }));
+
+    for (const key of SYSTEM_KEYS) this.group.add(this[key].mesh);
+    for (const trail of this.trails) this.group.add(trail.mesh);
+    this._configureMaterials();
+
+    this._speedRate = new RateEmitter();
+    this._condensationRate = new RateEmitter();
+    this._driftRate = new RateEmitter();
+    this._trailDistance = new DistanceEmitter(18);
+    this._time = 0;
+    this._disposed = false;
+
+    this._position = new THREE.Vector3();
+    this._velocity = new THREE.Vector3();
+    this._direction = new THREE.Vector3();
+    this._inherit = new THREE.Vector3();
+    this._wing = new THREE.Vector3();
+    this._spawn = {
+      position: this._position,
+      velocity: this._velocity,
+      direction: this._direction,
+      inherit: this._inherit,
+      radius: 0,
+      speed: 1,
+      speedVariance: 0.2,
+      spread: 0.2,
+      size: 1,
+      sizeVariance: 0.3,
+      life: 1,
+      lifeVariance: 0.25,
+      spin: 0,
+      tint: WHITE,
+      time: 0,
+    };
   }
 
-  _respawnDrift(i, flight) {
-    const o = i * 3;
-    // Look for scoured ground a little ahead of the aircraft, biased along the
-    // flight path so plumes appear before they are passed rather than behind.
-    const ahead = 260 + Math.random() * 900;
-    const spread = 620;
-    const fx = flight.position.x + flight.forward.x * ahead + (Math.random() - 0.5) * spread;
-    const fz = flight.position.z + flight.forward.z * ahead + (Math.random() - 0.5) * spread;
-    const h = terrainHeight(fx, fz);
+  _configureMaterials() {
+    const streak = this.speedStreaks.uniforms;
+    streak.uGravity.value.set(0, 0, 0);
+    streak.uDrag.value = 0.08;
+    streak.uStretch.value = 0.008;
+    streak.uGlow.value = 0.24;
+    streak.uOpacity.value = 0.09;
+    streak.uDistFade.value.set(88, 112, 138, 178);
+    this.speedStreaks.setGradient(ICE, WHITE, ICE, WHITE);
 
-    // Only crests hold blowing snow: steep enough to be scoured, high enough to
-    // be snow rather than rock. Failures cost one height sample and the slot is
-    // simply retried next frame.
-    if (h < 4600 || terrainSlope(fx, fz, 24) < 0.22) {
-      this.driftAlpha[i] = 0;
-      this.driftLife[i] = 0;
-      return;
+    for (const system of [this.condensation, this.spindrift]) {
+      system.uniforms.uGravity.value.set(0, 0.25, 0);
+      system.uniforms.uDrag.value = 1.15;
+      system.uniforms.uTurbulence.value = 2.4;
+      system.uniforms.uTurbFrequency.value = 0.018;
+      system.uniforms.uWindScale.value = 0.65;
+      system.uniforms.uEndSize.value = 1.8;
+      system.uniforms.uOpacity.value = 0.18;
+      system.setGradient(WHITE, ICE, WHITE, WHITE);
     }
+    this.condensation.uniforms.uDistFade.value.set(0, 1, 2500, 4200);
+    this.condensation.uniforms.uStretch.value = 0.006;
+    this.spindrift.uniforms.uDistFade.value.set(20, 50, 1600, 2600);
 
-    const wind = this.environment.uniforms.uWind.value;
-    this.driftPos[o] = fx;
-    this.driftPos[o + 1] = h + 2 + Math.random() * 14;
-    this.driftPos[o + 2] = fz;
-    this.driftVel[o] = wind.x * (0.7 + Math.random() * 0.7);
-    this.driftVel[o + 1] = 3 + Math.random() * 9;
-    this.driftVel[o + 2] = wind.y * (0.7 + Math.random() * 0.7);
-    this.driftAge[i] = 0;
-    this.driftLife[i] = 1.6 + Math.random() * 2.2;
-    this.driftSize[i] = 5 + Math.random() * 16;
-  }
+    this.explosion.uniforms.uGravity.value.set(0, 2.0, 0);
+    this.explosion.uniforms.uDrag.value = 2.5;
+    this.explosion.uniforms.uEndSize.value = 3.5;
+    this.explosion.uniforms.uGlow.value = 2.4;
+    this.explosion.setGradient(new THREE.Color(1.0, 0.92, 0.62), EMBER, FIRE, SOOT);
 
-  _updateSpindrift(dt, flight) {
-    // A low-level effect on purpose. Seen from altitude these would be
-    // sub-pixel specks costing height samples for nothing.
-    const near = 1 - THREE.MathUtils.smoothstep(flight.agl, 420, 1500);
-    this.spindrift.visible = this.driftsEnabled !== false && near > 0.01;
-    if (!this.spindrift.visible) return;
+    this.smoke.uniforms.uGravity.value.set(0, 2.8, 0);
+    this.smoke.uniforms.uDrag.value = 0.48;
+    this.smoke.uniforms.uTurbulence.value = 5.5;
+    this.smoke.uniforms.uWindScale.value = 0.75;
+    this.smoke.uniforms.uEndSize.value = 4.5;
+    this.smoke.uniforms.uOpacity.value = 0.82;
+    this.smoke.setGradient(new THREE.Color(0.34, 0.30, 0.25), SOOT, new THREE.Color(0.08, 0.09, 0.1), SOOT);
 
-    for (let i = 0; i < this.driftCount; i++) {
-      if (this.driftLife[i] <= 0) {
-        this._respawnDrift(i, flight);
-        continue;
-      }
-      const o = i * 3;
-      this.driftAge[i] += dt;
-      const t = this.driftAge[i] / this.driftLife[i];
-      if (t >= 1) {
-        this.driftLife[i] = 0;
-        this.driftAlpha[i] = 0;
-        continue;
-      }
-      this.driftPos[o] += this.driftVel[o] * dt;
-      this.driftPos[o + 1] += this.driftVel[o + 1] * dt;
-      this.driftPos[o + 2] += this.driftVel[o + 2] * dt;
-      this.driftVel[o + 1] -= 1.6 * dt; // the plume settles as it loses the crest
-      // Fade in fast, out slow, so a plume looks lifted rather than switched on.
-      this.driftAlpha[i] = Math.min(1, t * 6) * (1 - t) * near;
+    this.sparks.uniforms.uGravity.value.set(0, -9.80665, 0);
+    this.sparks.uniforms.uDrag.value = 0.38;
+    this.sparks.uniforms.uStretch.value = 0.035;
+    this.sparks.uniforms.uGlow.value = 2.0;
+    this.sparks.setGradient(new THREE.Color(1, 0.94, 0.62), EMBER, FIRE, SOOT);
+
+    this.debris.uniforms.uGravity.value.set(0, -9.80665, 0);
+    this.debris.uniforms.uDrag.value = 0.18;
+    this.debris.uniforms.uEndSize.value = 0.8;
+    this.debris.setGradient(METAL, new THREE.Color(0.18, 0.19, 0.2), SOOT, SOOT);
+
+    for (const trail of this.trails) {
+      trail.uniforms.uSpread.value = 0.035;
+      trail.uniforms.uTurb.value = 0.13;
+      trail.uniforms.uOpacity.value = 0.18;
+      trail.uniforms.uTaper.value = 0.04;
+      trail.uniforms.uAlbedo.value.copy(WHITE);
     }
-
-    this.spindrift.geometry.attributes.position.needsUpdate = true;
-    this.spindrift.geometry.attributes.aAlpha.needsUpdate = true;
-    this.spindrift.geometry.attributes.aSize.needsUpdate = true;
-  }
-
-  // --------------------------------------------------------------- streaks --
-
-  _buildStreaks(max = 700) {
-    this.maxStreaks = max;
-    this.streakCount = max;
-
-    // Two vertices per streak, drawn as a line segment stretched along the
-    // aircraft's motion. Lines are the cheapest primitive that still conveys
-    // direction, and these are only ever seen for a few frames each.
-    this.streakPositions = new Float32Array(max * 6);
-    this.streakAlpha = new Float32Array(max * 2);
-    this.streakOrigins = new Float32Array(max * 3);
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(this.streakPositions, 3));
-    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.streakAlpha, 1));
-    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
-
-    const material = new THREE.ShaderMaterial({
-      glslVersion: THREE.GLSL3,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      uniforms: { uIntensity: { value: 0 } },
-      vertexShader: /* glsl */ `
-        precision highp float;
-        in float aAlpha;
-        out float vAlpha;
-        void main() {
-          vAlpha = aAlpha;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        precision highp float;
-        in float vAlpha;
-        uniform float uIntensity;
-        out vec4 fragColor;
-        void main() {
-          fragColor = vec4(vec3(0.86, 0.92, 1.0), vAlpha * uIntensity);
-        }
-      `,
-    });
-
-    this.streaks = new THREE.LineSegments(geometry, material);
-    this.streaks.frustumCulled = false;
-    this.streaks.renderOrder = 14;
-    this.group.add(this.streaks);
-    this._streakMaterial = material;
-    this._streaksSeeded = false;
-  }
-
-  _seedStreaks(centre) {
-    for (let i = 0; i < this.maxStreaks; i++) this._respawnStreak(i, centre, true);
-    this._streaksSeeded = true;
-  }
-
-  _respawnStreak(i, centre, anywhere) {
-    const o = i * 3;
-    const spread = 190;
-    this.streakOrigins[o] = centre.x + (Math.random() - 0.5) * spread * 2;
-    this.streakOrigins[o + 1] = centre.y + (Math.random() - 0.5) * spread;
-    this.streakOrigins[o + 2] = centre.z + (Math.random() - 0.5) * spread * 2;
-    if (!anywhere) {
-      // Push new streaks out ahead so they sweep past rather than popping in.
-      this.streakOrigins[o] += (Math.random() - 0.5) * 40;
-    }
-  }
-
-  // ---------------------------------------------------------------- trails --
-
-  _buildTrails() {
-    this.trails = [];
-    for (let side = 0; side < 2; side++) {
-      const positions = new Float32Array(TRAIL_SAMPLES * 2 * 3);
-      const alpha = new Float32Array(TRAIL_SAMPLES * 2);
-      const indices = [];
-      for (let i = 0; i < TRAIL_SAMPLES - 1; i++) {
-        const a = i * 2;
-        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-      }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
-      geometry.setIndex(indices);
-      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
-
-      const material = new THREE.ShaderMaterial({
-        glslVersion: THREE.GLSL3,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        uniforms: {},
-        vertexShader: /* glsl */ `
-          precision highp float;
-          in float aAlpha;
-          out float vAlpha;
-          void main() {
-            vAlpha = aAlpha;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: /* glsl */ `
-          precision highp float;
-          in float vAlpha;
-          out vec4 fragColor;
-          void main() {
-            if (vAlpha < 0.004) discard;
-            fragColor = vec4(vec3(0.96, 0.975, 1.0), vAlpha);
-          }
-        `,
-      });
-
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.frustumCulled = false;
-      mesh.renderOrder = 13;
-      this.group.add(mesh);
-
-      this.trails.push({
-        mesh,
-        positions,
-        alpha,
-        head: 0,
-        filled: 0,
-        // Ring-buffer history: world position, ribbon side vector, birth alpha.
-        history: new Array(TRAIL_SAMPLES).fill(null).map(() => ({
-          p: new THREE.Vector3(),
-          s: new THREE.Vector3(),
-          a: 0,
-          w: 1,
-        })),
-      });
-    }
-    this._emitAccumulator = 0;
   }
 
   setQuality(tier) {
-    this.streakCount = Math.min(this.maxStreaks, tier.speedParticles);
-    this.streaks.geometry.setDrawRange(0, this.streakCount * 2);
-    this.trailsEnabled = tier.contrails;
-    for (const t of this.trails) t.mesh.visible = tier.contrails;
-    // Spindrift costs CPU height samples rather than fill, so it scales with
-    // the same budget that governs the other near-field particles.
-    this.driftCount = Math.min(this.maxDrift, Math.round(tier.speedParticles * 0.4));
-    this.driftsEnabled = this.driftCount > 0;
-    this.spindrift.geometry.setDrawRange(0, this.driftCount);
+    const name = BUDGETS[tier?.name] ? tier.name : 'high';
+    const budget = BUDGETS[name];
+    this.speedStreaks.setActive(Math.min(this.speedStreaks.capacity, tier?.speedParticles ?? 700));
+    this.spindrift.setActive(budget.drift);
+    this.condensation.setActive(budget.condense);
+    this.explosion.setActive(budget.explosion);
+    this.smoke.setActive(budget.smoke);
+    this.sparks.setActive(budget.sparks);
+    this.debris.setActive(budget.debris);
+    for (const trail of this.trails) trail.setActive(tier?.contrails ? budget.trail : 0);
+    this._tier = name;
   }
 
   reset() {
-    for (const t of this.trails) {
-      t.filled = 0;
-      t.head = 0;
-      t.alpha.fill(0);
-      t.mesh.geometry.attributes.aAlpha.needsUpdate = true;
-    }
-    this._streaksSeeded = false;
-    this.driftLife.fill(0);
-    this.driftAlpha.fill(0);
+    for (const key of SYSTEM_KEYS) this[key].reset();
+    for (const trail of this.trails) trail.reset();
+    this._speedRate.reset();
+    this._condensationRate.reset();
+    this._driftRate.reset();
+    this._trailDistance.reset();
   }
 
-  /**
-   * @param {FlightModel} flight
-   * @param {THREE.Vector3} cameraPos
-   */
-  update(dt, flight, cameraPos) {
-    this._updateStreaks(dt, flight, cameraPos);
-    if (this.trailsEnabled !== false) this._updateTrails(dt, flight);
+  update(dt, flight, cameraPos, camera = null) {
+    this._time += dt;
+    updateFrameUniforms(dt, this.environment, camera);
+    this._updateSpeed(dt, flight, cameraPos);
+    this._updateCondensation(dt, flight);
     this._updateSpindrift(dt, flight);
+    for (const key of SYSTEM_KEYS) this[key].flush();
+    for (const trail of this.trails) trail.flush();
   }
 
-  _updateStreaks(dt, flight, cameraPos) {
-    if (!this._streaksSeeded) this._seedStreaks(cameraPos);
+  _updateSpeed(dt, flight, cameraPos) {
+    const intensity = THREE.MathUtils.clamp((flight.airspeed - 135) / 240, 0, 1);
+    this.speedStreaks.mesh.visible = intensity > 0.015 && this.speedStreaks.active > 0;
+    if (!this.speedStreaks.mesh.visible) return;
+    this._speedRate.rate = this.speedStreaks.active * (0.08 + intensity * 0.18);
+    const spawn = this._spawn;
+    spawn.inherit.set(0, 0, 0);
+    spawn.position.copy(cameraPos).addScaledVector(flight.forward, 115);
+    spawn.velocity.copy(flight.velocity).multiplyScalar(-0.08);
+    spawn.radius = 105;
+    spawn.speedVariance = 0.25;
+    spawn.spread = 0.06;
+    spawn.size = 0.03 + intensity * 0.02;
+    spawn.sizeVariance = 0.5;
+    spawn.life = 0.46;
+    spawn.lifeVariance = 0.28;
+    spawn.spin = 0;
+    spawn.tint = ICE;
+    spawn.time = frameUniforms.uTime.value;
+    this.speedStreaks.uniforms.uStretchWorld.value.copy(flight.velocity).multiplyScalar(-1);
+    this.speedStreaks.emit(this._speedRate.tick(dt), spawn);
+  }
 
-    const speed = flight.airspeed;
-    // Below ~140 m/s streaks would be visible dust rather than a speed cue.
-    const intensity = THREE.MathUtils.clamp((speed - 140) / 260, 0, 1);
-    this._streakMaterial.uniforms.uIntensity.value = intensity * 0.5;
-    this.streaks.visible = intensity > 0.01;
-    if (!this.streaks.visible) return;
-
-    const vx = flight.velocity.x;
-    const vy = flight.velocity.y;
-    const vz = flight.velocity.z;
-    const length = 0.055 + 0.05 * intensity;
-
-    const spread = 190;
-    const spreadSq = spread * spread * 2.6;
-
-    for (let i = 0; i < this.streakCount; i++) {
-      const o = i * 3;
-      // Streaks are static in the world; the aircraft moves through them, which
-      // is what makes the parallax read as speed rather than as a moving fog.
-      const dx = this.streakOrigins[o] - cameraPos.x;
-      const dy = this.streakOrigins[o + 1] - cameraPos.y;
-      const dz = this.streakOrigins[o + 2] - cameraPos.z;
-      const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > spreadSq) {
-        this._respawnStreak(i, cameraPos, false);
-        continue;
-      }
-
-      const v = i * 6;
-      this.streakPositions[v] = this.streakOrigins[o];
-      this.streakPositions[v + 1] = this.streakOrigins[o + 1];
-      this.streakPositions[v + 2] = this.streakOrigins[o + 2];
-      this.streakPositions[v + 3] = this.streakOrigins[o] - vx * length;
-      this.streakPositions[v + 4] = this.streakOrigins[o + 1] - vy * length;
-      this.streakPositions[v + 5] = this.streakOrigins[o + 2] - vz * length;
-
-      // Fade at both ends. The far fade stops the spawn sphere showing up as a
-      // box edge. The near fade matters more: a streak a few metres off the
-      // lens is drawn tens of metres long, so it sweeps most of the frame in
-      // one frame and reads as a scratch on the canopy rather than as speed.
-      const dist = Math.sqrt(distSq);
-      const near = THREE.MathUtils.smoothstep(dist, 22, 60);
-      const fade = (1 - distSq / spreadSq) * near;
-      this.streakAlpha[i * 2] = fade * 0.6;
-      this.streakAlpha[i * 2 + 1] = 0;
+  _updateCondensation(dt, flight) {
+    const cold = THREE.MathUtils.clamp((flight.altitude - 6100) / 1200, 0, 1);
+    const load = THREE.MathUtils.clamp((Math.abs(flight.gLoad) - 2.7) / 3.2, 0, 1);
+    const strength = THREE.MathUtils.clamp(cold * 0.7 + load, 0, 1);
+    const speedGate = THREE.MathUtils.clamp((flight.airspeed - 100) / 100, 0, 1);
+    this._condensationRate.rate = this.condensation.active * 0.24 * strength * speedGate;
+    const owed = this._condensationRate.tick(dt);
+    const spawn = this._spawn;
+    spawn.inherit.set(0, 0, 0);
+    spawn.velocity.copy(flight.velocity).multiplyScalar(0.94);
+    spawn.radius = 0.22;
+    spawn.speedVariance = 0.02;
+    spawn.spread = 0.04;
+    spawn.size = 0.16 + load * 0.16;
+    spawn.sizeVariance = 0.4;
+    spawn.life = 1.4 + cold * 1.4;
+    spawn.lifeVariance = 0.28;
+    spawn.spin = 0.4;
+    spawn.tint = WHITE;
+    spawn.time = frameUniforms.uTime.value;
+    this.condensation.uniforms.uStretchWorld.value.copy(flight.velocity).multiplyScalar(-0.06);
+    for (let side = -1; side <= 1; side += 2) {
+      spawn.position.copy(flight.position)
+        .addScaledVector(flight.right, side * 3.35)
+        .addScaledVector(flight.forward, -1.8);
+      this.condensation.emit(Math.ceil(owed * 0.5), spawn);
     }
 
-    this.streaks.geometry.attributes.position.needsUpdate = true;
-    this.streaks.geometry.attributes.aAlpha.needsUpdate = true;
-  }
-
-  _updateTrails(dt, flight) {
-    // Two sources, and they behave differently. Persistent contrails need cold
-    // air, so they only form high up. Wingtip vapour is a pressure effect and
-    // appears whenever the wing is working hard, at any altitude — which is why
-    // it reads as "that was a hard turn" rather than as weather.
-    const altitudeTrail = THREE.MathUtils.clamp((flight.altitude - 6400) / 900, 0, 1);
-    const gVapour = THREE.MathUtils.clamp((Math.abs(flight.gLoad) - 3.4) / 3.6, 0, 1);
-    const strength = Math.min(1, altitudeTrail * 0.85 + gVapour);
-    const speedGate = THREE.MathUtils.clamp((flight.airspeed - 110) / 120, 0, 1);
-    const emit = strength * speedGate;
-
-    // Emit at a fixed rate in *distance*, so trail density does not change with
-    // frame rate or airspeed.
-    this._emitAccumulator += flight.airspeed * dt;
-    const spacing = 14;
-    let emits = 0;
-    while (this._emitAccumulator >= spacing && emits < 6) {
-      this._emitAccumulator -= spacing;
-      emits++;
-
+    if (!this.trails[0].active) return;
+    if (strength < 0.08 || speedGate < 0.1) {
+      for (const trail of this.trails) trail.break();
+      return;
+    }
+    const nodes = this._trailDistance.tick(Math.max(0, flight.airspeed * dt));
+    for (let n = 0; n < nodes; n++) {
       for (let side = 0; side < 2; side++) {
-        const trail = this.trails[side];
-        const sign = side === 0 ? -1 : 1;
-        const sample = trail.history[trail.head];
-        sample.p
-          .copy(flight.position)
-          .addScaledVector(flight.right, sign * 3.4)
-          .addScaledVector(flight.forward, -2.2);
-        sample.s.copy(flight.up);
-        sample.a = emit;
-        sample.w = 1.1 + 2.6 * gVapour + 1.4 * altitudeTrail;
-        trail.head = (trail.head + 1) % TRAIL_SAMPLES;
-        trail.filled = Math.min(trail.filled + 1, TRAIL_SAMPLES);
+        const sign = side ? 1 : -1;
+        this._wing.copy(flight.position)
+          .addScaledVector(flight.right, sign * 3.35)
+          // The chase camera sits about 26 m aft. Beginning the persistent
+          // ribbon 58 m aft keeps its newest segment out of the lens corridor;
+          // it remains visible as curved history during manoeuvres instead of
+          // becoming two bright scratches from the bottom corners.
+          .addScaledVector(flight.forward, -58);
+        this.trails[side].push(this._wing, 0.42 + load * 0.5, frameUniforms.uTime.value);
       }
     }
+  }
 
-    const decay = Math.exp(-dt * 0.13);
-    for (const trail of this.trails) {
-      for (let i = 0; i < TRAIL_SAMPLES; i++) {
-        const sample = trail.history[i];
-        sample.a *= decay;
-        // Contrails spread and thin as they age.
-        sample.w += dt * 0.8;
-      }
-
-      // Rebuild the ribbon oldest-to-newest so the strip is continuous.
-      //
-      // Start at the oldest *valid* sample, not at head. Writes advance head,
-      // so while the buffer is still filling the live samples sit in the slots
-      // *behind* it and the slots at head are untouched. Walking from head and
-      // then drawing the first (filled - 1) quads drew exactly the uninitialised
-      // ones, so a trail did not appear at all until a full 96-sample history
-      // had accumulated — several seconds after the manoeuvre that earned it.
-      const count = trail.filled;
-      const start = (trail.head - count + TRAIL_SAMPLES) % TRAIL_SAMPLES;
-      const span = Math.max(count - 1, 1);
-      for (let i = 0; i < count; i++) {
-        const index = (start + i) % TRAIL_SAMPLES;
-        const sample = trail.history[index];
-        const age = i / span; // 0 = oldest
-        const v = i * 6;
-        const half = sample.w;
-        trail.positions[v] = sample.p.x + sample.s.x * half;
-        trail.positions[v + 1] = sample.p.y + sample.s.y * half;
-        trail.positions[v + 2] = sample.p.z + sample.s.z * half;
-        trail.positions[v + 3] = sample.p.x - sample.s.x * half;
-        trail.positions[v + 4] = sample.p.y - sample.s.y * half;
-        trail.positions[v + 5] = sample.p.z - sample.s.z * half;
-
-        // Taper the newest end so the ribbon grows out of the wingtip instead
-        // of appearing as a blunt rectangle.
-        const taper = Math.min(1, (1 - age) * 6);
-        const a = sample.a * age * taper * 0.85;
-        trail.alpha[i * 2] = a;
-        trail.alpha[i * 2 + 1] = a;
-      }
-
-      trail.mesh.geometry.attributes.position.needsUpdate = true;
-      trail.mesh.geometry.attributes.aAlpha.needsUpdate = true;
-      trail.mesh.geometry.setDrawRange(0, Math.max(0, (trail.filled - 1) * 6));
+  _updateSpindrift(dt, flight) {
+    const near = 1 - THREE.MathUtils.smoothstep(flight.agl, 420, 1450);
+    this._driftRate.rate = this.spindrift.active * 0.38 * near;
+    let owed = this._driftRate.tick(dt);
+    const spawn = this._spawn;
+    spawn.inherit.set(0, 0, 0);
+    const wind = this.environment.uniforms.uWind.value;
+    while (owed-- > 0) {
+      const ahead = 240 + Math.random() * 950;
+      const lateral = (Math.random() - 0.5) * 720;
+      const x = flight.position.x + flight.forward.x * ahead + flight.right.x * lateral;
+      const z = flight.position.z + flight.forward.z * ahead + flight.right.z * lateral;
+      const height = terrainHeight(x, z);
+      if (height < 4550 || terrainSlope(x, z, 28) < 0.2) continue;
+      spawn.position.set(x, height + 3 + Math.random() * 9, z);
+      spawn.velocity.set(wind.x * 0.9, 4.5, wind.y * 0.9);
+      spawn.radius = 5;
+      spawn.speedVariance = 0.32;
+      spawn.spread = 0.24;
+      spawn.size = 5.5;
+      spawn.sizeVariance = 0.65;
+      spawn.life = 3.2;
+      spawn.lifeVariance = 0.35;
+      spawn.spin = 0.4;
+      spawn.tint = WHITE;
+      spawn.time = frameUniforms.uTime.value;
+      this.spindrift.emit(1, spawn);
     }
+  }
+
+  crash(flight, strength = 1) {
+    const s = THREE.MathUtils.clamp(strength, 0.2, 1);
+    const spawn = this._spawn;
+    spawn.position.copy(flight.position);
+    spawn.inherit.copy(flight.velocity).multiplyScalar(0.18);
+    spawn.time = frameUniforms.uTime.value;
+
+    spawn.velocity.set(0, 8, 0);
+    spawn.radius = 2.4;
+    spawn.speedVariance = 0.8;
+    spawn.spread = 1;
+    spawn.size = 4 + 4 * s;
+    spawn.sizeVariance = 0.45;
+    spawn.life = 0.7 + s * 0.55;
+    spawn.lifeVariance = 0.3;
+    spawn.spin = 1;
+    spawn.tint = EMBER;
+    this.explosion.emit(Math.round(18 + 46 * s), spawn);
+
+    spawn.velocity.set(0, 12 + 8 * s, 0);
+    spawn.radius = 3.5;
+    spawn.size = 4.5 + 3 * s;
+    spawn.life = 6 + 5 * s;
+    spawn.spin = 0.25;
+    spawn.tint = SOOT;
+    this.smoke.emit(Math.round(22 + 58 * s), spawn);
+
+    spawn.velocity.set(0, 20, 0);
+    spawn.radius = 1.5;
+    spawn.size = 0.11 + s * 0.12;
+    spawn.life = 1.2 + s;
+    spawn.spin = 0;
+    spawn.tint = EMBER;
+    this.sparks.emit(Math.round(35 + 110 * s), spawn);
+
+    spawn.velocity.copy(flight.velocity).multiplyScalar(0.3);
+    spawn.radius = 2;
+    spawn.size = 0.22 + s * 0.28;
+    spawn.life = 3.5 + s * 2.5;
+    spawn.spin = 7;
+    spawn.tint = METAL;
+    this.debris.emit(Math.round(8 + 34 * s), spawn);
   }
 
   dispose() {
-    this.streaks.geometry.dispose();
-    this._streakMaterial.dispose();
-    for (const t of this.trails) {
-      t.mesh.geometry.dispose();
-      t.mesh.material.dispose();
-    }
+    if (this._disposed) return;
+    this._disposed = true;
+    for (const key of SYSTEM_KEYS) this[key].dispose();
+    for (const trail of this.trails) trail.dispose();
+    this.group.clear();
   }
 }

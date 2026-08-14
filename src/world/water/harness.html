@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Glacial water validation</title>
+  <style>
+    html,body,canvas{width:100%;height:100%;margin:0;display:block;overflow:hidden;background:#91abc1}
+    output{position:fixed;left:18px;top:18px;padding:10px 14px;background:#071019dc;color:#d8e8e9;
+      border:1px solid #9db7b866;font:12px/1.4 ui-monospace,monospace;letter-spacing:.08em}
+  </style>
+</head>
+<body>
+<canvas></canvas><output>PREPARING WATER</output>
+<script type="module">
+  import * as THREE from 'three';
+  import { terrainHeight } from '../heightfield.js';
+  import { lakeInCell } from '../lakes.js';
+  import { Water } from '../Water.js';
+
+  const quality = new URLSearchParams(location.search).get('quality') || 'high';
+  const lake = lakeInCell(-1, -10);
+  const canvas = document.querySelector('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(innerWidth, innerHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.AgXToneMapping;
+  renderer.toneMappingExposure = 1.05;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x91abc1);
+  scene.fog = new THREE.FogExp2(0x9db4c5, 0.00032);
+  const camera = new THREE.PerspectiveCamera(47, innerWidth / innerHeight, 2, 12000);
+  camera.position.set(lake.x + 960, lake.level + 520, lake.z + 1080);
+  camera.lookAt(lake.x, lake.level - 18, lake.z);
+
+  const sunDirection = new THREE.Vector3(-0.48, 0.78, 0.39).normalize();
+  const sunColor = new THREE.Color(1.0, 0.92, 0.78);
+  scene.add(new THREE.HemisphereLight(0xbad2e6, 0x25313b, 2.0));
+  const sun = new THREE.DirectionalLight(sunColor, 3.2);
+  sun.position.copy(sunDirection).multiplyScalar(4000);
+  scene.add(sun);
+
+  const extent = Math.max(1300, lake.rMax * 2.1);
+  const divisions = 180;
+  const terrain = new THREE.PlaneGeometry(extent * 2, extent * 2, divisions, divisions);
+  terrain.rotateX(-Math.PI / 2);
+  const positions = terrain.attributes.position;
+  const colours = new Float32Array(positions.count * 3);
+  for (let i = 0; i < positions.count; i++) {
+    const x = lake.x + positions.getX(i);
+    const z = lake.z + positions.getZ(i);
+    const h = terrainHeight(x, z);
+    positions.setXYZ(i, x, h, z);
+    const wet = THREE.MathUtils.smoothstep(h, lake.level - 34, lake.level + 58);
+    colours[i * 3] = 0.34 + wet * 0.46;
+    colours[i * 3 + 1] = 0.38 + wet * 0.44;
+    colours[i * 3 + 2] = 0.41 + wet * 0.43;
+  }
+  terrain.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  terrain.computeVertexNormals();
+  scene.add(new THREE.Mesh(terrain, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.92, metalness: 0,
+  })));
+
+  const environment = { uniforms: {
+    uTime: { value: 0 },
+    uSunDir: { value: sunDirection },
+    uSunColor: { value: sunColor },
+    uZenithColor: { value: new THREE.Color(0.045, 0.16, 0.38) },
+    uHorizonColor: { value: new THREE.Color(0.52, 0.69, 0.82) },
+  }};
+  const field = { active: [lake], activeCount: 1, version: 1, update() {}, prune() {} };
+  const water = new Water(renderer, environment, { field, quality });
+  scene.add(water);
+  water.update(0, camera);
+
+  let refractionType = THREE.UnsignedByteType;
+  let target = null;
+  if (water.profile.refraction) {
+    refractionType = renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float')
+      ? THREE.HalfFloatType
+      : THREE.UnsignedByteType;
+    target = new THREE.WebGLRenderTarget(
+      Math.max(1, Math.floor(innerWidth * renderer.getPixelRatio())),
+      Math.max(1, Math.floor(innerHeight * renderer.getPixelRatio())),
+      { type: refractionType, depthBuffer: true },
+    );
+    target.depthTexture = new THREE.DepthTexture(target.width, target.height, THREE.UnsignedIntType);
+    water.setRefractionSource({
+      colorTexture: target.texture, depthTexture: target.depthTexture,
+      width: target.width, height: target.height, near: camera.near, far: camera.far,
+    });
+  }
+
+  const output = document.querySelector('output');
+  output.textContent = `${quality.toUpperCase()} / ${water.profile.waveCount} WAVE BANDS / ` +
+    `${water.geometry.drawRange.count / 3} TERRAIN-SAFE TRIANGLES / REFRACTION ${water.hasRefraction ? 'ON' : 'OFF'} / ` +
+    `${target ? `${refractionType === THREE.HalfFloatType ? 'RGBA16F' : 'RGBA8'} PREPASS` : 'PREPASS DISABLED'}`;
+
+  addEventListener('resize', () => {
+    renderer.setSize(innerWidth, innerHeight, false);
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    if (target) {
+      const width = Math.max(1, Math.floor(innerWidth * renderer.getPixelRatio()));
+      const height = Math.max(1, Math.floor(innerHeight * renderer.getPixelRatio()));
+      target.setSize(width, height);
+      water.setSize(innerWidth, innerHeight, renderer.getPixelRatio());
+      water.setRefractionSource({
+        colorTexture: target.texture, depthTexture: target.depthTexture,
+        width, height, near: camera.near, far: camera.far,
+      });
+    }
+  });
+  const timer = new THREE.Timer();
+  function frame() {
+    timer.update();
+    environment.uniforms.uTime.value += Math.min(timer.getDelta(), 0.05);
+    water.update(0, camera);
+    if (target) {
+      water.visible = false;
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+      water.visible = true;
+      renderer.setRenderTarget(null);
+    }
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  frame();
+  window.__waterHarness = { renderer, scene, camera, water, lake, target, ready: true };
+</script>
+</body>
+</html>

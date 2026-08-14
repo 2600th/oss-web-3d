@@ -76,4 +76,10 @@ export class Environment {
     this.sunLight.position.copy(cameraPos).addScaledVector(this.sunDir, 5000);
     this.sunLight.target.position.copy(cameraPos);
   }
+
+  dispose() {
+    this.sunLight.removeFromParent();
+    this.sunLight.target.removeFromParent();
+    this.hemiLight.removeFromParent();
+  }
 }

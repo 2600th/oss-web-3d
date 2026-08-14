@@ -34,6 +34,7 @@ export class Mission {
     this.distanceFlown = 0;
     this.bestApproach = Infinity;
     this.targetIndex = 0;
+    this._targetId = null;
 
     this._lastPosition = origin.clone();
 
@@ -58,13 +59,32 @@ export class Mission {
   get target() {
     const pending = this.posts.filter((p) => !p.captured);
     if (pending.length === 0) return null;
-    return pending[this.targetIndex % pending.length];
+    const selected = pending.find((post) => post.id === this._targetId);
+    if (selected) return selected;
+
+    let next = null;
+    if (this._targetId != null) {
+      const previousIndex = this.posts.findIndex((post) => post.id === this._targetId);
+      for (let offset = 1; offset <= this.posts.length; offset++) {
+        const candidate = this.posts[(previousIndex + offset + this.posts.length) % this.posts.length];
+        if (!candidate.captured) {
+          next = candidate;
+          break;
+        }
+      }
+    }
+    next ??= pending[((this.targetIndex % pending.length) + pending.length) % pending.length];
+    this._targetId = next.id;
+    return next;
   }
 
   cycleTarget(direction = 1) {
     const pending = this.posts.filter((p) => !p.captured);
     if (pending.length <= 1) return;
-    this.targetIndex = (this.targetIndex + direction + pending.length) % pending.length;
+    const current = this.target;
+    const currentIndex = Math.max(0, pending.indexOf(current));
+    this.targetIndex = (currentIndex + direction + pending.length) % pending.length;
+    this._targetId = pending[this.targetIndex].id;
   }
 
   begin() {
@@ -163,7 +183,7 @@ function scoreSite(x, z) {
  * coarse polar grid, keeps the best-scoring candidates, and enforces a minimum
  * separation so the sortie is a route rather than a single orbit.
  */
-function findPostSites(origin, count) {
+export function findPostSites(origin, count) {
   const candidates = [];
   const rings = 26;
   const spokes = 40;

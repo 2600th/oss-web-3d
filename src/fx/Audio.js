@@ -23,6 +23,8 @@ export class Audio {
     this.ready = false;
     this.muted = false;
     this._pendingStart = false;
+    this._impactLatched = false;
+    this._disposed = false;
   }
 
   /**
@@ -200,6 +202,14 @@ export class Audio {
    */
   update(dt, flight, closingRate = 0, warning = 'none') {
     if (!this.ready || this.ctx.state !== 'running') return;
+    // impact() owns the final engine automation. Game continues updating for
+    // the crash hold, so touching these gains again would immediately undo the
+    // fade and make the destroyed aircraft roar until the failure screen.
+    if (this._impactLatched) {
+      if (flight.crashed) return;
+      // A new sortie reuses Audio; the first healthy frame arms it again.
+      this._impactLatched = false;
+    }
     const t = this.ctx.currentTime;
     const smooth = 0.06;
 
@@ -328,6 +338,7 @@ export class Audio {
   /** Impact: a low thud plus a broadband burst, then everything cuts out. */
   impact(force = 1) {
     if (!this.ready) return;
+    this._impactLatched = true;
     const ctx = this.ctx;
     const t = ctx.currentTime;
 
@@ -359,13 +370,24 @@ export class Audio {
     boom.stop(t + 1.5);
 
     // Silence the engine — the aircraft is gone.
-    for (const g of [this.rumbleGain, this.whineGain, this.effluxGain, this.reheatGain, this.windGain]) {
+    for (const g of [
+      this.rumbleGain,
+      this.whineGain,
+      this.effluxGain,
+      this.reheatGain,
+      this.windGain,
+      this.warnGain,
+    ]) {
       g.gain.cancelScheduledValues(t);
       g.gain.setTargetAtTime(0, t, 0.12);
     }
   }
 
   dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    this.ready = false;
+    this.music?.dispose?.();
     if (this.ctx) this.ctx.close();
   }
 }

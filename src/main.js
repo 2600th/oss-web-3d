@@ -3,12 +3,58 @@ import { Engine } from './core/Engine.js';
 import { Settings, guessTier, isTouchDevice } from './core/Settings.js';
 import { Input } from './core/Input.js';
 import { TouchControls } from './core/TouchControls.js';
+import {
+  installContextRecovery,
+  installPageLifecycle,
+  showBootFailure,
+  supportsWebGL2,
+} from './core/BootLifecycle.js';
 import { Game } from './game/Game.js';
 import { configureTerrain } from './world/Terrain.js';
 import { terrainHeight } from './world/heightfield.js';
 import { TERRAIN_NOISE_GLSL } from './world/terrainNoise.glsl.js';
 
+/**
+ * Diagnostic log, installed before anything else runs.
+ *
+ * There is no automated GLSL compile check in this project -- `npm run check` is
+ * a lint for backticks and reversed-edge smoothstep, nothing more -- so a broken
+ * shader surfaces only as a console warning and a black screen. The screenshot
+ * harness drives the page from outside and cannot see messages that were emitted
+ * before it attached, which is exactly when shader compilation happens. Buffering
+ * them here means __audit() can report them after the fact.
+ */
 const canvas = document.getElementById('viewport');
+if (!supportsWebGL2()) {
+  showBootFailure('WebGL2 is unavailable. Update your browser or graphics driver, then reload.');
+} else {
+  await start(canvas);
+}
+
+async function start(canvas) {
+const __log = [];
+const restoreConsole = [];
+if (import.meta.env.DEV) {
+  for (const level of ['error', 'warn']) {
+    const original = console[level].bind(console);
+    restoreConsole.push(() => { console[level] = original; });
+    console[level] = (...args) => {
+      if (__log.length < 200) __log.push({ level, text: args.map(String).join(' ').slice(0, 600) });
+      original(...args);
+    };
+  }
+}
+const onError = (e) => {
+  if (import.meta.env.DEV) __log.push({ level: 'error', text: String(e.message) });
+  showBootFailure('The experience encountered an error. Reload to try again.');
+};
+const onRejection = (e) => {
+  if (import.meta.env.DEV) __log.push({ level: 'error', text: `unhandled rejection: ${String(e.reason)}` });
+  showBootFailure('The experience could not continue. Reload to try again.');
+};
+window.addEventListener('error', onError);
+window.addEventListener('unhandledrejection', onRejection);
+
 const settings = new Settings();
 const engine = new Engine(canvas, settings);
 if (!settings.autoDetected) settings.setTier(guessTier(engine.renderer));
@@ -36,17 +82,35 @@ if (isTouchDevice()) {
   window.addEventListener('touchend', unlock, { once: true });
 }
 
-const debug = document.createElement('div');
-debug.id = 'debug';
-document.body.appendChild(debug);
-if (new URLSearchParams(location.search).has('debug')) debug.classList.add('show');
+const debug = import.meta.env.DEV ? document.createElement('div') : null;
+if (debug) {
+  debug.id = 'debug';
+  document.body.appendChild(debug);
+  if (new URLSearchParams(location.search).has('debug')) debug.classList.add('show');
+}
 
-await game.load();
+try {
+  await game.load();
+} catch (error) {
+  console.error('[boot] load failed', error);
+  showBootFailure('Essential game resources failed to load. Check your connection and reload.');
+  window.removeEventListener('error', onError);
+  window.removeEventListener('unhandledrejection', onRejection);
+  for (const restore of restoreConsole) restore();
+  touch.dispose();
+  input.dispose();
+  game.dispose();
+  engine.dispose();
+  return;
+}
 
 // The frame loop must be running *before* the title sequence starts: begin()
 // does not resolve until the player skips or the last card fades, so awaiting
 // it here would leave the page on a single static frame with no render loop.
+let running = true;
+let frameId = 0;
 function frame() {
+  if (!running) return;
   engine.timer.update();
   // Bound the step: returning from a background tab hands back a delta of
   // several seconds, which would teleport the aircraft through a mountain.
@@ -54,7 +118,7 @@ function frame() {
   game.update(dt);
   engine.render(dt);
 
-  if (debug.classList.contains('show')) {
+  if (debug?.classList.contains('show')) {
     const f = game.flight;
     debug.textContent =
       `${engine.fps.toFixed(0)} fps  scale ${engine.renderScale.toFixed(2)}  ${settings.tierName}\n` +
@@ -65,15 +129,39 @@ function frame() {
       `objectives ${game.mission.captured}/${game.mission.posts.length}`;
   }
 
-  requestAnimationFrame(frame);
+  frameId = requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
-game.begin();
+frameId = requestAnimationFrame(frame);
+void game.begin().catch((error) => {
+  console.error('[boot] start failed', error);
+  showBootFailure('The sortie could not start. Reload to try again.');
+});
+
+let disposeDevResources = () => {};
+const removeContextRecovery = installContextRecovery(
+  canvas,
+  () => showBootFailure('Graphics context lost. Waiting for recovery…'),
+  () => showBootFailure('Graphics context restored. Reload to resume safely.'),
+);
+installPageLifecycle(() => {
+  running = false;
+  cancelAnimationFrame(frameId);
+  removeContextRecovery();
+  window.removeEventListener('error', onError);
+  window.removeEventListener('unhandledrejection', onRejection);
+  for (const restore of restoreConsole) restore();
+  disposeDevResources();
+  touch.dispose();
+  input.dispose();
+  game.dispose();
+  engine.dispose();
+});
 
 // ---------------------------------------------------------------------------
 // Development hooks. Not part of the gameplay path — used by the screenshot
 // driven iteration loop, the GPU/CPU terrain agreement check, and profiling.
 
+if (import.meta.env.DEV) {
 window.__verifyTerrain = (level = 3) => game.terrain.verifyAgainst(terrainHeight, level);
 
 /**
@@ -307,6 +395,11 @@ const probeQuad = new THREE.Mesh(
 );
 probeQuad.frustumCulled = false;
 probeScene.add(probeQuad);
+disposeDevResources = () => {
+  probeQuad.material?.dispose?.();
+  probeQuad.geometry.dispose();
+  probeTarget.dispose();
+};
 
 window.__probeGLSL = (expr, x, z) => {
   probeQuad.material?.dispose?.();
@@ -329,4 +422,92 @@ window.__probeGLSL = (expr, x, z) => {
   return Array.from(out);
 };
 
+/**
+ * One-call health report for the screenshot harness.
+ *
+ * Forces every material in the scene to compile first. Three.js compiles lazily
+ * on first draw, so a shader that only appears in a rare state -- the crash
+ * effect, a cloud layer at a particular altitude -- would otherwise report clean
+ * right up until the moment it is needed. renderer.compile() walks the graph and
+ * surfaces those failures now, into the buffered log above.
+ */
+window.__audit = async () => {
+  engine.renderer.compile(engine.scene, engine.camera);
+  await new Promise((r) => requestAnimationFrame(r));
+  const gl = engine.renderer.getContext();
+  const glErrors = [];
+  for (let i = 0; i < 8; i++) {
+    const e = gl.getError();
+    if (e === gl.NO_ERROR) break;
+    glErrors.push(e);
+  }
+  return {
+    log: __log.filter((m) => !/DevTools|favicon/.test(m.text)),
+    glErrors,
+    programs: engine.renderer.info.programs?.length ?? 0,
+    calls: engine.renderer.info.render.calls,
+    triangles: engine.renderer.info.render.triangles,
+    state: game.state,
+    tier: settings.tierName,
+  };
+};
+
+/**
+ * Luminance and chroma statistics of the frame currently in the back buffer.
+ *
+ * The overhaul's headline problem was measured this way rather than judged by
+ * eye: the original image spanned only luminance 78..222 with a 2.9% spread
+ * between its mean channels, which is the numeric signature of "grey milk".
+ * Keeping the measurement in the product means the claim stays checkable.
+ */
+window.__stats = (stride = 7) => {
+  const gl = engine.renderer.getContext();
+  const w = gl.drawingBufferWidth;
+  const h = gl.drawingBufferHeight;
+  const px = new Uint8Array(w * h * 4);
+  engine.composer.render(1 / 60);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+  const hist = new Array(16).fill(0);
+  let n = 0;
+  let sum = 0;
+  let min = 255;
+  let max = 0;
+  let rs = 0;
+  let gs = 0;
+  let bs = 0;
+  let satSum = 0;
+  for (let i = 0; i < px.length; i += 4 * stride) {
+    const r = px[i];
+    const g = px[i + 1];
+    const b = px[i + 2];
+    const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    hist[Math.min(15, L >> 4)]++;
+    sum += L;
+    n++;
+    if (L < min) min = L;
+    if (L > max) max = L;
+    rs += r;
+    gs += g;
+    bs += b;
+    const mx = Math.max(r, g, b);
+    satSum += mx > 0 ? (mx - Math.min(r, g, b)) / mx : 0;
+  }
+  const mean = [rs / n, gs / n, bs / n];
+  return {
+    size: [w, h],
+    meanLuma: +(sum / n).toFixed(1),
+    min: +min.toFixed(1),
+    max: +max.toFixed(1),
+    shadows: +((hist.slice(0, 6).reduce((a, v) => a + v, 0) / n) * 100).toFixed(1),
+    midPile: +((hist.slice(10, 13).reduce((a, v) => a + v, 0) / n) * 100).toFixed(1),
+    histogram16: hist.map((v) => +((v / n) * 100).toFixed(1)),
+    meanRGB: mean.map((v) => +v.toFixed(1)),
+    channelSpread: +(((Math.max(...mean) - Math.min(...mean)) / 255) * 100).toFixed(1),
+    meanSaturation: +((satSum / n) * 100).toFixed(1),
+  };
+};
+
 Object.assign(window, { THREE, engine, game, settings, input });
+}
+}

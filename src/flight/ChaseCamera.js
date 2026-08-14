@@ -46,9 +46,21 @@ export class ChaseCamera {
     this._shakeTime = 0;
     this._initialised = false;
     this._fov = this.baseFov;
+    // The FOV value this camera last wrote. NaN until the first update, so the
+    // first frame always counts as a repossession and snaps. See update().
+    this._fovApplied = NaN;
     this._rollLag = 0;
   }
 
+  /**
+   * Cut to the aircraft. Every damped quantity is snapped, not just the boom.
+   *
+   * Clearing _initialised used to snap the offset only, which left `lookAt` at
+   * wherever it was — (0, 0, 0) on the first sortie — while the aim point is
+   * 21 km out over the range. At the 9.0 lambda used below that is a ~0.4 s
+   * whip across the entire world on every launch, which is the first thing the
+   * player sees. A cut is not a transition and nothing about it should ease.
+   */
   reset(flight) {
     this._initialised = false;
     this.update(0.016, flight, 0);
@@ -60,6 +72,7 @@ export class ChaseCamera {
    * @param {number} extraShake  0..1 from impacts, terrain proximity, reheat
    */
   update(dt, flight, extraShake = 0) {
+    const cut = !this._initialised;
     const speed = flight.airspeed;
     const speedT = THREE.MathUtils.clamp((speed - 120) / 380, 0, 1);
 
@@ -84,12 +97,8 @@ export class ChaseCamera {
       .addScaledVector(_boom, -dist)
       .addScaledVector(_up, this.height + 2.2 * speedT);
 
-    if (!this._initialised) {
-      this.offset.copy(_target);
-      this._initialised = true;
-    } else {
-      this.offset.lerp(_target, 1 - Math.exp(-5.5 * dt));
-    }
+    if (cut) this.offset.copy(_target);
+    else this.offset.lerp(_target, 1 - Math.exp(-5.5 * dt));
 
     this.position.copy(flight.position).add(this.offset);
 
@@ -114,11 +123,13 @@ export class ChaseCamera {
       .copy(flight.position)
       .addScaledVector(flight.forward, this.lookAhead * (0.55 + 0.75 * speedT))
       .addScaledVector(flight.up, 2.0);
-    this.lookAt.lerp(_look, 1 - Math.exp(-9.0 * dt));
+    if (cut) this.lookAt.copy(_look);
+    else this.lookAt.lerp(_look, 1 - Math.exp(-9.0 * dt));
 
     // A touch of roll lag: the camera rolls into a bank slightly after the jet.
     const bank = Math.atan2(flight.right.y, flight.up.y);
-    this._rollLag += (bank - this._rollLag) * (1 - Math.exp(-4.2 * dt));
+    if (cut) this._rollLag = bank;
+    else this._rollLag += (bank - this._rollLag) * (1 - Math.exp(-4.2 * dt));
     this.upVector.copy(UP_WORLD).applyAxisAngle(flight.forward, -this._rollLag * 0.55).normalize();
 
     // ---- vibration ---------------------------------------------------------
@@ -130,7 +141,8 @@ export class ChaseCamera {
     const reheatShake = flight.reheat ? 0.22 : 0;
     const proximity = THREE.MathUtils.clamp(1 - flight.agl / 260, 0, 1) * 0.45;
     const amount = Math.min(1, gShake + speedShake + reheatShake + proximity + extraShake);
-    this.shake += (amount - this.shake) * (1 - Math.exp(-7 * dt));
+    if (cut) this.shake = amount;
+    else this.shake += (amount - this.shake) * (1 - Math.exp(-7 * dt));
 
     this._shakeTime += dt * (26 + 40 * speedT);
     const s = this.shake * 0.5;
@@ -148,15 +160,34 @@ export class ChaseCamera {
 
     // Speed-linked FOV. Small — 16 degrees over the whole range — because the
     // effect works best when the player never consciously notices it.
+    //
+    // The camera is shared, and this class is not always the one holding it:
+    // the game stops calling update() while the recon camera is up and drives
+    // the same PerspectiveCamera down to a zoom step as narrow as 8.5 degrees,
+    // and the title sequence parks it at 42. So `_fov` cannot be trusted as the
+    // camera's state — after any of those it describes a lens nobody is
+    // wearing, and easing from it wrote a 50-degree jump into a single frame on
+    // every recon release.
+    //
+    // Detect the repossession by comparing the camera against the value we last
+    // wrote, and cut rather than ease. Easing from the camera's actual FOV was
+    // the other candidate and is worse in the one place it matters: releasing
+    // recon already hard-cuts the viewpoint 26 m back behind the aircraft, and
+    // sliding a telephoto open over a second and a half on top of that reads as
+    // a lens fault rather than as a transition.
+    const repossessed = this.camera.fov !== this._fovApplied;
     const targetFov =
       this.baseFov + this.maxFovBoost * Math.pow(speedT, 1.4) + (flight.reheat ? 2.2 : 0);
-    this._fov += (targetFov - this._fov) * (1 - Math.exp(-2.6 * dt));
+    if (cut || repossessed) this._fov = targetFov;
+    else this._fov += (targetFov - this._fov) * (1 - Math.exp(-2.6 * dt));
     if (Math.abs(this.camera.fov - this._fov) > 0.01) {
       this.camera.fov = this._fov;
       this.camera.updateProjectionMatrix();
     }
+    this._fovApplied = this.camera.fov;
 
     this.camera.updateMatrixWorld();
+    this._initialised = true;
   }
 }
 

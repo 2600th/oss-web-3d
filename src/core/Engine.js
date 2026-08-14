@@ -4,15 +4,24 @@ import {
   EffectPass,
   RenderPass,
   BloomEffect,
-  ToneMappingEffect,
-  ToneMappingMode,
-  VignetteEffect,
   SMAAEffect,
   SMAAPreset,
   BlendFunction,
 } from 'postprocessing';
 import { DitherEffect } from './DitherEffect.js';
-import { CloudVolume } from '../world/CloudVolume.js';
+import { CinematicGradeEffect } from '../fx/post/CinematicGradeEffect.js';
+import { LensEdgeEffect } from '../fx/post/LensEdgeEffect.js';
+import { AdaptiveExposureEffect, createFilmicToneMapping } from '../fx/post/AutoExposure.js';
+import {
+  configureFinalOutput,
+  normalizeRenderOptions,
+  setPassEnabled,
+} from '../fx/post/PostPipeline.js';
+import { OutputEffectPass } from '../fx/post/OutputEffectPass.js';
+import { SunShaftEffect } from '../fx/post/SunShaftEffect.js';
+import { MotionBlurEffect } from '../fx/post/MotionBlurEffect.js';
+import { HeatDistortionEffect } from '../fx/post/HeatDistortionEffect.js';
+import { LensArtifactsEffect } from '../fx/post/LensArtifactsEffect.js';
 
 /**
  * Renderer, camera, post chain and the frame loop.
@@ -60,28 +69,76 @@ export class Engine {
       blendFunction: BlendFunction.ADD,
       // Restrained on purpose: only the sun disc, afterburner and hard snow
       // glints should ever bloom.
-      luminanceThreshold: 0.88,
-      luminanceSmoothing: 0.24,
+      luminanceThreshold: 1.08,
+      luminanceSmoothing: 0.18,
       mipmapBlur: true,
-      intensity: 0.72,
-      radius: 0.62,
+      intensity: 0.34,
+      radius: 0.58,
+      levels: 6,
     });
 
-    this.toneMapping = new ToneMappingEffect({
-      mode: ToneMappingMode.AGX,
-      resolution: 256,
-      whitePoint: 8.0,
-      middleGrey: 0.45,
-    });
-
-    this.vignette = new VignetteEffect({ offset: 0.32, darkness: 0.44 });
-
+    this.exposure = new AdaptiveExposureEffect();
+    this.toneMapping = createFilmicToneMapping();
+    this.autoExposure = this.exposure;
+    this.grade = new CinematicGradeEffect();
+    this.lensEdge = new LensEdgeEffect();
+    this.sunShafts = new SunShaftEffect();
+    this.motionEffect = new MotionBlurEffect();
+    this.heatDistortion = new HeatDistortionEffect();
+    this.lensArtifacts = new LensArtifactsEffect();
     this.smaa = new SMAAEffect({ preset: SMAAPreset.MEDIUM });
 
     // Slightly above one 8-bit step. The sky is a near-flat gradient across
     // most of the frame and bands hard without this.
     this.dither = new DitherEffect(1.4 / 255);
 
+    // Every convolution stage owns a buffer boundary. Besides preventing
+    // convolution-effect merge conflicts, this makes bloom read the cloud,
+    // shaft and lens radiance produced by preceding passes.
+    this.radiancePass = new EffectPass(this.camera, this.lensArtifacts);
+    this.motionPass = new EffectPass(this.camera, this.motionEffect);
+    this.heatPass = new EffectPass(this.camera, this.heatDistortion);
+    this.shaftPass = new EffectPass(this.camera, this.sunShafts);
+    this.bloomPass = new EffectPass(this.camera, this.bloom);
+    this.tonePass = new EffectPass(this.camera, this.exposure, this.toneMapping);
+    this.lensPass = new EffectPass(this.camera, this.lensEdge);
+    this.finishPass = new OutputEffectPass(this.camera, this.grade, this.smaa, this.dither);
+    this.composer.addPass(this.radiancePass);
+    this.composer.addPass(this.motionPass);
+    this.composer.addPass(this.heatPass);
+    this.composer.addPass(this.shaftPass);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(this.tonePass);
+    this.composer.addPass(this.lensPass);
+    this.composer.addPass(this.finishPass);
+    this.composer.autoRenderToScreen = false;
+    this._postPasses = [
+      this.radiancePass,
+      this.motionPass,
+      this.heatPass,
+      this.shaftPass,
+      this.bloomPass,
+      this.tonePass,
+      this.lensPass,
+      this.finishPass,
+    ];
+    this._ownedEffects = new Set([
+      this.bloom,
+      this.exposure,
+      this.toneMapping,
+      this.lensEdge,
+      this.grade,
+      this.smaa,
+      this.dither,
+      this.sunShafts,
+      this.motionEffect,
+      this.heatDistortion,
+      this.lensArtifacts,
+    ]);
+    this._initializedPostEffects = new WeakSet(this._ownedEffects);
+    // Kept as a compatibility alias for diagnostics that inspect the original
+    // single-pass engine. Rendering should always go through composer.
+    this.effectPass = this.finishPass;
     this._buildEffectPass();
 
     // THREE.Clock is deprecated in r185 and warns on construction. Timer is the
@@ -103,25 +160,91 @@ export class Engine {
   }
 
   _buildEffectPass() {
-    if (this.effectPass) {
-      this.composer.removePass(this.effectPass);
-      this.effectPass.dispose();
-    }
     const tier = this.settings.tier;
-    const effects = [];
-    // Clouds first: they are scene radiance, so they must be in the image
-    // before bloom decides what is bright and before the tone curve is applied.
-    // Putting them after tone mapping would make them immune to exposure and
-    // let them bloom on their own midtones.
-    if (this.clouds) effects.push(this.clouds);
-    if (tier.bloom) effects.push(this.bloom);
-    effects.push(this.toneMapping, this.vignette);
-    if (tier.smaa) effects.push(this.smaa);
-    // Last, and after tone mapping: dither applied earlier gets compressed by
-    // the curve along with the signal, losing the amplitude it exists to keep.
-    effects.push(this.dither);
-    this.effectPass = new EffectPass(this.camera, ...effects);
-    this.composer.addPass(this.effectPass);
+    const radiance = this.clouds
+      ? [this.clouds, this.lensArtifacts]
+      : [this.lensArtifacts];
+
+    const lensEnabled = tier.name === 'medium' || tier.name === 'high';
+    this.grade.setQuality(tier);
+    this.lensEdge.amount = this.grade.chromaticAberration;
+    this.bloom.intensity = tier.name === 'high' ? 0.34 : 0.26;
+    this.radiancePass.setEffects(radiance);
+    this.motionPass.setEffects([this.motionEffect]);
+    this.heatPass.setEffects([this.heatDistortion]);
+    this.shaftPass.setEffects([this.sunShafts]);
+    this.bloomPass.setEffects([this.bloom]);
+    this.tonePass.setEffects([this.exposure, this.toneMapping]);
+    this.lensPass.setEffects([this.lensEdge]);
+    this.finishPass.setEffects(tier.smaa
+      ? [this.grade, this.smaa, this.dither]
+      : [this.grade, this.dither]);
+
+    // Settings can change after initialization. Recompiling updates effect
+    // listeners and shader composition without disposing reusable effects.
+    for (const pass of this._postPasses) {
+      if (pass.renderer) pass.recompile();
+    }
+
+    this.radiancePass.enabled = Boolean(this.clouds) || this.lensArtifacts.visibility > 0;
+    this.motionPass.enabled = lensEnabled && (this.motionEffect.amount ?? 1) > 0;
+    this.heatPass.enabled = lensEnabled && (this.heatDistortion.amount ?? 1) > 0;
+    this.shaftPass.enabled = lensEnabled && (this.sunShafts.visibility ?? 1) > 0;
+    this.bloomPass.enabled = Boolean(tier.bloom);
+    this.tonePass.enabled = true;
+    this.lensPass.enabled = lensEnabled;
+    this.finishPass.enabled = true;
+    configureFinalOutput(this.composer.passes, this.finishPass, null);
+
+    // A depth-reading effect can be attached after the pass was added. The
+    // composer normally allocates its stable depth texture only in addPass(),
+    // so dynamic cloud/shaft hooks must promote it here as well.
+    if (this.radiancePass.needsDepthTexture && this.composer.stableDepthTexture === null) {
+      this.composer.createDepthTexture();
+      for (const pass of this.composer.passes) {
+        pass.setDepthTexture(this.composer.stableDepthTexture);
+      }
+    } else if (
+      this.composer.stableDepthTexture !== null
+      && !this.composer.passes.some((pass) => pass.needsDepthTexture)
+    ) {
+      this.composer.deleteDepthTexture();
+    }
+  }
+
+  _initializePostEffect(effect) {
+    if (!effect || this._initializedPostEffects.has(effect)) return;
+    const gl = this.renderer.getContext();
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    effect.initialize(this.renderer, gl.getContextAttributes().alpha, this.composer.inputBuffer.texture.type);
+    effect.setSize(size.width, size.height);
+    this._initializedPostEffects.add(effect);
+  }
+
+  _releaseEffect(effect) {
+    if (!effect || !this._ownedEffects.has(effect)) return;
+    const stillUsed = [
+      this.clouds,
+      this.sunShafts,
+      this.motionEffect,
+      this.heatDistortion,
+      this.lensArtifacts,
+    ].includes(effect);
+    if (stillUsed) return;
+    this._ownedEffects.delete(effect);
+    effect.dispose();
+  }
+
+  _replaceEffect(property, effect, factory, takeOwnership = true) {
+    const previous = this[property];
+    const next = effect ?? factory();
+    if (previous === next) return previous;
+    this[property] = next;
+    this._initializePostEffect(next);
+    if (takeOwnership || effect == null) this._ownedEffects.add(next);
+    this._buildEffectPass();
+    this._releaseEffect(previous);
+    return next;
   }
 
   /**
@@ -131,10 +254,96 @@ export class Engine {
    * installed after construction rather than built here. Rebuilding the effect
    * pass is what actually inserts them into the chain.
    */
-  setClouds(clouds) {
-    this.clouds = clouds;
-    this.clouds.setQuality(this.settings.tier);
+  setClouds(clouds, { takeOwnership = true } = {}) {
+    const previous = this.clouds;
+    if (previous === clouds) return;
+    this.clouds = clouds ?? null;
+    this._initializePostEffect(this.clouds);
+    if (takeOwnership && this.clouds) this._ownedEffects.add(this.clouds);
+    if (this.clouds) this.clouds.setQuality(this.settings.tier);
     this._buildEffectPass();
+    this._releaseEffect(previous);
+  }
+
+  /**
+   * Install optional post effects supplied by the atmosphere/flight streams.
+   * Any omitted key keeps its current value; pass `null` to restore the owned
+   * built-in component. Ownership transfers by default and can be declined.
+   * Effects are ordered as HDR scene radiance before bloom and tone mapping.
+   */
+  setPostEffectHooks(hooks = {}, { takeOwnership = true } = {}) {
+    if ('sunShafts' in hooks) {
+      this._replaceEffect('sunShafts', hooks.sunShafts, () => new SunShaftEffect(), takeOwnership);
+    }
+    if ('motion' in hooks) {
+      this._replaceEffect('motionEffect', hooks.motion, () => new MotionBlurEffect(), takeOwnership);
+    }
+    if ('heatDistortion' in hooks) {
+      this._replaceEffect(
+        'heatDistortion',
+        hooks.heatDistortion,
+        () => new HeatDistortionEffect(),
+        takeOwnership,
+      );
+    }
+  }
+
+  setSunShafts(effect) {
+    this.setPostEffectHooks({ sunShafts: effect });
+  }
+
+  setSunScreenPosition(x, y, visibility = 1) {
+    this.sunShafts.setSunPosition?.(x, y, visibility);
+    this.lensArtifacts.setSunPosition(x, y, visibility);
+    const desktop = this.settings.tier.name === 'medium' || this.settings.tier.name === 'high';
+    setPassEnabled(this.shaftPass, desktop && (this.sunShafts.visibility ?? visibility) > 0);
+    setPassEnabled(this.radiancePass, Boolean(this.clouds) || this.lensArtifacts.visibility > 0);
+  }
+
+  setMotionBlur(x, y, amount = 1) {
+    this.motionEffect.setVelocity?.(x, y);
+    if ('amount' in this.motionEffect) this.motionEffect.amount = amount;
+    const desktop = this.settings.tier.name === 'medium' || this.settings.tier.name === 'high';
+    setPassEnabled(this.motionPass, desktop && (this.motionEffect.amount ?? amount) > 0);
+  }
+
+  setHeatDistortion(amount) {
+    if ('amount' in this.heatDistortion) this.heatDistortion.amount = amount;
+    const desktop = this.settings.tier.name === 'medium' || this.settings.tier.name === 'high';
+    setPassEnabled(this.heatPass, desktop && (this.heatDistortion.amount ?? amount) > 0);
+  }
+
+  setLensArtifacts(flareOrOptions = this.lensArtifacts.flare, dirt = this.lensArtifacts.dirt) {
+    const options = typeof flareOrOptions === 'object' && flareOrOptions !== null
+      ? flareOrOptions
+      : null;
+    const flare = options?.flare ?? flareOrOptions;
+    dirt = options?.dirt ?? dirt;
+    this.lensArtifacts.flare = flare;
+    this.lensArtifacts.dirt = dirt;
+    setPassEnabled(this.radiancePass, Boolean(this.clouds) || this.lensArtifacts.visibility > 0);
+  }
+
+  /** Smoothly adapt scene exposure to an externally chosen EV target. */
+  setExposure(ev, adaptationRate) {
+    this.exposure.setBias(ev, adaptationRate);
+  }
+
+  get exposureEV() {
+    return this.exposure.biasEV;
+  }
+
+  get autoExposureSettings() {
+    return {
+      enabled: true,
+      source: 'rendered-luminance',
+      minLuminance: this.exposure.minLuminance,
+      adaptationRate: this.exposure.adaptationRate,
+      minEV: this.exposure.minEV,
+      maxEV: this.exposure.maxEV,
+      maxGain: 2 ** this.exposure.maxEV,
+      compression: 'AGX',
+    };
   }
 
   applySettings() {
@@ -222,12 +431,85 @@ export class Engine {
 
   render(dt) {
     this._adapt(dt);
+    configureFinalOutput(this.composer.passes, this.finishPass, null);
     this.composer.render(dt);
+  }
+
+  /**
+   * Render an un-postprocessed scene colour/depth source for local material
+   * refraction. The excluded object is hidden only for this synchronous draw,
+   * preventing a water surface from recursively sampling itself.
+   */
+  renderSceneToTarget(target, scene = this.scene, camera = this.camera, excludedObject = null) {
+    if (!target?.isWebGLRenderTarget) {
+      throw new TypeError('renderSceneToTarget requires a WebGLRenderTarget');
+    }
+    const previousTarget = this.renderer.getRenderTarget();
+    const previousVisible = excludedObject?.visible;
+    try {
+      if (excludedObject) excludedObject.visible = false;
+      this.renderer.setRenderTarget(target);
+      this.renderer.clear();
+      this.renderer.render(scene, camera);
+      return target;
+    } finally {
+      if (excludedObject) excludedObject.visible = previousVisible;
+      this.renderer.setRenderTarget(previousTarget);
+    }
+  }
+
+  /**
+   * Render the complete cloud/bloom/metering/finish chain into a caller-owned
+   * target. This is intentionally synchronous so a reconnaissance capture can
+   * read the target immediately after it returns.
+   */
+  renderToTarget(
+    target,
+    cameraOrOptions = {},
+  ) {
+    if (!target?.isWebGLRenderTarget) {
+      throw new TypeError('renderToTarget requires a WebGLRenderTarget');
+    }
+
+    const { scene, camera, deltaTime } = normalizeRenderOptions(cameraOrOptions, {
+      scene: this.scene,
+      camera: this.camera,
+      deltaTime: 0,
+    });
+    const previousTarget = this.renderer.getRenderTarget();
+    const previousPixelRatio = this.renderer.getPixelRatio();
+    const previousCloudCamera = this.clouds?.camera;
+
+    this.composer.setMainScene(scene);
+    this.composer.setMainCamera(camera);
+    if (this.clouds?.camera) this.clouds.camera = camera;
+    this.renderer.setPixelRatio(1);
+    this.composer.setSize(target.width, target.height, false);
+    configureFinalOutput(this.composer.passes, this.finishPass, target);
+
+    try {
+      this.composer.render(deltaTime);
+      return target;
+    } finally {
+      configureFinalOutput(this.composer.passes, this.finishPass, null);
+      this.composer.setMainScene(this.scene);
+      this.composer.setMainCamera(this.camera);
+      if (this.clouds && previousCloudCamera) this.clouds.camera = previousCloudCamera;
+      this.renderer.setPixelRatio(previousPixelRatio);
+      this.resize();
+      this.renderer.setRenderTarget(previousTarget);
+    }
   }
 
   dispose() {
     window.removeEventListener('resize', this._onResize);
+    // EffectPass owns every effect it currently references. Detaching first
+    // lets Engine dispose only resources whose ownership was explicitly
+    // transferred, while caller-owned replacements remain untouched.
+    for (const pass of this._postPasses) pass.setEffects([]);
     this.composer.dispose();
+    for (const effect of this._ownedEffects) effect.dispose();
+    this._ownedEffects.clear();
     this.renderer.dispose();
   }
 }

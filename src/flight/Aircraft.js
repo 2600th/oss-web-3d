@@ -86,6 +86,7 @@ export class Aircraft {
 
     const gltf = await loader.loadAsync(url);
     const root = gltf.scene;
+    this._envMap = envMap;
 
     // Measure before touching anything.
     root.updateWorldMatrix(true, true);
@@ -175,48 +176,93 @@ export class Aircraft {
     return this;
   }
 
-  /**
-   * Engine plume: a stack of additive cones plus a bright core. Deliberately
-   * built from geometry rather than a sprite so it stays correct when the
-   * camera swings around the tail.
-   */
+  /** Bounded, depth-tested nozzle glow and afterburner volume. */
   _buildExhaust() {
     this.exhaust = new THREE.Group();
+    this.exhaust.name = 'bounded-afterburner';
     // Refined to the measured tail once the model loads.
     this.exhaust.position.set(0, 0.05, 6.6);
     this.group.add(this.exhaust);
+    this._exhaustTime = 0;
 
-    const cone = (radius, length, color, opacity) => {
-      const geometry = new THREE.ConeGeometry(radius, length, 18, 1, true);
-      geometry.rotateX(-Math.PI / 2);
+    const plume = (nearRadius, farRadius, length, color, opacity) => {
+      // A short frustum has a finite near and far radius. Unlike an uncapped
+      // cone it cannot put a triangle apex behind the chase camera and expand
+      // that triangle into a full-screen additive wedge.
+      const geometry = new THREE.CylinderGeometry(farRadius, nearRadius, length, 20, 3, true);
+      geometry.rotateX(Math.PI / 2);
       geometry.translate(0, 0, length * 0.5);
-      const material = new THREE.MeshBasicMaterial({
-        color,
+      const material = new THREE.ShaderMaterial({
         transparent: true,
-        opacity,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        depthTest: true,
         side: THREE.DoubleSide,
         toneMapped: false,
+        uniforms: {
+          uColor: { value: new THREE.Color(color) },
+          uOpacity: { value: opacity },
+          uTime: { value: 0 },
+        },
+        vertexShader: /* glsl */ `
+          precision highp float;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          precision highp float;
+          uniform vec3 uColor;
+          uniform float uOpacity;
+          uniform float uTime;
+          varying vec2 vUv;
+          void main() {
+            float axial = sin(3.14159265 * clamp(vUv.y, 0.0, 1.0));
+            float cell = 0.92 + 0.08 * sin(vUv.y * 36.0 - uTime * 28.0);
+            float rim = mix(0.72, 1.0, 1.0 - abs(vUv.x * 2.0 - 1.0));
+            float alpha = axial * cell * rim * uOpacity;
+            if (alpha < 0.006) discard;
+            // Three injects pc_fragColor and aliases gl_FragColor to it. A
+            // second user-declared output conflicts with the composer's
+            // stable-depth/MRT support render.
+            gl_FragColor = vec4(uColor * (0.75 + alpha), alpha);
+          }
+        `,
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.frustumCulled = false;
+      mesh.frustumCulled = true;
       this.exhaust.add(mesh);
       return mesh;
     };
 
-    // Sized off the real nozzle (about 0.9 m across). The plume only becomes
-    // long and blue-cored in reheat; at cruise it is a short, dim glow.
-    this.flameCore = cone(0.44, 1.5, 0xfff0d8, 0.95);
-    this.flameMid = cone(0.60, 3.2, 0xffa63a, 0.55);
-    this.flameOuter = cone(0.76, 6.0, 0x6f8cff, 0.24);
+    // All three volumes stop inside 5.2 m of the nozzle; the chase camera is
+    // outside that safety envelope even under its crash spring impulse.
+    this.flameCore = plume(0.39, 0.18, 1.35, 0xfff3d2, 0.88);
+    this.flameMid = plume(0.52, 0.16, 3.0, 0xff9938, 0.42);
+    this.flameOuter = plume(0.62, 0.24, 5.15, 0x668cff, 0.18);
+
+    const nozzleMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff9b52,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+    });
+    this.nozzleGlow = new THREE.Mesh(new THREE.TorusGeometry(0.43, 0.055, 8, 24), nozzleMaterial);
+    this.nozzleGlow.rotateX(Math.PI / 2);
+    this.nozzleGlow.position.z = 0.03;
+    this.exhaust.add(this.nozzleGlow);
 
     // Shock diamonds: small bright discs spaced down the plume, only visible in
     // reheat. Cheap, and instantly recognisable as an afterburner.
     this.diamonds = [];
     for (let i = 0; i < 4; i++) {
-      const geometry = new THREE.SphereGeometry(0.3, 10, 8);
-      geometry.scale(1, 1, 0.42);
+      const geometry = new THREE.OctahedronGeometry(0.27, 1);
+      geometry.scale(1, 1, 0.55);
       const material = new THREE.MeshBasicMaterial({
         color: 0xffe9c0,
         transparent: true,
@@ -226,8 +272,8 @@ export class Aircraft {
         toneMapped: false,
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.z = 2.1 + i * 1.65;
-      mesh.frustumCulled = false;
+      mesh.position.z = 1.35 + i * 1.05;
+      mesh.frustumCulled = true;
       this.exhaust.add(mesh);
       this.diamonds.push(mesh);
     }
@@ -239,21 +285,26 @@ export class Aircraft {
 
     const t = flight.throttleSmoothed;
     const reheat = THREE.MathUtils.clamp((t - 0.84) / 0.16, 0, 1);
-    // Flicker keeps the plume alive without ever pumping the bloom threshold.
-    const flicker = 0.94 + 0.06 * Math.sin(performance.now() * 0.045);
+    this._exhaustTime += dt;
+    // Deterministic frame-clock flicker: no wall-clock discontinuity after a
+    // pause and no browser-global dependency in tests.
+    const flicker = 0.94 + 0.06 * Math.sin(this._exhaustTime * 31.0);
 
     // Below about half throttle there is essentially nothing to see, which is
     // what makes lighting the burner feel like an event.
     const heat = THREE.MathUtils.clamp((t - 0.35) / 0.65, 0, 1);
 
     this.flameCore.scale.set(0.72 + 0.28 * heat, 0.72 + 0.28 * heat, 0.5 + 0.7 * heat + reheat * 1.5);
-    this.flameCore.material.opacity = (0.10 + 0.42 * heat + 0.35 * reheat) * flicker;
+    this.flameCore.material.uniforms.uOpacity.value = (0.08 + 0.40 * heat + 0.34 * reheat) * flicker;
+    this.flameCore.material.uniforms.uTime.value = this._exhaustTime;
 
     this.flameMid.scale.set(0.62 + 0.38 * heat, 0.62 + 0.38 * heat, 0.35 + 0.5 * heat + reheat * 1.9);
-    this.flameMid.material.opacity = (0.04 + 0.18 * heat + 0.30 * reheat) * flicker;
+    this.flameMid.material.uniforms.uOpacity.value = (0.035 + 0.16 * heat + 0.27 * reheat) * flicker;
+    this.flameMid.material.uniforms.uTime.value = this._exhaustTime;
 
     this.flameOuter.scale.set(0.55 + 0.45 * reheat, 0.55 + 0.45 * reheat, 0.3 + 1.4 * reheat);
-    this.flameOuter.material.opacity = 0.02 + 0.24 * reheat;
+    this.flameOuter.material.uniforms.uOpacity.value = 0.012 + 0.19 * reheat;
+    this.flameOuter.material.uniforms.uTime.value = this._exhaustTime;
     this.flameOuter.visible = reheat > 0.01;
 
     for (let i = 0; i < this.diamonds.length; i++) {
@@ -262,11 +313,29 @@ export class Aircraft {
       d.scale.setScalar(0.55 + 0.45 * reheat);
       d.visible = reheat > 0.02;
     }
-
-    void dt;
+    this.nozzleGlow.material.opacity = (0.08 + heat * 0.28 + reheat * 0.20) * flicker;
   }
 
   addTo(scene) {
     scene.add(this.group);
+  }
+
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    this.group.traverse((object) => {
+      if (!object.isMesh) return;
+      object.geometry?.dispose?.();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material) continue;
+        for (const value of Object.values(material)) {
+          if (value?.isTexture && value !== this._envMap) value.dispose();
+        }
+        material.dispose?.();
+      }
+    });
+    this.group.removeFromParent();
+    this.group.clear();
   }
 }

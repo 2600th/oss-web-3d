@@ -57,6 +57,16 @@ export class Music {
     this._duck = 1;
     // Live voices, so a cue change can silence what the previous one booked.
     this._voices = new Set();
+    this._timeouts = new Set();
+  }
+
+  _later(fn, delay) {
+    const id = setTimeout(() => {
+      this._timeouts.delete(id);
+      fn();
+    }, Math.max(0, delay));
+    this._timeouts.add(id);
+    return id;
   }
 
   /**
@@ -70,7 +80,7 @@ export class Music {
   _register(amp, sources, endsAt) {
     const entry = { amp, sources };
     this._voices.add(entry);
-    setTimeout(() => this._voices.delete(entry), (endsAt - this.ctx.currentTime + 0.5) * 1000);
+    this._later(() => this._voices.delete(entry), (endsAt - this.ctx.currentTime + 0.5) * 1000);
   }
 
   /** Fade out and stop everything the previous cue scheduled. */
@@ -157,6 +167,11 @@ export class Music {
       for (const e of events) this._voice(e, this._next + (e.offset ?? 0));
       this._next += this.cue.stepSeconds;
       this._step++;
+      if (this.cue.steps && this._step >= this.cue.steps) {
+        clearInterval(this._timer);
+        this._timer = null;
+        break;
+      }
     }
   }
 
@@ -237,7 +252,7 @@ export class Music {
     burst.start(when);
     burst.stop(when + period * 1.5);
     this._register(amp, [burst], when + seconds);
-    setTimeout(() => {
+    this._later(() => {
       try {
         delay.disconnect();
         colour.disconnect();
@@ -414,6 +429,11 @@ export class Music {
     this.stop(0.05);
     clearInterval(this._timer);
     this._timer = null;
+    for (const id of this._timeouts) clearTimeout(id);
+    this._timeouts.clear();
+    this._silenceVoices(0.05);
+    this.tone.disconnect();
+    this.out.disconnect();
   }
 }
 
@@ -478,6 +498,7 @@ const loss = {
   ducks: false,
   fadeIn: 0.9,
   stepSeconds: 2.1,
+  steps: 8,
   at(step) {
     const out = [];
     if (step === 0) {
@@ -509,6 +530,7 @@ const ret = {
   ducks: false,
   fadeIn: 1.1,
   stepSeconds: 1.9,
+  steps: 9,
   at(step) {
     const out = [];
     if (step === 0) {

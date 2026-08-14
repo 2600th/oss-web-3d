@@ -1,0 +1,681 @@
+import { ATMOSPHERE_GLSL, ATMOSPHERE_UNIFORMS_GLSL } from '../atmosphere.glsl.js';
+import { CLOUD_GLSL } from '../clouds.glsl.js';
+import { terrainHeight } from '../heightfield.js';
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const mix = (a, b, t) => a + (b - a) * t;
+const smoothstep = (a, b, v) => {
+  const t = clamp01((v - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
+const DEFAULT_SUN_DIRECTION = [
+  Math.cos(46 * Math.PI / 180) * Math.sin(128 * Math.PI / 180),
+  Math.sin(46 * Math.PI / 180),
+  Math.cos(46 * Math.PI / 180) * Math.cos(128 * Math.PI / 180),
+];
+
+function normalize3(value) {
+  const length = Math.max(Math.hypot(...value), 1e-12);
+  return value.map((component) => component / length);
+}
+
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+const fract = (v) => v - Math.floor(v);
+const terrainHeightCache = new Map();
+
+function cachedTerrainHeight(x, z) {
+  const key = `${x},${z}`;
+  const cached = terrainHeightCache.get(key);
+  if (cached !== undefined) return cached;
+  const height = terrainHeight(x, z);
+  if (terrainHeightCache.size >= 32768) terrainHeightCache.clear();
+  terrainHeightCache.set(key, height);
+  return height;
+}
+
+/** CPU semantic mirror of the production GLSL hash21 function. */
+export function terrainMaterialHash(x, z) {
+  let px = fract(x * 0.1031);
+  let py = fract(z * 0.1030);
+  let pz = fract(x * 0.0973);
+  const product = px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+  px += product;
+  py += product;
+  pz += product;
+  return fract((px + py) * pz);
+}
+
+function terrainMaterialNoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx0 = x - ix, fz0 = z - iz;
+  const fx = fx0 * fx0 * (3 - 2 * fx0);
+  const fz = fz0 * fz0 * (3 - 2 * fz0);
+  const a = terrainMaterialHash(ix, iz), b = terrainMaterialHash(ix + 1, iz);
+  const c = terrainMaterialHash(ix, iz + 1), d = terrainMaterialHash(ix + 1, iz + 1);
+  return (a + (b - a) * fx) * (1 - fz) + (c + (d - c) * fx) * fz;
+}
+
+/** CPU mirror of ridgedGeology(vec3 world), including GLSL matrix order. */
+export function terrainMaterialGeology(x, y, z) {
+  let px = x * 0.00034 + y * 0.00009;
+  let pz = z * 0.00034 - y * 0.00005;
+  let sum = 0, amplitude = 0.54, norm = 0;
+  for (let octave = 0; octave < 4; octave++) {
+    const ridge = 1 - Math.abs(terrainMaterialNoise(px, pz) * 2 - 1);
+    sum += ridge * amplitude;
+    norm += amplitude;
+    // mat2 arguments are columns in GLSL.
+    const nx = px * 1.71 - pz * 1.09 + 11.3;
+    pz = px * 1.09 + pz * 1.71 + 7.1;
+    px = nx;
+    amplitude *= 0.51;
+  }
+  return sum / norm;
+}
+
+/** CPU mirror of fbmTriplanar(vWorld * 0.00115, triplanarWeights(N)). */
+export function terrainMaterialMineral(x, y, z, normal) {
+  const rawWeights = normal.map((value) => Math.abs(value) ** 4);
+  const weightSum = Math.max(rawWeights[0] + rawWeights[1] + rawWeights[2], 1e-4);
+  const weights = rawWeights.map((value) => value / weightSum);
+  let px = x * 0.00115;
+  let py = y * 0.00115;
+  let pz = z * 0.00115;
+  let sum = 0, amplitude = 0.54, norm = 0;
+  for (let octave = 0; octave < 4; octave++) {
+    const triX = terrainMaterialNoise(py, pz);
+    const triY = terrainMaterialNoise(px + 31.7, pz + 31.7);
+    const triZ = terrainMaterialNoise(px + 73.1, py + 73.1);
+    sum += (triX * weights[0] + triY * weights[1] + triZ * weights[2]) * amplitude;
+    norm += amplitude;
+    const nx = py * 1.93 + 11.3;
+    const ny = pz * 1.93 + 7.1;
+    const nz = px * 1.93 + 17.7;
+    px = nx;
+    py = ny;
+    pz = nz;
+    amplitude *= 0.51;
+  }
+  return sum / norm;
+}
+
+function clipmapHeightCpu(x, z, cell, centerX, centerZ) {
+  const gx = (x - centerX) / cell;
+  const gz = (z - centerZ) / cell;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  const fx = gx - ix;
+  const fz = gz - iz;
+  const x0 = centerX + ix * cell;
+  const z0 = centerZ + iz * cell;
+  const h00 = cachedTerrainHeight(x0, z0);
+  const h10 = cachedTerrainHeight(x0 + cell, z0);
+  const h01 = cachedTerrainHeight(x0, z0 + cell);
+  const h11 = cachedTerrainHeight(x0 + cell, z0 + cell);
+  return (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
+}
+
+function terrainFrameAtCell(x, z, cell, radiusScale, focusX, focusZ) {
+  const centerX = Math.round(focusX / (cell * 2)) * cell * 2;
+  const centerZ = Math.round(focusZ / (cell * 2)) * cell * 2;
+  const radius = Math.max(cell * radiusScale, 2);
+  const center = clipmapHeightCpu(x, z, cell, centerX, centerZ);
+  const left = clipmapHeightCpu(x - radius, z, cell, centerX, centerZ);
+  const right = clipmapHeightCpu(x + radius, z, cell, centerX, centerZ);
+  const down = clipmapHeightCpu(x, z - radius, cell, centerX, centerZ);
+  const up = clipmapHeightCpu(x, z + radius, cell, centerX, centerZ);
+  return {
+    gx: (right - left) / (2 * radius),
+    gz: (up - down) / (2 * radius),
+    curvature: (left + right + down + up - 4 * center) / (radius * radius),
+  };
+}
+
+function terrainFrameCpu(x, z, cell, nextCell, morph, distance, quality, focusX, focusZ) {
+  const t = clamp01(morph);
+  const lowRadius = 2.8 + (5.2 - 2.8) * smoothstep(800, 5200, distance);
+  const normalRadius = quality === 0
+    ? lowRadius
+    : 1.15 + (2.9 - 1.15) * smoothstep(900, 6200, distance);
+  const fine = terrainFrameAtCell(x, z, cell, normalRadius, focusX, focusZ);
+  const coarse = terrainFrameAtCell(x, z, nextCell, normalRadius, focusX, focusZ);
+  const wideFine = quality === 0
+    ? fine
+    : terrainFrameAtCell(x, z, cell, normalRadius * 3.1, focusX, focusZ);
+  const wideCoarse = quality === 0
+    ? coarse
+    : terrainFrameAtCell(x, z, nextCell, normalRadius * 3.1, focusX, focusZ);
+  const surfaceGx = fine.gx + (coarse.gx - fine.gx) * t;
+  const surfaceGz = fine.gz + (coarse.gz - fine.gz) * t;
+  const wideGx = wideFine.gx + (wideCoarse.gx - wideFine.gx) * t;
+  const wideGz = wideFine.gz + (wideCoarse.gz - wideFine.gz) * t;
+  const gradientBlend = quality === 0 ? 0 : 0.5 + 0.28 * smoothstep(1100, 5800, distance);
+  const gx = surfaceGx + (wideGx - surfaceGx) * gradientBlend;
+  const gz = surfaceGz + (wideGz - surfaceGz) * gradientBlend;
+  const sampleCell = cell + (nextCell - cell) * t;
+  let invLength = 1 / Math.hypot(gx, 1, gz);
+  let normal = [-gx * invLength, invLength, -gz * invLength];
+  if (quality === 0 && normal[1] < 0.32) {
+    invLength = 1 / Math.hypot(normal[0], 0.32, normal[2]);
+    normal = [normal[0] * invLength, 0.32 * invLength, normal[2] * invLength];
+  }
+  const classifiedGx = surfaceGx + (wideGx - surfaceGx) * (quality === 0 ? 0 : 0.42);
+  const classifiedGz = surfaceGz + (wideGz - surfaceGz) * (quality === 0 ? 0 : 0.42);
+  const wideCurvature = wideFine.curvature + (wideCoarse.curvature - wideFine.curvature) * t;
+  return {
+    gradient: [classifiedGx, classifiedGz],
+    normal,
+    curvature: Math.max(-1, Math.min(1, wideCurvature * sampleCell * 0.38)),
+  };
+}
+
+/** High-tier material detail stays visible through the operational vista. */
+export function terrainDetailWeight(distance) {
+  return 1 - smoothstep(4800, 7200, Math.max(distance, 0));
+}
+
+/** Pure numeric mirror of the broad material mask, used by validation. */
+export function evaluateTerrainMaterial({
+  x,
+  z,
+  height,
+  slope,
+  curvature,
+  northAspect,
+  lee,
+  distance = 0,
+  cell,
+  nextCell = cell * 2,
+  morph = 0,
+  quality = 2,
+  focusX = x,
+  focusZ = z,
+  wind = [11, 4.5],
+  storedShadow = 1,
+  cloudShadow = 1,
+  sunIntensity = 1.5,
+  sunDirection = DEFAULT_SUN_DIRECTION,
+  sunColor = [1, 0.94, 0.84],
+  skyIrradiance = [0.18, 0.24, 0.36],
+  viewDirection = [0, 1, 0],
+}) {
+  let frame = null;
+  if (!Number.isFinite(slope) && Number.isFinite(cell)) {
+    frame = terrainFrameCpu(x, z, cell, nextCell, morph, distance, quality, focusX, focusZ);
+    slope = 1 - frame.normal[1];
+    curvature = frame.curvature;
+    const aspectLength = Math.hypot(-0.22, 0.25, 0.94);
+    northAspect = (
+      frame.normal[0] * (-0.22 / aspectLength) +
+      frame.normal[1] * (0.25 / aspectLength) +
+      frame.normal[2] * (0.94 / aspectLength)
+    ) * 0.5 + 0.5;
+    const gradientLength = Math.hypot(...frame.gradient);
+    const windLength = Math.max(Math.hypot(...wind), 1e-9);
+    lee = gradientLength > 1e-6
+      ? (
+        frame.gradient[0] * (wind[0] / windLength) +
+        frame.gradient[1] * (wind[1] / windLength)
+      ) / gradientLength * 0.5 + 0.5
+      : 0.5;
+  }
+  if (!frame) {
+    const ny = clamp01(1 - slope);
+    const nx = Math.sqrt(Math.max(0, 1 - ny * ny));
+    frame = { normal: [-nx, ny, 0], gradient: [nx, 0], curvature: curvature ?? 0 };
+  }
+  const geology = quality === 0
+    ? terrainMaterialNoise(x * 0.00042, z * 0.00042) * 0.65 +
+      terrainMaterialNoise(x * 0.00091 + 13, z * 0.00091 + 13) * 0.35
+    : terrainMaterialGeology(x, height, z);
+  const mineral = quality === 0 ? 0.5 : terrainMaterialMineral(x, height, z, frame.normal);
+  const snowLine = quality === 0
+    ? 4870 + 600 * (geology - 0.5)
+    : 4990 + 720 * (geology - 0.5) +
+      120 * Math.sin((x + z * 0.37) * 0.00019 + (geology - 0.5) * 1.4);
+  const altitude = smoothstep(snowLine - 620, snowLine + 720, height);
+  const retention = 1 - smoothstep(0.1, 0.4, slope);
+  if (quality === 0) {
+    const snow = smoothstep(0.03, 0.97, altitude * retention) * 0.84;
+    const rockColor = [0.06, 0.064, 0.074].map((value, i) => (
+      value + ([0.19, 0.133, 0.082][i] - value) * geology
+    ));
+    const snowColor = [0.74, 0.79, 0.875];
+    const albedo = rockColor.map((value, i) => value + (snowColor[i] - value) * snow);
+    const sun = normalize3(sunDirection);
+    const ndl = frame.normal[0] * sun[0] + frame.normal[1] * sun[1] + frame.normal[2] * sun[2];
+    const wrapped = clamp01(ndl * 0.55 + 0.45) ** 2.1;
+    const direct = wrapped * mix(0.42, 1, clamp01(storedShadow)) * (0.64 + 0.36 * snow);
+    const ambient = [0.39, 0.42, 0.48].map((value, i) => (
+      value + ([0.32, 0.40, 0.55][i] - value) * snow
+    ));
+    const directScale = Math.min(Math.max(sunIntensity, 0) * 0.22, 1.25);
+    const lit = albedo.map((value, i) => value * (ambient[i] + sunColor[i] * directScale * direct));
+    return {
+      height,
+      rock: 1 - snow,
+      shale: 1 - snow,
+      granite: 0,
+      iron: 0,
+      scree: 0,
+      ice: 0,
+      snow,
+      geology,
+      mineral,
+      albedo,
+      roughness: 0.86 * (1 - snow) + 0.66 * snow,
+      specular: 0.04 * (1 - snow) + 0.12 * snow,
+      normal: frame.normal,
+      litColor: lit,
+      lightingProxy: lit[0] * 0.2126 + lit[1] * 0.7152 + lit[2] * 0.0722,
+      detailWeight: terrainDetailWeight(distance),
+      luminance: albedo[0] * 0.2126 + albedo[1] * 0.7152 + albedo[2] * 0.0722,
+    };
+  }
+  const deposit = 0.78 + 0.14 * northAspect + 0.1 * lee + 0.08 * smoothstep(-0.25, 0.4, curvature);
+  const snowScour = 0.52 + 0.36 * smoothstep(0.22, 0.82, geology * 0.55 + mineral * 0.45);
+  const snow = smoothstep(0.04, 0.96, clamp01(altitude * retention * deposit))
+    * (0.84 + (snowScour - 0.84) * smoothstep(0.03, 0.24, slope))
+    * (1 - 0.27 * smoothstep(0.1, 0.3, slope));
+
+  const iceAltitude = smoothstep(4480, 5620, height);
+  const iceSlope = smoothstep(0.1, 0.22, slope) * (1 - smoothstep(0.48, 0.68, slope));
+  const iceConcavity = 0.58 + 0.42 * smoothstep(-0.08, 0.35, curvature);
+  const iceAspect = 0.72 + 0.28 * northAspect;
+  const icePotential = smoothstep(0.05, 0.95, iceAltitude * iceSlope * iceConcavity * iceAspect);
+  const ice = icePotential * (1 - snow) * 0.72;
+
+  const screeSlope = smoothstep(0.12, 0.24, slope) * (1 - smoothstep(0.4, 0.58, slope));
+  const screeDeposit = 0.55 + 0.45 * smoothstep(-0.25, 0.28, curvature);
+  const screeAltitude = 1 - smoothstep(5200, 6500, height);
+  const scree = screeSlope * screeDeposit * screeAltitude * Math.max(0, 1 - snow - ice);
+  const rockWeight = Math.max(0, 1 - snow - ice - scree);
+
+  const ironMix = smoothstep(0.58, 0.86, geology) * smoothstep(0.28, 0.72, mineral) * 0.72;
+  const graniteMix = smoothstep(0.40, 0.66, mineral) * (1 - ironMix);
+  const shaleMix = Math.max(0, 1 - graniteMix - ironMix);
+  const shaleColor = [0.052, 0.058, 0.069];
+  const graniteColor = [0.265, 0.168, 0.092];
+  const ironColor = [0.305, 0.105, 0.045];
+  const rockColor = shaleColor.map((v, i) => (
+    v * shaleMix + graniteColor[i] * graniteMix + ironColor[i] * ironMix
+  ));
+  const screeDark = [0.205, 0.145, 0.09];
+  const screeLight = [0.305, 0.225, 0.14];
+  const screeColor = screeDark.map((v, i) => v + (screeLight[i] - v) * mineral);
+  const iceDark = [0.105, 0.315, 0.52];
+  const iceLight = [0.22, 0.50, 0.68];
+  const iceColor = iceDark.map((v, i) => v + (iceLight[i] - v) * mineral);
+  const snowColor = [0.72, 0.80, 0.91];
+  const albedo = rockColor.map((v, i) => (
+    v * rockWeight + screeColor[i] * scree + iceColor[i] * ice + snowColor[i] * snow
+  ));
+  const iceRoughness = mix(0.22, 0.36, mineral);
+  const roughness = 0.86 * rockWeight + 0.96 * scree + iceRoughness * ice + 0.66 * snow;
+  const specular = 0.04 * rockWeight + 0.025 * scree + 0.42 * ice + 0.12 * snow;
+  const sun = normalize3(sunDirection);
+  const view = normalize3(viewDirection);
+  const visibility = mix(0.3, 1, clamp01(storedShadow)) * mix(0.52, 1, clamp01(cloudShadow));
+  const ndl = dot3(frame.normal, sun);
+  const wrappedMaterial = snow * 0.18 + ice * 0.1;
+  let direct = mix(
+    Math.max(ndl, 0),
+    clamp01(ndl * 0.5 + 0.5) ** 2.7,
+    wrappedMaterial,
+  ) * visibility;
+  direct *= rockWeight * 0.82 + scree * 0.92 + ice * 0.86 + snow;
+  const ambientWeight = rockWeight * 0.25 + scree * 0.29 + ice * 0.39 + snow * 0.43;
+  const ambient = skyIrradiance.map((value, i) => (
+    value * ambientWeight +
+    [0.105, 0.115, 0.135][i] * rockWeight +
+    [0.135, 0.115, 0.095][i] * scree +
+    [0.075, 0.165, 0.275][i] * ice +
+    [0.185, 0.245, 0.365][i] * snow
+  ));
+  const directScale = Math.min(Math.max(sunIntensity, 0) * 0.22, 1.25);
+  const litColor = albedo.map((value, i) => (
+    value * (ambient[i] + sunColor[i] * directScale * direct)
+  ));
+  const halfVector = normalize3(sun.map((value, i) => value + view[i]));
+  const specularPower = mix(24, 150, 1 - roughness);
+  const materialGlint = Math.max(dot3(frame.normal, halfVector), 0) ** specularPower *
+    specular * visibility;
+  for (let i = 0; i < 3; i++) litColor[i] += sunColor[i] * materialGlint;
+  const lightingProxy = litColor[0] * 0.2126 + litColor[1] * 0.7152 + litColor[2] * 0.0722;
+  return {
+    height,
+    rock: rockWeight,
+    shale: rockWeight * shaleMix,
+    granite: rockWeight * graniteMix,
+    iron: rockWeight * ironMix,
+    scree,
+    ice,
+    snow,
+    geology,
+    mineral,
+    albedo,
+    roughness,
+    specular,
+    normal: frame.normal,
+    litColor,
+    lightingProxy,
+    detailWeight: terrainDetailWeight(distance),
+    luminance: albedo[0] * 0.2126 + albedo[1] * 0.7152 + albedo[2] * 0.0722,
+  };
+}
+
+/** Selects a valid height source without pretending nearest float is filtered. */
+export function selectTerrainStorage({ colorFloat, floatLinear }) {
+  if (!colorFloat) return { mode: 'cpu-manual-linear', gpuGenerated: false, manualLinear: true };
+  if (!floatLinear) return { mode: 'gpu-manual-linear', gpuGenerated: true, manualLinear: true };
+  return { mode: 'gpu-linear', gpuGenerated: true, manualLinear: false };
+}
+
+export function buildTerrainVertexShader({ levels, res, half, depthBias }) {
+  return /* glsl */ `
+    precision highp float;
+    precision highp sampler2DArray;
+    invariant gl_Position;
+    in float aLevel;
+    uniform sampler2DArray uHeightMap;
+    uniform vec2 uCenters[${levels}];
+    uniform float uCells[${levels}];
+    out vec3 vWorld;
+    out float vMorph;
+    out float vLevelF;
+    out float vNextLevelF;
+    const float RES = ${res.toFixed(1)};
+    const float HALF = ${half.toFixed(1)};
+    vec2 levelUV(vec2 world, int level) {
+      return ((world - uCenters[level]) / uCells[level] + HALF + 0.5) / RES;
+    }
+    vec4 terrainBilinear(vec2 uv, int level) {
+      vec2 texel = uv * RES - 0.5;
+      ivec2 base = ivec2(floor(texel));
+      vec2 f = fract(texel);
+      ivec2 hi = ivec2(int(RES) - 1);
+      ivec2 p00 = clamp(base, ivec2(0), hi);
+      ivec2 p10 = clamp(base + ivec2(1, 0), ivec2(0), hi);
+      ivec2 p01 = clamp(base + ivec2(0, 1), ivec2(0), hi);
+      ivec2 p11 = clamp(base + ivec2(1), ivec2(0), hi);
+      vec4 a = mix(texelFetch(uHeightMap, ivec3(p00, level), 0), texelFetch(uHeightMap, ivec3(p10, level), 0), f.x);
+      vec4 b = mix(texelFetch(uHeightMap, ivec3(p01, level), 0), texelFetch(uHeightMap, ivec3(p11, level), 0), f.x);
+      return mix(a, b, f.y);
+    }
+    void main() {
+      int level = int(aLevel + 0.5);
+      int nextLevel = min(level + 1, ${levels - 1});
+      float cell = uCells[level];
+      vec2 center = uCenters[level];
+      vec2 index = position.xz;
+      vec2 d = abs(index - HALF) / HALF;
+      float edge = max(d.x, d.y);
+      float morph = level == ${levels - 1} ? 0.0 : smoothstep(0.70, 0.94, edge);
+      vec2 odd = fract(index * 0.5) * 2.0;
+      vec2 world = center + (index - odd * morph - HALF) * cell;
+      float h0 = terrainBilinear(levelUV(world, level), level).r;
+      float h1 = terrainBilinear(levelUV(world, nextLevel), nextLevel).r;
+      vWorld = vec3(world.x, mix(h0, h1, morph), world.y);
+      vMorph = morph;
+      vLevelF = float(level);
+      vNextLevelF = float(nextLevel);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(vWorld, 1.0);
+      gl_Position.z += gl_Position.w * ${depthBias} * float(level);
+    }
+  `;
+}
+
+export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
+  return /* glsl */ `
+    #define TERRAIN_QUALITY ${quality}
+    precision highp float;
+    precision highp sampler2DArray;
+    in vec3 vWorld;
+    in float vMorph;
+    in float vLevelF;
+    in float vNextLevelF;
+    out vec4 fragColor;
+    uniform sampler2DArray uHeightMap;
+    uniform vec2 uCenters[${levels}];
+    uniform float uCells[${levels}];
+    uniform float uDetailFade;
+    uniform float uTime;
+    uniform vec2 uWind;
+    uniform vec3 uCameraPos;
+    ${ATMOSPHERE_UNIFORMS_GLSL}
+    ${ATMOSPHERE_GLSL}
+    ${CLOUD_GLSL}
+    const float RES = ${res.toFixed(1)};
+    const float HALF = ${half.toFixed(1)};
+
+    vec2 levelUV(vec2 world, int level) {
+      return ((world - uCenters[level]) / uCells[level] + HALF + 0.5) / RES;
+    }
+    vec4 terrainBilinear(vec2 uv, int level) {
+      vec2 texel = uv * RES - 0.5;
+      ivec2 base = ivec2(floor(texel));
+      vec2 f = fract(texel);
+      ivec2 hi = ivec2(int(RES) - 1);
+      ivec2 p00 = clamp(base, ivec2(0), hi);
+      ivec2 p10 = clamp(base + ivec2(1, 0), ivec2(0), hi);
+      ivec2 p01 = clamp(base + ivec2(0, 1), ivec2(0), hi);
+      ivec2 p11 = clamp(base + ivec2(1), ivec2(0), hi);
+      vec4 a = mix(texelFetch(uHeightMap, ivec3(p00, level), 0), texelFetch(uHeightMap, ivec3(p10, level), 0), f.x);
+      vec4 b = mix(texelFetch(uHeightMap, ivec3(p01, level), 0), texelFetch(uHeightMap, ivec3(p11, level), 0), f.x);
+      return mix(a, b, f.y);
+    }
+    float terrainHeightAt(vec2 world, int level) { return terrainBilinear(levelUV(world, level), level).r; }
+    vec3 terrainSample(vec2 world, int level, float radius) {
+      float e = uCells[level] * radius;
+      float hx0 = terrainHeightAt(world - vec2(e, 0.0), level);
+      float hx1 = terrainHeightAt(world + vec2(e, 0.0), level);
+      float hz0 = terrainHeightAt(world - vec2(0.0, e), level);
+      float hz1 = terrainHeightAt(world + vec2(0.0, e), level);
+      float h = terrainHeightAt(world, level);
+      return vec3(vec2(hx1 - hx0, hz1 - hz0) / (2.0 * e),
+                  (hx0 + hx1 + hz0 + hz1 - 4.0 * h) / max(e * e, 1.0));
+    }
+    float hash21(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+    float noise2(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash21(i), hash21(i + vec2(1, 0)), f.x),
+                 mix(hash21(i + vec2(0, 1)), hash21(i + 1.0), f.x), f.y);
+    }
+
+    #if TERRAIN_QUALITY > 0
+    vec3 triplanarWeights(vec3 n) {
+      vec3 w = pow(abs(n), vec3(4.0));
+      return w / max(w.x + w.y + w.z, 1e-4);
+    }
+    float fbmTriplanar(vec3 p, vec3 weights) {
+      float sum = 0.0, amplitude = 0.54, norm = 0.0;
+      for (int octave = 0; octave < 4; octave++) {
+        vec3 tri = vec3(noise2(p.yz), noise2(p.xz + 31.7), noise2(p.xy + 73.1));
+        sum += dot(tri, weights) * amplitude;
+        norm += amplitude;
+        p = p.yzx * 1.93 + vec3(11.3, 7.1, 17.7);
+        amplitude *= 0.51;
+      }
+      return sum / norm;
+    }
+    float ridgedGeology(vec3 world) {
+      vec2 p = world.xz * 0.00034 + vec2(world.y * 0.00009, -world.y * 0.00005);
+      float sum = 0.0, amplitude = 0.54, norm = 0.0;
+      for (int octave = 0; octave < 4; octave++) {
+        float ridge = 1.0 - abs(noise2(p) * 2.0 - 1.0);
+        sum += ridge * amplitude;
+        norm += amplitude;
+        p = mat2(1.71, 1.09, -1.09, 1.71) * p + vec2(11.3, 7.1);
+        amplitude *= 0.51;
+      }
+      return sum / norm;
+    }
+    #endif
+
+    void main() {
+      int level = int(vLevelF + 0.5);
+      int nextLevel = int(vNextLevelF + 0.5);
+      float cell = mix(uCells[level], uCells[nextLevel], vMorph);
+      vec4 stored = mix(terrainBilinear(levelUV(vWorld.xz, level), level),
+                        terrainBilinear(levelUV(vWorld.xz, nextLevel), nextLevel), vMorph);
+      float surfaceHeight = stored.r;
+      vec3 toCamera = uCameraPos - vWorld;
+      float distanceToCamera = max(length(toCamera), 1.0);
+      vec3 V = toCamera / distanceToCamera;
+
+      #if TERRAIN_QUALITY == 0
+        // Use the same two samples as before, but widen their world-space
+        // stencil with distance. This removes triangle-scale lighting wedges
+        // without adding texture fetches to the low/phone branch.
+        float lowNormalRadius = mix(2.8, 5.2, smoothstep(800.0, 5200.0, distanceToCamera));
+        vec3 lowFine = terrainSample(vWorld.xz, level, lowNormalRadius);
+        vec3 lowCoarse = terrainSample(vWorld.xz, nextLevel, lowNormalRadius);
+        vec2 lowGradient = mix(lowFine.xy, lowCoarse.xy, vMorph);
+        vec3 lowN = normalize(vec3(-lowGradient.x, 1.0, -lowGradient.y));
+        vec3 N = normalize(vec3(lowN.x, max(lowN.y, 0.32), lowN.z));
+        float slope = 1.0 - N.y;
+        float geology = noise2(vWorld.xz * 0.00042) * 0.65 + noise2(vWorld.xz * 0.00091 + 13.0) * 0.35;
+        float snowLine = 4870.0 + (geology - 0.5) * 600.0;
+        float snow = smoothstep(snowLine - 620.0, snowLine + 720.0, surfaceHeight) * (1.0 - smoothstep(0.10, 0.40, slope));
+        snow = smoothstep(0.03, 0.97, snow) * 0.84;
+        vec3 rock = mix(vec3(0.060, 0.064, 0.074), vec3(0.190, 0.133, 0.082), geology);
+        vec3 albedo = mix(rock, vec3(0.74, 0.79, 0.875), snow);
+        float wrapped = pow(clamp(dot(N, uSunDir) * 0.55 + 0.45, 0.0, 1.0), 2.1);
+        float direct = wrapped * mix(0.42, 1.0, stored.a) * mix(0.64, 1.0, snow);
+        // Low-tier terrain still needs enough blue-sky fill to keep opposing
+        // ridge faces readable after tone mapping.
+        vec3 ambient = mix(vec3(0.39, 0.42, 0.48), vec3(0.32, 0.40, 0.55), snow);
+        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * 0.22, 1.25) * direct);
+      #else
+        // Evaluate both clipmap levels at the fragment's world position.  The
+        // distance-growing stencil removes the constant-gradient triangles of
+        // a plain heightfield normal while vMorph keeps the LOD handoff exact.
+        float normalRadius = mix(1.15, 2.90, smoothstep(900.0, 6200.0, distanceToCamera));
+        vec3 fineA = terrainSample(vWorld.xz, level, normalRadius);
+        vec3 fineB = terrainSample(vWorld.xz, nextLevel, normalRadius);
+        vec3 wideA = terrainSample(vWorld.xz, level, normalRadius * 3.10);
+        vec3 wideB = terrainSample(vWorld.xz, nextLevel, normalRadius * 3.10);
+        vec3 surface = mix(fineA, fineB, vMorph);
+        vec3 wide = mix(wideA, wideB, vMorph);
+        float gradientBlend = mix(0.50, 0.78, smoothstep(1100.0, 5800.0, distanceToCamera));
+        vec2 lightingGradient = mix(surface.xy, wide.xy, gradientBlend);
+        vec3 N = normalize(vec3(-lightingGradient.x, 1.0, -lightingGradient.y));
+        vec2 classified = mix(surface.xy, wide.xy, 0.42);
+        float slope = 1.0 - inversesqrt(1.0 + dot(classified, classified));
+        float curvature = clamp(wide.z * cell * 0.38, -1.0, 1.0);
+        vec3 weights = triplanarWeights(N);
+        float geology = ridgedGeology(vWorld);
+        float mineral = fbmTriplanar(vWorld * 0.00115, weights);
+        vec3 wind = normalize(vec3(uWind.x, 0.0, uWind.y) + vec3(1e-3, 0.0, 0.0));
+        vec3 downhill = normalize(vec3(classified.x, 0.0, classified.y) + vec3(1e-3, 0.0, 0.0));
+        float lee = dot(downhill, wind) * 0.5 + 0.5;
+        float northAspect = dot(N, normalize(vec3(-0.22, 0.25, 0.94))) * 0.5 + 0.5;
+        float warpedStrata = sin((vWorld.x + vWorld.z * 0.37) * 0.00019 + (geology - 0.5) * 1.4);
+        float snowLine = 4990.0 + (geology - 0.5) * 720.0 + warpedStrata * 120.0;
+        float altitudeSnow = smoothstep(snowLine - 620.0, snowLine + 720.0, surfaceHeight);
+        float retention = 1.0 - smoothstep(0.10, 0.40, slope);
+        float deposition = 0.78 + northAspect * 0.14 + lee * 0.10 + smoothstep(-0.25, 0.40, curvature) * 0.08;
+        float snowScour = 0.52 + 0.36 * smoothstep(0.22, 0.82, geology * 0.55 + mineral * 0.45);
+        float snow = smoothstep(0.04, 0.96, clamp(altitudeSnow * retention * deposition, 0.0, 1.0));
+        snow *= mix(0.84, snowScour, smoothstep(0.03, 0.24, slope));
+        snow *= 1.0 - 0.27 * smoothstep(0.10, 0.30, slope);
+
+        // Broad glacier placement: cold, high, shaded concavities with enough
+        // slope to expose compacted ice but not so much that no glacier holds.
+        float iceAltitude = smoothstep(4480.0, 5620.0, surfaceHeight);
+        float iceSlope = smoothstep(0.10, 0.22, slope) * (1.0 - smoothstep(0.48, 0.68, slope));
+        float iceConcavity = 0.58 + 0.42 * smoothstep(-0.08, 0.35, curvature);
+        float iceAspect = 0.72 + 0.28 * northAspect;
+        float icePotential = smoothstep(0.05, 0.95, iceAltitude * iceSlope * iceConcavity * iceAspect);
+        float ice = icePotential * (1.0 - snow) * 0.72;
+
+        // Warm talus sits below the ice on depositional mid-slopes.  Applying
+        // it only to the material remainder keeps all four weights conservative.
+        float screeSlope = smoothstep(0.12, 0.24, slope) * (1.0 - smoothstep(0.40, 0.58, slope));
+        float screeDeposit = 0.55 + 0.45 * smoothstep(-0.25, 0.28, curvature);
+        float screeAltitude = 1.0 - smoothstep(5200.0, 6500.0, surfaceHeight);
+        float scree = screeSlope * screeDeposit * screeAltitude * max(0.0, 1.0 - snow - ice);
+        float rockWeight = max(0.0, 1.0 - snow - ice - scree);
+
+        // Anti-aliased continuous strata give the dark shale and warm granite
+        // directional structure without discrete contour lines or point noise.
+        float detailDistanceFade = 1.0 - smoothstep(4800.0, 7200.0, distanceToCamera);
+        float strataCoord = surfaceHeight * 0.0105 + dot(vWorld.xz, vec2(0.0027, 0.0014)) + geology * 2.7;
+        float strataFilter = 1.0 - smoothstep(0.18, 0.88, fwidth(strataCoord));
+        float strata = sin(strataCoord) * strataFilter * detailDistanceFade;
+        float ironMix = smoothstep(0.58, 0.86, geology) * smoothstep(0.28, 0.72, mineral) * 0.72;
+        float graniteMix = smoothstep(0.40, 0.66, mineral) * (1.0 - ironMix);
+        float shaleMix = max(0.0, 1.0 - graniteMix - ironMix);
+        vec3 rock = vec3(0.052, 0.058, 0.069) * shaleMix;
+        rock += vec3(0.265, 0.168, 0.092) * graniteMix;
+        rock += vec3(0.305, 0.105, 0.045) * ironMix;
+        rock *= 1.0 + strata * 0.24;
+        vec3 screeColor = mix(vec3(0.205, 0.145, 0.090), vec3(0.305, 0.225, 0.140), mineral);
+        screeColor *= 1.0 + strata * 0.07;
+        vec3 iceColor = mix(vec3(0.105, 0.315, 0.520), vec3(0.220, 0.500, 0.680), mineral);
+        vec3 snowColor = vec3(0.720, 0.800, 0.910);
+        vec3 albedo = rock * rockWeight + screeColor * scree + iceColor * ice + snowColor * snow;
+        float iceRoughness = mix(0.22, 0.36, mineral);
+        float roughness = 0.86 * rockWeight + 0.96 * scree + iceRoughness * ice + 0.66 * snow;
+        float specularStrength = 0.04 * rockWeight + 0.025 * scree + 0.42 * ice + 0.12 * snow;
+        #if TERRAIN_QUALITY > 1
+          // Filter each octave by the projected world-space pixel footprint.
+          // This preserves readable normals through 5 km while removing the
+          // frequencies that would otherwise shimmer at the horizon.
+          vec2 footprint2 = fwidth(vWorld.xz);
+          float footprint = max(max(abs(footprint2.x), abs(footprint2.y)), 1.0);
+          float normalFade = uDetailFade * detailDistanceFade;
+          if (normalFade > 0.002) {
+            float eps = max(2.0, footprint * 0.72);
+            float macroFrequency = 0.0017;
+            float fineFrequency = 0.0062;
+            float macroFilter = 1.0 - smoothstep(0.16, 0.72, footprint * macroFrequency);
+            float fineFilter = 1.0 - smoothstep(0.12, 0.52, footprint * fineFrequency);
+            vec2 macroGrad = vec2(
+              noise2((vWorld.xz + vec2(eps, 0.0)) * macroFrequency) - noise2((vWorld.xz - vec2(eps, 0.0)) * macroFrequency),
+              noise2((vWorld.xz + vec2(0.0, eps)) * macroFrequency) - noise2((vWorld.xz - vec2(0.0, eps)) * macroFrequency)
+            ) / max(2.0 * eps * macroFrequency, 1e-3);
+            vec2 fineGrad = vec2(
+              noise2((vWorld.xz + vec2(eps, 0.0)) * fineFrequency + 37.0) - noise2((vWorld.xz - vec2(eps, 0.0)) * fineFrequency + 37.0),
+              noise2((vWorld.xz + vec2(0.0, eps)) * fineFrequency + 37.0) - noise2((vWorld.xz - vec2(0.0, eps)) * fineFrequency + 37.0)
+            ) / max(2.0 * eps * fineFrequency, 1e-3);
+            float materialNormal = rockWeight * 0.095 + scree * 0.14 + ice * 0.032 + snow * 0.045;
+            vec2 grad = (macroGrad * macroFilter + fineGrad * fineFilter * 0.48) * materialNormal * normalFade;
+            N = normalize(vec3(N.x - grad.x, max(N.y, 0.28), N.z - grad.y));
+          }
+          vec2 acrossWind = normalize(vec2(-wind.z, wind.x));
+          float sastrugiCoord = dot(vWorld.xz, acrossWind) * 0.082 + noise2(vWorld.xz * 0.0045) * 1.6;
+          float ridgeAA = fwidth(sastrugiCoord);
+          float ridge = 1.0 - smoothstep(0.08 + ridgeAA, 0.34 + ridgeAA, abs(fract(sastrugiCoord) - 0.5) * 2.0);
+          albedo *= 1.0 + ridge * snow * normalFade * 0.022;
+        #endif
+        float visibility = mix(0.30, 1.0, stored.a) * mix(0.52, 1.0, cloudShadowAt(vWorld, uSunDir));
+        float ndl = dot(N, uSunDir);
+        float wrappedMaterial = snow * 0.18 + ice * 0.10;
+        float direct = mix(max(ndl, 0.0), pow(clamp(ndl * 0.5 + 0.5, 0.0, 1.0), 2.7), wrappedMaterial) * visibility;
+        direct *= rockWeight * 0.82 + scree * 0.92 + ice * 0.86 + snow;
+        vec3 ambient = atm_skyIrradiance(N) * (rockWeight * 0.25 + scree * 0.29 + ice * 0.39 + snow * 0.43);
+        ambient += vec3(0.105, 0.115, 0.135) * rockWeight;
+        ambient += vec3(0.135, 0.115, 0.095) * scree;
+        ambient += vec3(0.075, 0.165, 0.275) * ice;
+        ambient += vec3(0.185, 0.245, 0.365) * snow;
+        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * 0.22, 1.25) * direct);
+        vec3 H = normalize(uSunDir + V);
+        float specPower = mix(24.0, 150.0, 1.0 - roughness);
+        float materialGlint = pow(max(dot(N, H), 0.0), specPower) * specularStrength * visibility;
+        color += uSunColor * materialGlint;
+      #endif
+
+      color = atm_applyAerial(color, -V, distanceToCamera, uCameraPos.y, vWorld.y);
+      fragColor = vec4(clamp(color, vec3(0.0), vec3(2.25)), 1.0);
+    }
+  `;
+}

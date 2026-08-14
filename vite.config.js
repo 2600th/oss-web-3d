@@ -6,10 +6,17 @@ export default defineConfig({
   build: {
     target: 'es2022',
     assetsInlineLimit: 0,
-    // Vite 8 bundles with Rolldown, whose manualChunks must be a function
-    // rather than the object form Rollup accepted. Its default chunking already
-    // splits the two large vendor libraries sensibly, so there is nothing worth
-    // overriding here.
+    // Keep stable third-party engines independently cacheable. The application
+    // changes far more often than Three/Postprocessing, and the measured
+    // monolithic production entry was 1.089 MB minified.
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('/node_modules/three/')) return 'three';
+          if (id.includes('/node_modules/postprocessing/')) return 'postprocessing';
+        },
+      },
+    },
     chunkSizeWarningLimit: 900,
   },
 });

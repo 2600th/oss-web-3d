@@ -98,10 +98,6 @@ body {
   opacity: 1;
   visibility: visible;
 }
-.layer.instant {
-  transition: none;
-}
-
 .centre {
   position: absolute;
   inset: 0;
@@ -217,12 +213,30 @@ body {
 }
 
 .prompt {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  padding: 9px 5px;
+  font-family: var(--font);
   font-size: clamp(11px, 1.05vw, 14px);
   letter-spacing: 0.4em;
   text-indent: 0.4em;
   color: var(--instrument-dim);
   text-transform: uppercase;
+  animation: none;
+  cursor: pointer;
+  pointer-events: none;
+}
+.prompt.live {
   animation: pulse 2.6s ease-in-out infinite;
+  pointer-events: auto;
+}
+.prompt:hover,
+.prompt:focus-visible {
+  color: var(--paper);
+  border-bottom-color: var(--rule);
+  outline: none;
 }
 @keyframes pulse {
   0%,
@@ -246,7 +260,82 @@ body {
   text-transform: uppercase;
   padding: 0 6vw;
   line-height: 1.7;
+  z-index: 3;
 }
+
+/* A hard optical wipe makes screen changes feel edited rather than faded. */
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+.veil i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -28vw;
+  width: 24vw;
+  background: linear-gradient(90deg, transparent, var(--ink) 18%, var(--ink) 82%, transparent);
+  transform: skewX(-7deg);
+}
+.veil.run {
+  visibility: visible;
+}
+.veil.run i {
+  animation: screen-sweep 720ms cubic-bezier(0.72, 0, 0.22, 1) both;
+}
+@keyframes screen-sweep {
+  to { transform: translateX(156vw) skewX(-7deg); }
+}
+
+.notice {
+  position: fixed;
+  top: max(18px, calc(env(safe-area-inset-top) + 12px));
+  left: 50%;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  width: min(640px, calc(100vw - 32px));
+  padding: 11px 12px 11px 16px;
+  border: 1px solid rgba(229, 162, 60, 0.58);
+  background: rgba(8, 11, 15, 0.94);
+  color: var(--paper-dim);
+  font: 11px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transform: translate(-50%, -12px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+.notice::before {
+  content: 'NOTICE';
+  color: var(--caution);
+  letter-spacing: 0.2em;
+}
+.notice.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.notice span { flex: 1; }
+.notice-dismiss {
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--rule-soft);
+  background: transparent;
+  color: var(--paper-dim);
+  font: 10px/1 var(--font);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 5px 4px 5px 15px;
+  cursor: pointer;
+}
+.notice-dismiss:hover,
+.notice-dismiss:focus-visible { color: var(--paper); outline: none; }
 
 /* ------------------------------------------------------------------ panels */
 
@@ -348,6 +437,12 @@ body {
   color: var(--paper);
   letter-spacing: 0.2em;
 }
+.target-list .id {
+  color: var(--instrument-dim);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
 .target-list li.done .mark {
   color: var(--confirm);
 }
@@ -391,17 +486,15 @@ body {
 #hud.show {
   opacity: 1;
 }
+.hud-plate {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
 
 /* The same halo for the photography overlay, which sits over the same snow. */
 #recon {
   text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
-}
-
-.hud-corner {
-  position: absolute;
-  font-size: 11px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
 }
 
 /* Airspeed and altitude tapes */
@@ -541,6 +634,10 @@ body {
   letter-spacing: 0.14em;
   color: var(--instrument-dim);
 }
+.heading-tick.cardinal span {
+  color: var(--paper);
+  font-weight: 700;
+}
 .heading-caret {
   position: absolute;
   left: 50%;
@@ -574,6 +671,7 @@ body {
   text-transform: uppercase;
   color: var(--instrument-dim);
   line-height: 1.9;
+  text-shadow: 0 1px 2px rgba(1, 4, 7, 0.98), 0 0 7px rgba(1, 4, 7, 0.9);
 }
 .target-block .name {
   color: var(--paper);
@@ -585,6 +683,8 @@ body {
   font-size: 17px;
   letter-spacing: 0.14em;
 }
+.target-block .bearing { color: var(--instrument); }
+.target-block .name.complete { color: var(--confirm); }
 
 /* Throttle */
 .throttle {
@@ -598,6 +698,27 @@ body {
   border: 1px solid var(--rule);
   position: relative;
   overflow: hidden;
+}
+.block-label {
+  margin-bottom: 6px;
+  color: var(--instrument-dim);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+.throttle-gate {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 84%;
+  z-index: 2;
+  border-left: 1px solid var(--caution);
+}
+.throttle-readout {
+  margin-top: 6px;
+  color: var(--paper);
+  font: 11px/1 var(--mono);
+  text-align: right;
 }
 .throttle-fill {
   position: absolute;
@@ -709,6 +830,8 @@ body {
 .warn.danger {
   color: var(--danger);
 }
+.warn { color: var(--caution); }
+.warn.hard { color: var(--danger); }
 @keyframes blink {
   0%,
   100% {
@@ -729,6 +852,43 @@ body {
 }
 #recon.show {
   opacity: 1;
+}
+
+.optic,
+.optic-vignette,
+.optic-falloff,
+.optic-fringe,
+.optic-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.optic { overflow: hidden; }
+.optic-vignette {
+  background: radial-gradient(ellipse 68% 60% at 50% 50%, transparent 53%, rgba(2, 4, 6, 0.34) 78%, rgba(2, 4, 6, 0.82));
+}
+.optic-falloff {
+  background: linear-gradient(180deg, rgba(190, 208, 198, 0.035), transparent 32%, rgba(4, 7, 9, 0.11));
+  mix-blend-mode: screen;
+}
+.optic-fringe {
+  opacity: 0.11;
+  filter: blur(1px);
+}
+.optic-fringe.warm {
+  box-shadow: inset 20px 0 36px rgba(180, 93, 53, 0.4);
+  transform: translateX(-2px);
+}
+.optic-fringe.cool {
+  box-shadow: inset -20px 0 36px rgba(56, 104, 119, 0.42);
+  transform: translateX(2px);
+}
+.optic-grain {
+  opacity: 0.035;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(225, 235, 224, 0.22) 4px),
+    repeating-linear-gradient(90deg, transparent 0 7px, rgba(7, 11, 12, 0.2) 8px);
+  background-size: 5px 5px, 9px 9px;
 }
 
 /* Masked frame: everything outside the camera gate is dimmed. */
@@ -834,6 +994,66 @@ body {
   color: var(--instrument-dim);
 }
 
+.recon-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(32vw, 320px);
+  height: min(32vw, 320px);
+  transform: translate(-50%, -50%);
+  overflow: visible;
+  color: var(--instrument);
+  filter: drop-shadow(0 1px 1px rgba(2, 4, 6, 0.9));
+}
+.ret-line,
+.ret-tick {
+  stroke: currentColor;
+  stroke-width: 0.75;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.76;
+}
+.ret-dot,
+.ret-pip { fill: currentColor; opacity: 0.66; }
+.ret-pip { opacity: 0.2; }
+.ret-pip.on { opacity: 0.9; }
+
+.recon-head {
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  top: calc(20% - 42px);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 26px;
+  border-bottom: 1px solid var(--rule-soft);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.recon-head .recon-status {
+  position: static;
+  color: var(--instrument);
+  text-shadow: 0 1px 2px rgba(1, 4, 7, 0.98), 0 0 7px rgba(1, 4, 7, 0.9);
+}
+.recon-optics {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  color: var(--instrument-dim);
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+}
+.recon-optics b { color: var(--paper); font-size: 12px; }
+.recon-frame-no {
+  position: absolute;
+  right: 16%;
+  bottom: calc(20% - 61px);
+  color: var(--paper-faint);
+  font: 9px/1 var(--mono);
+  letter-spacing: 0.16em;
+}
+
 .quality {
   position: absolute;
   left: 16%;
@@ -887,10 +1107,26 @@ body {
 .shutter-flash {
   position: absolute;
   inset: 0;
-  background: #fff;
+  background: rgba(218, 227, 218, 0.42);
   opacity: 0;
   pointer-events: none;
 }
+.shutter {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.shutter .blade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 55%;
+  background: #020305;
+  will-change: transform;
+}
+.shutter .blade.top { top: 0; transform: translateY(-100%); }
+.shutter .blade.bottom { bottom: 0; transform: translateY(100%); }
 
 /* Photo thumbnail that flies to the corner after a capture. */
 .photo-pop {
@@ -914,6 +1150,20 @@ body {
   width: 100%;
   filter: saturate(0.72) contrast(1.06);
 }
+.photo-pop .developing {
+  display: none;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(184, 216, 196, 0.035) 25%, transparent 25% 50%, rgba(184, 216, 196, 0.035) 50% 75%, transparent 75%),
+    #080c10;
+  background-size: 12px 12px;
+  color: var(--paper-faint);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.24em;
+}
+.photo-pop.wet img { display: none; }
+.photo-pop.wet .developing { display: grid; }
 .photo-pop .meta {
   display: flex;
   justify-content: space-between;
@@ -995,6 +1245,75 @@ body {
   letter-spacing: 0.24em;
 }
 
+.plate {
+  position: relative;
+  margin: 0;
+  padding: 6px 6px 8px;
+  border: 1px solid rgba(184, 216, 196, 0.3);
+  background: linear-gradient(145deg, #0a0e12, #05070a);
+  text-align: left;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+}
+.plate:nth-child(even) { transform: translateY(5px) rotate(0.12deg); }
+.plate-window {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #080b0e;
+  border: 1px solid rgba(233, 238, 245, 0.08);
+}
+.plate-window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 25px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+}
+.plate-window img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  filter: saturate(0.68) contrast(1.08) sepia(0.04);
+}
+.plate-wet,
+.plate.empty {
+  display: grid;
+  place-items: center;
+  min-height: 118px;
+  color: var(--paper-faint);
+  font: 10px/1.4 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  background:
+    linear-gradient(135deg, rgba(184, 216, 196, 0.03) 25%, transparent 25% 50%, rgba(184, 216, 196, 0.03) 50% 75%, transparent 75%),
+    #080b0e;
+  background-size: 14px 14px;
+}
+.plate.empty {
+  border: 1px dashed var(--rule-soft);
+  padding: 18px;
+}
+.plate-stamp {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 3px 3px;
+  color: var(--paper-dim);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.plate-stamp .callsign { color: var(--paper); }
+.plate-stamp b { color: var(--confirm); font: 600 15px/1 var(--mono); }
+.plate-data {
+  padding: 0 3px;
+  color: var(--paper-faint);
+  font: 8px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1050,6 +1369,18 @@ body {
   transform: scaleX(0);
   transition: transform 400ms ease;
 }
+.load-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  width: min(300px, 50vw);
+  margin-top: 10px;
+  color: var(--paper-faint);
+  font: 9px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.load-legend b { color: var(--instrument); font-weight: 400; }
 
 /* ---------------------------------------------------------------- pause */
 
@@ -1080,6 +1411,107 @@ body {
   border-color: var(--instrument);
   color: var(--instrument);
   outline: none;
+}
+.menu button.primary {
+  color: var(--ink);
+  background: var(--instrument);
+  border-color: var(--instrument);
+  font-weight: 700;
+}
+.menu button.primary:hover,
+.menu button.primary:focus-visible {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--paper);
+}
+.options {
+  width: min(430px, calc(100vw - 36px));
+  margin: 8px 0;
+  border-top: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+}
+.option {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(184, 216, 196, 0.11);
+}
+.option:last-child { border-bottom: 0; }
+.option .panel-title { margin: 0 0 8px; }
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--rule-soft);
+  border: 1px solid var(--rule-soft);
+}
+.menu .segmented button {
+  min-width: 0;
+  border: 0;
+  background: var(--ink);
+  padding: 8px 10px;
+  font-size: 10px;
+}
+.menu .segmented button[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--instrument);
+}
+.slider-row,
+.toggle-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 34px;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  color: var(--paper-dim);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.slider-row input[type='range'] {
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slider-row input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--rule);
+}
+.slider-row input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 18px;
+  margin-top: -8px;
+  border: 1px solid var(--instrument);
+  border-radius: 0;
+  background: var(--ink);
+}
+.slider-row input[type='range']::-moz-range-track { height: 2px; background: var(--rule); }
+.slider-row input[type='range']::-moz-range-thumb {
+  width: 9px;
+  height: 17px;
+  border: 1px solid var(--instrument);
+  border-radius: 0;
+  background: var(--ink);
+}
+.slider-row b { color: var(--paper); font: 10px/1 var(--mono); text-align: right; }
+.toggle-row { grid-template-columns: 1fr auto; }
+.menu button.toggle {
+  min-width: 72px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.menu button.toggle[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--instrument);
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 3px;
 }
 .menu .quality-row {
   display: flex;
@@ -1125,9 +1557,143 @@ body {
     transition-duration: 120ms;
   }
   .prompt,
-  .warn.show {
+  .warn.show,
+  .veil.run i {
     animation: none;
   }
+  .hud-plate { transform: none !important; }
+  * { scroll-behavior: auto !important; }
+}
+
+/* Flight controls are appended after the modal layers. A visible dialog owns
+   the interaction surface, so the coarse-pointer flight zones must neither
+   paint over it nor intercept its buttons. */
+.layer.show ~ #touch {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.layer.show ~ #touch .touch-zone,
+.layer.show ~ #touch .touch-btn { pointer-events: none; }
+
+/* Recon is its own instrument. The flight symbology remains in the DOM so its
+   cached values stay warm, but does not compete through the optical gate. */
+#hud.recon-open .tape,
+#hud.recon-open .heading-strip,
+#hud.recon-open .heading-readout,
+#hud.recon-open .throttle,
+#hud.recon-open .objectives,
+#hud.recon-open .target-block,
+#hud.recon-open .warnings,
+#hud.recon-open .reticle {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Portrait and narrow-window composition. This applies independently of input
+   type so a 390px desktop emulator and a real touch device get the same safe,
+   non-overlapping hierarchy. */
+@media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
+  .layer.show { overflow-y: auto; overscroll-behavior: contain; }
+  .centre {
+    position: relative;
+    min-height: 100%;
+    inset: auto;
+    padding:
+      max(42px, calc(env(safe-area-inset-top) + 28px))
+      max(20px, calc(env(safe-area-inset-right) + 18px))
+      max(96px, calc(env(safe-area-inset-bottom) + 76px))
+      max(20px, calc(env(safe-area-inset-left) + 18px));
+  }
+  .letterbox::before,
+  .letterbox::after { height: 42px; }
+  .title {
+    font-size: clamp(38px, 14vw, 62px);
+    letter-spacing: 0.15em;
+    text-indent: 0.15em;
+  }
+  .subtitle { letter-spacing: 0.28em; text-indent: 0.28em; line-height: 1.55; }
+  .eyebrow { letter-spacing: 0.38em; text-indent: 0.38em; }
+  .dedication { font-size: 13px; line-height: 1.65; }
+  .disclaimer {
+    position: absolute;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    padding: 0 max(18px, env(safe-area-inset-left)) 0 max(18px, env(safe-area-inset-right));
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    line-height: 1.45;
+  }
+  .layer:not(.letterbox) > .disclaimer {
+    position: relative;
+    bottom: auto;
+    padding:
+      14px max(18px, calc(env(safe-area-inset-right) + 14px))
+      max(18px, calc(env(safe-area-inset-bottom) + 12px))
+      max(18px, calc(env(safe-area-inset-left) + 14px));
+  }
+  .briefing {
+    grid-template-columns: 1fr;
+    width: 100%;
+    gap: 18px;
+  }
+  .brief-heading { font-size: 30px; }
+  .brief-body { font-size: 13px; line-height: 1.55; }
+  .panel { padding: 12px 14px; }
+  .controls-grid { grid-template-columns: minmax(58px, auto) 1fr; font-size: 10px; }
+  .menu { width: 100%; }
+  .menu button { width: 100%; min-width: 0; }
+  .options { width: 100%; }
+  .contact-sheet { grid-template-columns: 1fr; gap: 10px; }
+  .debrief { width: 100%; }
+  .result-title { font-size: 34px; letter-spacing: 0.16em; text-indent: 0.16em; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat { padding: 9px 5px; }
+  .plate:nth-child(even) { transform: none; }
+  .load-bar,
+  .load-legend { width: min(290px, 74vw); }
+  .notice { align-items: flex-start; gap: 10px; }
+  .notice::before { display: none; }
+
+  .heading-strip { top: max(16px, calc(env(safe-area-inset-top) + 8px)); width: 48vw; }
+  .heading-readout { top: max(56px, calc(env(safe-area-inset-top) + 48px)); }
+  .tape { width: 60px; height: 35vh; min-height: 190px; }
+  .tape.left { left: max(5px, env(safe-area-inset-left)); }
+  .tape.right { right: max(5px, env(safe-area-inset-right)); }
+  .tape-readout { min-width: 54px; padding: 4px; font-size: 14px; }
+  .throttle { left: max(6px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); width: 60px; }
+  .objectives { right: max(6px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); }
+  .target-block { bottom: max(14px, env(safe-area-inset-bottom)); max-width: 48vw; line-height: 1.5; }
+  .target-block .name { font-size: 11px; letter-spacing: 0.2em; }
+  .target-block .range { font-size: 13px; }
+  .warnings { top: 20vh; }
+
+  .gate-frame { left: 9%; right: 9%; top: 18%; bottom: 22%; }
+  .gate {
+    clip-path: polygon(0 0,100% 0,100% 100%,0 100%,0 0,9% 18%,9% 78%,91% 78%,91% 18%,9% 18%);
+  }
+  .recon-head { left: 9%; right: 9%; top: calc(18% - 38px); }
+  .recon-status { max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recon-optics { gap: 7px; font-size: 8px; }
+  .quality { left: 9%; right: 9%; bottom: calc(22% - 38px); }
+  .recon-frame-no { right: 9%; bottom: calc(22% - 54px); }
+  .recon-reticle { width: min(66vw, 270px); height: min(66vw, 270px); }
+  .photo-pop {
+    top: max(72px, calc(env(safe-area-inset-top) + 58px));
+    right: max(8px, env(safe-area-inset-right));
+    width: min(190px, 48vw);
+  }
+}
+
+@media (max-height: 620px) and (min-width: 721px) {
+  .centre { padding-top: 28px; padding-bottom: 44px; }
+  .briefing { gap: 24px; }
+  .brief-body { line-height: 1.45; }
+  .brief-body p { margin: 0 0 7px; }
+  .panel { padding-top: 10px; padding-bottom: 10px; }
+  .target-list li { padding: 4px 0; }
+  .controls-grid { gap: 3px 12px; }
+  .option { padding: 7px 0; }
+  .menu { gap: 6px; }
 }
 
 /* Inline tricolour, used where the platform has no country-flag glyph. */
@@ -1260,13 +1826,13 @@ body {
   width: 84px;
   height: 46px;
 }
-.zoom-btn { width: 40px; height: 40px; font-size: 16px; }
+.zoom-btn { width: 44px; height: 44px; font-size: 16px; }
 .zoom-in {
-  right: max(14px, env(safe-area-inset-right));
-  bottom: max(368px, calc(env(safe-area-inset-bottom) + 272px));
+  right: max(84px, calc(env(safe-area-inset-right) + 84px));
+  bottom: max(374px, calc(env(safe-area-inset-bottom) + 278px));
 }
 .zoom-out {
-  right: max(14px, env(safe-area-inset-right));
+  right: max(84px, calc(env(safe-area-inset-right) + 84px));
   bottom: max(322px, calc(env(safe-area-inset-bottom) + 226px));
 }
 
@@ -1280,18 +1846,64 @@ body {
   #hud { font-size: 0.74em; }
 
   .tape {
-    width: 62px;
-    height: 46vh;
+    width: 56px;
+    height: min(38vh, 300px);
     min-height: 0;
   }
-  .tape.left { left: 2vw; }
+  .tape.left { left: max(5px, env(safe-area-inset-left)); }
   .tape.right { right: 92px; }
 
   .tape-readout { font-size: 15px; }
 
-  /* Objectives and target callout pull in from the corners the controls own. */
-  #hud .objectives { right: 92px; bottom: 6px; }
-  #hud .target-callout { bottom: 4px; }
+  /* The touch throttle already communicates power. Removing the duplicate HUD
+     block leaves the lower-left stick field visually quiet. */
+  #hud .throttle { display: none; }
+
+  /* The steering block lives below the compass, away from the bottom control
+     cluster. Objectives remain in the narrow clear lane left of the throttle. */
+  #hud .target-block {
+    top: max(88px, calc(env(safe-area-inset-top) + 76px));
+    bottom: auto;
+    width: min(220px, 56vw);
+    max-width: none;
+    line-height: 1.45;
+  }
+  #hud .target-block .name { font-size: 11px; letter-spacing: 0.2em; }
+  #hud .target-block .range { font-size: 13px; }
+  #hud .objectives {
+    right: 92px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .recon-head {
+    left: max(14px, env(safe-area-inset-left));
+    right: max(14px, env(safe-area-inset-right));
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    gap: 10px;
+  }
+  .recon-head .recon-status {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    font-size: 9px;
+    line-height: 1.25;
+    letter-spacing: 0.14em;
+  }
+  .recon-optics { gap: 5px; font-size: 8px; }
+  .recon-optics b { font-size: 10px; }
+  .quality {
+    left: max(16px, env(safe-area-inset-left));
+    right: 92px;
+    bottom: max(220px, calc(env(safe-area-inset-bottom) + 220px));
+  }
+  .quality-legend { font-size: 8px; letter-spacing: 0.12em; }
+  .recon-frame-no {
+    right: 92px;
+    bottom: max(204px, calc(env(safe-area-inset-bottom) + 204px));
+  }
+  .recon-reticle { width: min(54vw, 220px); height: min(54vw, 220px); }
+  .photo-pop { right: 92px; }
 }
 
 /* Very short viewports (a phone held in landscape with browser chrome) need

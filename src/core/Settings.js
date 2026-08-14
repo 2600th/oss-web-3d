@@ -21,14 +21,11 @@ export const TIERS = {
     maxPixelRatio: 1.0,
     bloom: false,
     smaa: false,
-    cloudCount: 60,
-    cloudLayers: 4,
     terrainDetail: 0.0,
     contrails: false,
     speedParticles: 120,
     terrainBudget: 1,
     terrainRes: 129,
-    shadowSteps: 10,
     cloudSteps: 24,
     cloudLightSteps: 3,
     cloudDistance: 26000,
@@ -40,14 +37,11 @@ export const TIERS = {
     maxPixelRatio: 1.0,
     bloom: false,
     smaa: false,
-    cloudCount: 90,
-    cloudLayers: 5,
     terrainDetail: 0.0,
     contrails: false,
     speedParticles: 220,
     terrainBudget: 2,
     terrainRes: 129,
-    shadowSteps: 14,
     cloudSteps: 32,
     cloudLightSteps: 4,
     cloudDistance: 32000,
@@ -59,14 +53,11 @@ export const TIERS = {
     maxPixelRatio: 1.25,
     bloom: true,
     smaa: false,
-    cloudCount: 190,
-    cloudLayers: 7,
     terrainDetail: 0.7,
     contrails: true,
     speedParticles: 420,
     terrainBudget: 3,
     terrainRes: 193,
-    shadowSteps: 18,
     cloudSteps: 44,
     cloudLightSteps: 4,
     cloudDistance: 40000,
@@ -78,14 +69,11 @@ export const TIERS = {
     maxPixelRatio: 1.5,
     bloom: true,
     smaa: true,
-    cloudCount: 320,
-    cloudLayers: 9,
     terrainDetail: 1.0,
     contrails: true,
     speedParticles: 700,
     terrainBudget: 4,
     terrainRes: 257,
-    shadowSteps: 20,
     cloudSteps: 56,
     cloudLightSteps: 5,
     cloudDistance: 46000,
@@ -110,6 +98,24 @@ export class Settings {
   setTier(name) {
     if (!TIERS[name]) return;
     this.tierName = name;
+    this.save();
+  }
+
+  setMasterVolume(value) {
+    if (!Number.isFinite(value)) return;
+    this.masterVolume = Math.min(1, Math.max(0, value));
+    this.save();
+  }
+
+  setMusicVolume(value) {
+    if (!Number.isFinite(value)) return;
+    this.musicVolume = Math.min(1, Math.max(0, value));
+    this.save();
+  }
+
+  setInvertPitch(value) {
+    if (typeof value !== 'boolean') return;
+    this.invertPitch = value;
     this.save();
   }
 

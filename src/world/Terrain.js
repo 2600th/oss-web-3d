@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { TERRAIN_NOISE_GLSL } from './terrainNoise.glsl.js';
-import { ATMOSPHERE_GLSL, ATMOSPHERE_UNIFORMS_GLSL } from './atmosphere.glsl.js';
-import { CLOUD_GLSL } from './clouds.glsl.js';
+import { terrainHeight } from './heightfield.js';
+import {
+  buildTerrainFragmentShader,
+  buildTerrainVertexShader,
+  selectTerrainStorage,
+} from './terrain/material.glsl.js';
 
 /**
  * Effectively infinite terrain, drawn as a GPU geometry clipmap.
@@ -76,6 +80,7 @@ const DEPTH_BIAS = '1.2e-5';
 
 export let TERRAIN_LEVELS = 10;
 export const TERRAIN_BASE_CELL = 4.0;
+export const CPU_TERRAIN_SAMPLE_BUDGET = 16384;
 
 /** Half-extent, in metres, covered by the whole clipmap. */
 export const terrainRadius = () => HALF * TERRAIN_BASE_CELL * 2 ** (TERRAIN_LEVELS - 1);
@@ -121,23 +126,46 @@ export class Terrain {
     this.environment = environment;
 
     this.floatLinear = renderer.extensions.has('OES_texture_float_linear');
-    if (!renderer.extensions.has('EXT_color_buffer_float')) {
-      console.warn('[terrain] EXT_color_buffer_float missing; terrain will be degraded.');
-    }
+    this.storage = selectTerrainStorage({
+      colorFloat: renderer.extensions.has('EXT_color_buffer_float'),
+      floatLinear: this.floatLinear,
+    });
+    this.cpuGenerated = !this.storage.gpuGenerated;
+    this.cpuHeightData = this.cpuGenerated
+      ? new Float32Array(RES * RES * TERRAIN_LEVELS * 4)
+      : null;
+    this.cpuLevelScratch = this.cpuGenerated ? new Float32Array(RES * RES) : null;
+    this.cpuLayerStaging = this.cpuGenerated ? new Float32Array(RES * RES * 4) : null;
+    this.cpuSampleBudget = CPU_TERRAIN_SAMPLE_BUDGET;
+    this.cpuFrameStats = { samples: 0, commits: 0, uploadBytes: 0 };
+    this._cpuJob = null;
+    this._cpuNextLevel = 0;
 
     const filter = this.floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
 
-    this.heightArray = new THREE.WebGLArrayRenderTarget(RES, RES, TERRAIN_LEVELS, {
-      format: THREE.RGBAFormat,
-      type: THREE.FloatType,
-      minFilter: filter,
-      magFilter: filter,
-      wrapS: THREE.ClampToEdgeWrapping,
-      wrapT: THREE.ClampToEdgeWrapping,
-      depthBuffer: false,
-      stencilBuffer: false,
-      generateMipmaps: false,
-    });
+    if (this.cpuGenerated) {
+      const texture = new THREE.DataArrayTexture(this.cpuHeightData, RES, RES, TERRAIN_LEVELS);
+      texture.format = THREE.RGBAFormat;
+      texture.type = THREE.FloatType;
+      texture.minFilter = THREE.NearestFilter;
+      texture.magFilter = THREE.NearestFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.generateMipmaps = false;
+      this.heightArray = { texture, dispose: () => texture.dispose() };
+    } else {
+      this.heightArray = new THREE.WebGLArrayRenderTarget(RES, RES, TERRAIN_LEVELS, {
+        format: THREE.RGBAFormat,
+        type: THREE.FloatType,
+        minFilter: filter,
+        magFilter: filter,
+        wrapS: THREE.ClampToEdgeWrapping,
+        wrapT: THREE.ClampToEdgeWrapping,
+        depthBuffer: false,
+        stencilBuffer: false,
+        generateMipmaps: false,
+      });
+    }
 
     this.tempTarget = new THREE.WebGLRenderTarget(TEMP_RES, TEMP_RES, {
       format: THREE.RedFormat,
@@ -186,6 +214,7 @@ export class Terrain {
 
     this._buildGenerationPasses();
     this._buildTerrainMaterial();
+    this.terrainQuality = 2;
 
     this.group = new THREE.Group();
     this.group.matrixAutoUpdate = false;
@@ -420,354 +449,18 @@ export class Terrain {
         uCells: { value: this.cells },
         uDetailFade: { value: 1.0 },
       },
-      vertexShader: /* glsl */ `
-        precision highp float;
-        precision highp sampler2DArray;
-
-        // Apple's Metal backend compiles shaders with fast-math enabled, which
-        // is free to reorder floating-point arithmetic. On world coordinates in
-        // the tens of thousands of metres that reordering changes the result
-        // enough to show as vertex jitter, and it does so differently between
-        // the two draws that share this material -- so the ring and the block
-        // disagree along their shared edge (WebKit 237434). invariant pins the
-        // computation.
-        invariant gl_Position;
-
-        in float aLevel;
-
-        uniform sampler2DArray uHeightMap;
-        uniform vec2 uCenters[${TERRAIN_LEVELS}];
-        uniform float uCells[${TERRAIN_LEVELS}];
-
-        out vec3 vWorld;
-        out float vMorph;
-        // Plain interpolated floats rather than flat ints, and not by choice.
-        // A flat varying crashes the GPU process on iOS 18 once a draw passes
-        // roughly 30k vertices (WebKit 289601), and this mesh is an order of
-        // magnitude past that. Interpolation is exact here anyway: the level is
-        // a per-instance attribute, so all three vertices of every triangle
-        // carry the same value and barycentric interpolation returns it
-        // unchanged.
-        out float vLevelF;
-        out float vNextLevelF;
-
-        const float RES = ${RES.toFixed(1)};
-        const float HALF = ${HALF.toFixed(1)};
-
-        vec2 levelUV(vec2 world, int L) {
-          return ((world - uCenters[L]) / uCells[L] + HALF + 0.5) / RES;
-        }
-
-        void main() {
-          int L = int(aLevel + 0.5);
-          int Ln = min(L + 1, ${TERRAIN_LEVELS - 1});
-          float cell = uCells[L];
-          vec2 center = uCenters[L];
-
-          vec2 idx = position.xz;
-
-          // Chebyshev distance to the level centre, normalised so the level's
-          // own boundary is 1.0.
-          vec2 d = abs(idx - HALF) / HALF;
-          float m = max(d.x, d.y);
-          float k = (L == ${TERRAIN_LEVELS - 1}) ? 0.0 : smoothstep(0.70, 0.94, m);
-
-          // Slide odd vertices onto the next level's grid.
-          vec2 odd = fract(idx * 0.5) * 2.0;
-          vec2 morphIdx = idx - odd * k;
-          vec2 world = center + (morphIdx - HALF) * cell;
-
-          float h0 = textureLod(uHeightMap, vec3(levelUV(world, L), float(L)), 0.0).r;
-          float h1 = textureLod(uHeightMap, vec3(levelUV(world, Ln), float(Ln)), 0.0).r;
-          float h = mix(h0, h1, k);
-
-          vWorld = vec3(world.x, h, world.y);
-          vMorph = k;
-          vLevelF = float(L);
-          vNextLevelF = float(Ln);
-
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(vWorld, 1.0);
-
-          // Rings overlap their inner neighbour by two cells (see HOLE). Rather
-          // than discarding the overlap in the fragment shader — which costs
-          // early-Z and made all eleven levels shade every pixel, dropping the
-          // frame rate to 20 — nudge coarser levels away in depth so the finer
-          // one simply wins. Inside the band both levels are fully morphed to
-          // the same surface, so there is nothing visible to choose between.
-          gl_Position.z += gl_Position.w * ${DEPTH_BIAS} * float(L);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        precision highp float;
-        precision highp sampler2DArray;
-
-        in vec3 vWorld;
-        in float vMorph;
-        in float vLevelF;
-        in float vNextLevelF;
-
-        out vec4 fragColor;
-
-        uniform sampler2DArray uHeightMap;
-        uniform vec2 uCenters[${TERRAIN_LEVELS}];
-        uniform float uCells[${TERRAIN_LEVELS}];
-        uniform float uDetailFade;
-        uniform float uTime;
-        uniform vec2 uWind;
-        uniform vec3 uCameraPos;
-        ${ATMOSPHERE_UNIFORMS_GLSL}
-        ${ATMOSPHERE_GLSL}
-        ${CLOUD_GLSL}
-
-        const float RES = ${RES.toFixed(1)};
-        const float HALF = ${HALF.toFixed(1)};
-
-        vec2 levelUV(vec2 world, int L) {
-          return ((world - uCenters[L]) / uCells[L] + HALF + 0.5) / RES;
-        }
-
-        float hash21(vec2 p) {
-          p = 50.0 * fract(p * 0.3183099 + vec2(0.71, 0.113));
-          return -1.0 + 2.0 * fract(p.x * p.y * (p.x + p.y));
-        }
-
-        float vnoise(vec2 x) {
-          vec2 p = floor(x), f = fract(x);
-          vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(hash21(p), hash21(p + vec2(1, 0)), u.x),
-                     mix(hash21(p + vec2(0, 1)), hash21(p + vec2(1, 1)), u.x), u.y);
-        }
-
-        // Same noise with analytic derivatives, so the close-range detail bump
-        // costs one evaluation instead of four finite differences.
-        vec3 vnoised(vec2 x) {
-          vec2 p = floor(x), f = fract(x);
-          vec2 u = f * f * (3.0 - 2.0 * f);
-          vec2 du = 6.0 * f * (1.0 - f);
-          float a = hash21(p);
-          float b = hash21(p + vec2(1, 0));
-          float c = hash21(p + vec2(0, 1));
-          float d = hash21(p + vec2(1, 1));
-          float k1 = b - a, k2 = c - a, k3 = a - b - c + d;
-          return vec3(a + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
-                      du.x * (k1 + k3 * u.y),
-                      du.y * (k2 + k3 * u.x));
-        }
-
-        float fbm2(vec2 p, int oct) {
-          float v = 0.0, a = 0.5;
-          for (int i = 0; i < 6; i++) {
-            if (i >= oct) break;
-            v += a * vnoise(p);
-            p = mat2(1.6, 1.2, -1.2, 1.6) * p;
-            a *= 0.5;
-          }
-          return v;
-        }
-
-        // Cloud shadows come from cloudShadowAt() in the shared cloud field, so
-        // the shadow on the ground is cast by the cloud that is actually in the
-        // sky. This used to be its own cheaper noise, which meant the two never
-        // agreed: you could fly under a bank in full sunlight, or through a
-        // shadow with nothing above you.
-
-        void main() {
-          int vLevel = int(vLevelF + 0.5);
-          int vNextLevel = int(vNextLevelF + 0.5);
-
-          // Layout is (height, normal.x, normal.z, sun visibility). Normal Y is
-          // recovered rather than stored — it is always positive on a
-          // heightfield — which buys the alpha channel for baked shadows.
-          vec4 s0 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vLevel), float(vLevel)));
-          vec4 s1 = texture(uHeightMap, vec3(levelUV(vWorld.xz, vNextLevel), float(vNextLevel)));
-          vec4 s = mix(s0, s1, vMorph);
-          vec3 macroN = normalize(vec3(s.g, sqrt(max(1.0 - s.g * s.g - s.b * s.b, 1e-4)), s.b));
-          vec3 N = macroN;
-          float sunVis = s.a;
-
-          vec3 toCam = uCameraPos - vWorld;
-          float dist = length(toCam);
-          vec3 viewDir = -toCam / dist;
-
-          // Close-range detail bump, from the analytic gradient of a two-octave
-          // field rather than four finite-difference fbm evaluations.
-          //
-          // Each octave fades at its own distance rather than both together.
-          // The limit is when an octave's period approaches a pixel, and the two
-          // are 9 m and 23 m, so they reach it a long way apart: fading both by
-          // 1.1 km threw away the coarse one while it was still resolved by a
-          // wide margin. That mattered most at recon range, where a ridge 1.5 km
-          // out is drawn with 32 m cells — about 20 pixels a triangle — and read
-          // as flat shaded facets in every photograph.
-          float detailFine = uDetailFade * (1.0 - smoothstep(220.0, 900.0, dist));
-          float detailCoarse = uDetailFade * (1.0 - smoothstep(850.0, 3000.0, dist));
-          if (detailFine + detailCoarse > 0.002) {
-            vec2 grad = vec2(0.0);
-            if (detailFine > 0.002) {
-              grad += vnoised(vWorld.xz * 0.115).yz * (0.115 * 0.55 * detailFine);
-            }
-            if (detailCoarse > 0.002) {
-              grad += vnoised(vWorld.xz * 0.043 + 17.0).yz * (0.043 * 1.35 * detailCoarse);
-            }
-            N = normalize(N + vec3(-grad.x, 0.0, -grad.y) * 9.0);
-          }
-
-          // Steepness for the material mix, corrected for LOD.
-          //
-          // The stored normal is a central difference over this level's cell, so
-          // the steepness it reports collapses as cells grow. Measured against
-          // this terrain's own height function, the median gradient falls from
-          // 1.23 at 8 m sampling to 0.41 at 512 m, and the fraction of ground
-          // steeper than 0.54 goes from 25% to essentially nothing. Mixing the
-          // material straight off that normal is what painted every range in the
-          // middle distance solid white: the shader was asking how steep the
-          // ground is and being told, correctly, that a 500 m average is gentle.
-          //
-          // Fractal terrain has a well-defined gradient scaling exponent, so one
-          // per-level factor fixes it without storing a second surface. The
-          // exponent was measured rather than assumed: g(eps) ~ eps^-0.25 held
-          // to within a few percent from 16 m out to 2 km, and rescaling by
-          // (cell/8)^0.25 reproduces the 8 m slope distribution at every level.
-          // Interpolating the factor across the morph band keeps the material
-          // continuous where two levels meet.
-          //
-          // Taken from the macro normal, before the detail bump. The bump is a
-          // decorative high-frequency perturbation for shading; feeding it into
-          // the material pushed patches of ordinary snowfield over the rock
-          // threshold and mottled whole faces into something like camouflage.
-          //
-          // Lighting keeps the uncorrected normal for the opposite reason: it
-          // has to match the geometry actually on screen, and a fine-scale
-          // normal at 30 km would alias into noise.
-          float matCell = mix(uCells[vLevel], uCells[vNextLevel], vMorph);
-          vec2 matGrad =
-            vec2(macroN.x, macroN.z) / max(macroN.y, 1e-3) * pow(matCell * 0.125, 0.25);
-          float slope = clamp(1.0 - inversesqrt(1.0 + dot(matGrad, matGrad)), 0.0, 1.0);
-          float h = vWorld.y;
-
-          float rough = vnoise(vWorld.xz * 0.0016) * 0.62 + vnoise(vWorld.xz * 0.0041) * 0.3;
-          float band = fbm2(vWorld.xz * 0.00042, 2);
-
-          // ---- surface mix -------------------------------------------------
-          // Ladakh rock is dark grey-brown, not desert tan: steep faces are
-          // near-black shale, and the gentler ground is grey scree with a faint
-          // iron stain. Keeping albedo genuinely low is what lets snow read as
-          // brilliant by comparison.
-          vec3 rockDark  = vec3(0.040, 0.038, 0.038);
-          vec3 rockLight = vec3(0.093, 0.082, 0.070);
-          vec3 rock = mix(rockDark, rockLight, clamp(0.5 + 0.7 * rough, 0.0, 1.0));
-          rock = mix(rock, vec3(0.115, 0.090, 0.066), smoothstep(0.1, 0.6, band) * 0.55);
-
-          // Bedding planes. Himalayan rock is strongly banded, and those bands
-          // are the main thing that reads as *stone* at close range rather than
-          // as a brown surface with noise on it. Far Cry 5's terrain talk
-          // extrudes strata of varying thickness; the analytic equivalent is a
-          // sawtooth through a slightly tilted plane, domain-warped so the beds
-          // are not mathematically straight.
-          //
-          // They earn their cost twice. Perceived self-motion tracks *edge
-          // rate* -- how many discontinuities cross the eye per second -- more
-          // strongly than smooth optical flow does (Larish & Flach, 1990), and
-          // smooth gradient noise contributes nothing to that while hard edges
-          // do. This is the cheapest sense-of-speed cue available to a renderer
-          // whose whole world is analytic.
-          //
-          // Band-limited on the screen-space derivative of the bedding
-          // coordinate: once a pixel spans a large fraction of one bed the
-          // pattern is past Nyquist and has to fade to its average, or it
-          // crawls and sparkles at exactly the distances a jet spends its time.
-          // The dip direction rotates from massif to massif, and that is not a
-          // flourish. A single global bedding plane that is nearly horizontal
-          // makes dot(worldPos, planeNormal) track elevation, so every band
-          // follows a contour and the range reads as a topographic map rather
-          // than as rock. Giving each region its own strike and a genuine dip
-          // breaks that, which is also what real folded terrain does. Bed
-          // thickness varies with the same roughness field.
-          float dipAngle = vnoise(vWorld.xz * 0.00013) * 6.2832;
-          vec3 bedNormal = normalize(vec3(cos(dipAngle) * 0.55, 1.0, sin(dipAngle) * 0.55));
-          float bedding = dot(vWorld, bedNormal) / (17.0 + 24.0 * abs(rough))
-                        + vnoise(vWorld.xz * 0.0011) * 3.1;
-          float bedFade = (1.0 - smoothstep(0.20, 0.72, fwidth(bedding))) * uDetailFade;
-          vec3 scree = mix(vec3(0.096, 0.089, 0.081), vec3(0.142, 0.128, 0.110), rough * 0.5 + 0.5);
-          if (bedFade > 0.004) {
-            float f = fract(bedding);
-            float edge = smoothstep(0.0, 0.10, f) * (1.0 - smoothstep(0.90, 1.0, f));
-            float tone = vnoise(vec2(floor(bedding) * 1.7, 3.3));
-            float strata = 1.0 + bedFade * ((tone - 0.5) * 0.44 - (1.0 - edge) * 0.30);
-            rock *= strata;
-            scree *= mix(1.0, strata, 0.35); // scree is loose, so only faintly bedded
-          }
-
-          float screeAmt = 1.0 - smoothstep(0.16, 0.46, slope);
-          vec3 ground = mix(rock, scree, clamp(screeAmt, 0.0, 1.0));
-
-          // ---- snow --------------------------------------------------------
-          float snowLine = 4450.0 + 620.0 * band + 210.0 * rough;
-          float snow = smoothstep(snowLine - 700.0, snowLine + 280.0, h);
-          // Snow does not hold on steep faces. In the Dras and Kargil sectors
-          // that threshold is low — anything past roughly 35 degrees is barren
-          // rock and scree — and it is precisely that exposed structure which
-          // gives the range its geology instead of a smooth white dome.
-          snow *= 1.0 - smoothstep(0.20, 0.54, slope);
-          // Break the snow line into patches rather than a drawn contour.
-          //
-          // This term used to add 0.9 * rough * snow * (1-snow) * 4.0, whose
-          // effective coefficient of 3.6 saturated snow to 1.0 for any positive
-          // rough. Since rough is roughly symmetric about zero, that erased the
-          // slope relationship over half the map and the whole range read as
-          // poured cream. It is a perturbation, so it stays bounded well under
-          // the signal, and peaks where the mix is genuinely ambiguous.
-          snow = clamp(snow + rough * 0.30 * (1.0 - abs(2.0 * snow - 1.0)), 0.0, 1.0);
-
-          // Wind-blown drifts collect in the lee of gullies at any altitude.
-          float drift = (1.0 - smoothstep(0.05, 0.42, slope)) * smoothstep(3900.0, 4700.0, h);
-          snow = max(snow, drift * 0.5 * smoothstep(-0.15, 0.35, band));
-
-          vec3 snowCol = vec3(0.74, 0.775, 0.85);
-          vec3 albedo = mix(ground, snowCol, snow);
-
-          // ---- lighting ----------------------------------------------------
-          float ndl = dot(N, uSunDir);
-          // Cast shadow never goes fully black: high-altitude air scatters a
-          // little direct sun sideways, and a hard zero reads as a hole.
-          float shadow = cloudShadowAt(vWorld, uSunDir) * mix(0.12, 1.0, sunVis);
-          // Snow scatters light forward through its top layer, so it stays lit
-          // a little past the terminator. Kept modest: too much wrap and the
-          // peaks lose all their shape and read as poured cream.
-          float wrapped = pow(clamp(ndl * 0.5 + 0.5, 0.0, 1.0), 2.4);
-          float lambert = max(ndl, 0.0);
-          float diffuse = mix(lambert, wrapped, snow * 0.35) * shadow;
-
-          // Sky illumination. A shadowed snowfield at 6 km is lit by the entire
-          // dome and by bounce off every lit face around it, so it stays a
-          // bright cold blue — nothing like the near-black an unlit surface
-          // would suggest. Getting this term too low is what makes procedural
-          // snow read as grey plastic.
-          vec3 skyUp = uZenithColor * 1.5 + vec3(0.10, 0.16, 0.26);
-          vec3 bounce = mix(vec3(0.12, 0.115, 0.112), vec3(0.52, 0.58, 0.68), snow);
-          vec3 ambient =
-            mix(bounce, skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.62 * (0.80 + 0.20 * sunVis);
-
-          // No per-channel penumbra tint here, though it is the standard trick
-          // (iq, Outdoors Lighting). Raising diffuse to per-channel powers
-          // above 1 reduces the sun term everywhere it is not saturated, which
-          // let the blue sky ambient dominate and pulled the whole range cold
-          // and murky — it undid the ambient balance that was tuned to stop
-          // shadowed snow crushing to grey. The blue-shadow cue it exists to
-          // produce is already carried by the sky term below.
-          vec3 color = albedo * (uSunColor * uSunIntensity * diffuse + ambient);
-
-          // Specular glint off wind-packed snow.
-          if (snow > 0.02) {
-            vec3 H = normalize(uSunDir - viewDir);
-            float spec = pow(max(dot(N, H), 0.0), 56.0);
-            color += uSunColor * spec * snow * 0.4 * shadow;
-          }
-
-          color = atm_applyAerial(color, viewDir, dist, uCameraPos.y, vWorld.y);
-          fragColor = vec4(color, 1.0);
-        }
-      `,
+      vertexShader: buildTerrainVertexShader({
+        levels: TERRAIN_LEVELS,
+        res: RES,
+        half: HALF,
+        depthBias: DEPTH_BIAS,
+      }),
+      fragmentShader: buildTerrainFragmentShader({
+        levels: TERRAIN_LEVELS,
+        res: RES,
+        half: HALF,
+        quality: 2,
+      }),
     });
   }
 
@@ -807,6 +500,96 @@ export class Terrain {
     this.dirty[L] = false;
   }
 
+  _beginCpuJob() {
+    for (let offset = 0; offset < TERRAIN_LEVELS; offset++) {
+      const L = (this._cpuNextLevel + offset) % TERRAIN_LEVELS;
+      if (!this.dirty[L]) continue;
+      this._cpuJob = {
+        level: L,
+        centerX: this.desired[L].x,
+        centerZ: this.desired[L].y,
+        phase: 0,
+        cursor: 0,
+      };
+      this._cpuNextLevel = (L + 1) % TERRAIN_LEVELS;
+      return true;
+    }
+    return false;
+  }
+
+  /** Advance one reusable CPU tile without exposing a partially updated layer. */
+  _advanceCpuGeneration() {
+    const stats = this.cpuFrameStats;
+    stats.samples = 0;
+    stats.commits = 0;
+    stats.uploadBytes = 0;
+    let remaining = Math.max(1, this.cpuSampleBudget | 0);
+    if (!this._cpuJob && !this._beginCpuJob()) return 0;
+    const job = this._cpuJob;
+    const L = job.level;
+    const cell = this.cells[L];
+    const texelCount = RES * RES;
+
+    while (remaining > 0 && job.phase === 0) {
+      const start = job.cursor;
+      const end = Math.min(start + remaining, texelCount);
+      for (; job.cursor < end; job.cursor++) {
+        const i = job.cursor % RES;
+        const j = Math.floor(job.cursor / RES);
+        const x = job.centerX + (i - HALF) * cell;
+        const z = job.centerZ + (j - HALF) * cell;
+        this.cpuLevelScratch[job.cursor] = terrainHeight(x, z);
+      }
+      const consumed = end - start;
+      stats.samples += consumed;
+      remaining -= consumed;
+      if (job.cursor === texelCount) {
+        job.phase = 1;
+        job.cursor = 0;
+      }
+    }
+
+    while (remaining > 0 && job.phase === 1 && job.cursor < texelCount) {
+      const start = job.cursor;
+      const end = Math.min(start + remaining, texelCount);
+      for (; job.cursor < end; job.cursor++) {
+        const i = job.cursor % RES;
+        const j = Math.floor(job.cursor / RES);
+        const left = this.cpuLevelScratch[j * RES + Math.max(i - 1, 0)];
+        const right = this.cpuLevelScratch[j * RES + Math.min(i + 1, RES - 1)];
+        const down = this.cpuLevelScratch[Math.max(j - 1, 0) * RES + i];
+        const up = this.cpuLevelScratch[Math.min(j + 1, RES - 1) * RES + i];
+        const gx = (right - left) / (Math.min(i + 1, RES - 1) - Math.max(i - 1, 0) || 1) / cell;
+        const gz = (up - down) / (Math.min(j + 1, RES - 1) - Math.max(j - 1, 0) || 1) / cell;
+        const invLength = 1 / Math.hypot(gx, 1, gz);
+        const p = job.cursor * 4;
+        this.cpuLayerStaging[p] = this.cpuLevelScratch[job.cursor];
+        this.cpuLayerStaging[p + 1] = -gx * invLength;
+        this.cpuLayerStaging[p + 2] = -gz * invLength;
+        this.cpuLayerStaging[p + 3] = 1;
+      }
+      const consumed = end - start;
+      stats.samples += consumed;
+      remaining -= consumed;
+    }
+
+    if (job.phase === 1 && job.cursor === texelCount) {
+      const layerOffset = L * texelCount * 4;
+      this.cpuHeightData.set(this.cpuLayerStaging, layerOffset);
+      this.heightArray.texture.addLayerUpdate(L);
+      this.heightArray.texture.needsUpdate = true;
+      this.centers[L].set(job.centerX, job.centerZ);
+      this.centerArray[L * 2] = job.centerX;
+      this.centerArray[L * 2 + 1] = job.centerZ;
+      this.dirty[L] = this.desired[L].x !== job.centerX || this.desired[L].y !== job.centerZ;
+      this._cpuJob = null;
+      stats.commits = 1;
+      stats.uploadBytes = this.cpuLayerStaging.byteLength;
+      return 1;
+    }
+    return 0;
+  }
+
   /**
    * @param {THREE.Vector3} focus  world position the clipmap should centre on
    * @param {number} budget        max layers to regenerate this frame
@@ -823,6 +606,8 @@ export class Terrain {
       }
     }
 
+    if (this.cpuGenerated) return budget > 0 ? this._advanceCpuGeneration() : 0;
+
     let done = 0;
     for (let L = 0; L < TERRAIN_LEVELS && done < budget; L++) {
       if (this.dirty[L]) {
@@ -837,6 +622,21 @@ export class Terrain {
 
   /** Force every layer to be current. Used during loading. */
   prime(focus) {
+    if (this.cpuGenerated) {
+      for (let L = 0; L < TERRAIN_LEVELS; L++) {
+        const snap = this.cells[L] * 2;
+        this.desired[L].set(
+          Math.round(focus.x / snap) * snap,
+          Math.round(focus.z / snap) * snap,
+        );
+        this.dirty[L] = true;
+      }
+      this._cpuJob = null;
+      // CPU fallback primes obey the same per-frame scheduler as flight
+      // updates. The loading/title veil reveals complete layers progressively;
+      // runtime primes keep sampling the prior centres until replacements land.
+      return this._advanceCpuGeneration();
+    }
     this.update(focus, TERRAIN_LEVELS);
   }
 
@@ -849,14 +649,20 @@ export class Terrain {
    * Readback stalls the pipeline, so this is a diagnostic, never a per-frame path.
    */
   verifyAgainst(cpuHeight, level = 3) {
-    const buffer = new Float32Array(RES * RES * 4);
-    // readRenderTargetPixels only honours its face/layer argument for cube
-    // targets; for an array target it reads whichever layer is currently
-    // attached. Bind the layer explicitly first.
-    const prev = this.renderer.getRenderTarget();
-    this.renderer.setRenderTarget(this.heightArray, level);
-    this.renderer.readRenderTargetPixels(this.heightArray, 0, 0, RES, RES, buffer);
-    this.renderer.setRenderTarget(prev);
+    let buffer;
+    if (this.cpuGenerated) {
+      const start = level * RES * RES * 4;
+      buffer = this.cpuHeightData.subarray(start, start + RES * RES * 4);
+    } else {
+      buffer = new Float32Array(RES * RES * 4);
+      // readRenderTargetPixels only honours its face/layer argument for cube
+      // targets; for an array target it reads whichever layer is currently
+      // attached. Bind the layer explicitly first.
+      const prev = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(this.heightArray, level);
+      this.renderer.readRenderTargetPixels(this.heightArray, 0, 0, RES, RES, buffer);
+      this.renderer.setRenderTarget(prev);
+    }
 
     const center = this.centers[level];
     const cell = this.cells[level];
@@ -886,6 +692,17 @@ export class Terrain {
 
   setQuality(tier) {
     this.material.uniforms.uDetailFade.value = tier.terrainDetail;
+    const quality = tier.name === 'high' ? 2 : tier.name === 'medium' ? 1 : 0;
+    if (quality !== this.terrainQuality) {
+      this.terrainQuality = quality;
+      this.material.fragmentShader = buildTerrainFragmentShader({
+        levels: TERRAIN_LEVELS,
+        res: RES,
+        half: HALF,
+        quality,
+      });
+      this.material.needsUpdate = true;
+    }
   }
 
   dispose() {

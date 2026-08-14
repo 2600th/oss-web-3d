@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { Environment } from '../world/Environment.js';
 import { Sky } from '../world/Sky.js';
-import { Terrain } from '../world/Terrain.js';
+import { Terrain, configureTerrain } from '../world/Terrain.js';
+import { Water } from '../world/Water.js';
 import { CloudVolume } from '../world/CloudVolume.js';
 import { terrainHeight, maxHeightAlong } from '../world/heightfield.js';
 import { FlightFx } from '../fx/FlightFx.js';
+import { setFxResolution, setSceneDepth } from '../fx/gpu/FrameUniforms.js';
 import { Audio } from '../fx/Audio.js';
 import { FlightModel } from '../flight/FlightModel.js';
 import { Aircraft } from '../flight/Aircraft.js';
@@ -30,6 +32,29 @@ const MAX_STEPS = 6;
 
 const START = new THREE.Vector3(21000, 0, 6000);
 
+/** Half-resolution, hard-capped scene source for lake refraction. */
+export function waterRefractionSize(width, height, tier, out = null) {
+  if (tier !== 'high' && tier !== 'medium') return null;
+  const scale = tier === 'high' ? 0.5 : 0.5;
+  const capW = tier === 'high' ? 960 : 768;
+  const capH = tier === 'high' ? 540 : 432;
+  const factor = Math.min(scale, capW / Math.max(width, 1), capH / Math.max(height, 1));
+  const result = out ?? [0, 0];
+  result[0] = Math.max(1, Math.floor(width * factor));
+  result[1] = Math.max(1, Math.floor(height * factor));
+  return result;
+}
+
+/** Select the refraction colour format that the current driver can render. */
+export function waterRefractionType(renderer, tier) {
+  if (tier !== 'high') return THREE.UnsignedByteType;
+  const renderableHalfFloat = Boolean(
+    renderer?.capabilities?.isWebGL2 &&
+    renderer?.extensions?.has?.('EXT_color_buffer_float'),
+  );
+  return renderableHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType;
+}
+
 export class Game {
   constructor(engine, settings, input) {
     this.engine = engine;
@@ -50,6 +75,24 @@ export class Game {
     this.terrain = new Terrain(engine.renderer, this.environment);
     engine.scene.add(this.terrain.group);
     this.terrain.setQuality(settings.tier);
+    this.terrainResolution = settings.tier.terrainRes;
+
+    this.water = new Water(engine.renderer, this.environment, { quality: settings.tier.name });
+    engine.scene.add(this.water);
+    this._waterRefractionTarget = null;
+    this._waterDrawingSize = new THREE.Vector2();
+    this._waterRefractionDimensions = [0, 0];
+    this._waterFrustum = new THREE.Frustum();
+    this._waterViewProjection = new THREE.Matrix4();
+    this._waterLakeBounds = new THREE.Sphere();
+    this._waterRefractionSource = {
+      colorTexture: null,
+      depthTexture: null,
+      width: 0,
+      height: 0,
+      near: engine.camera.near,
+      far: engine.camera.far,
+    };
 
     this.clouds = new CloudVolume(this.environment, engine.camera);
     engine.setClouds(this.clouds);
@@ -57,6 +100,12 @@ export class Game {
     this.fx = new FlightFx(this.environment);
     this.fx.setQuality(settings.tier);
     engine.scene.add(this.fx.group);
+    engine.renderer.getDrawingBufferSize(this._waterDrawingSize);
+    setSceneDepth(
+      engine.composer.stableDepthTexture,
+      this._waterDrawingSize.x,
+      this._waterDrawingSize.y,
+    );
 
     this.audio = new Audio(settings);
 
@@ -75,6 +124,14 @@ export class Game {
       onResume: () => this.resume(),
       onRestart: () => this.restart(),
       onQuality: (tier) => this.setQuality(tier),
+      onMasterVolume: (value) => this._setMasterVolume(value),
+      onMusicVolume: (value) => this._setMusicVolume(value),
+      onInvertPitch: (value) => this.settings.setInvertPitch(value),
+    });
+    this.screens.setOptions({
+      masterVolume: settings.masterVolume,
+      musicVolume: settings.musicVolume,
+      invertPitch: settings.invertPitch,
     });
     this.hud = new Hud(ui);
 
@@ -87,13 +144,23 @@ export class Game {
     this.reconActive = false;
     this.evaluation = null;
     this.terrainWarning = false;
+    this._postCrashImpulse = 0;
+    this._sunWorld = new THREE.Vector3();
+    this._sunNdc = new THREE.Vector3();
+    this._cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(engine.camera.quaternion);
+    this._cameraForwardNow = new THREE.Vector3();
+    this._cameraDelta = new THREE.Vector3();
+    this._cameraRight = new THREE.Vector3();
+    this._cameraUp = new THREE.Vector3();
+    this._cinematicLook = new THREE.Vector3();
+    this._disposed = false;
   }
 
   async load() {
-    this.screens.setProgress(0.1);
+    this.screens.setProgress(0.1, 'Calibrating flight systems');
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.terrain.prime(this.flight.position);
-    this.screens.setProgress(0.35);
+    this.screens.setProgress(0.35, 'Streaming Himalayan terrain');
 
     try {
       await this.aircraft.load('./models/mig21.glb', this.envMap);
@@ -101,8 +168,9 @@ export class Game {
       // A missing airframe should not take the whole experience down; the world
       // and the mission are still flyable, and the failure is visible.
       console.error('[game] aircraft model failed to load', error);
+      this.screens.showNotice?.('Aircraft model unavailable — continuing with flight instruments.');
     }
-    this.screens.setProgress(0.75);
+    this.screens.setProgress(0.75, 'Preparing reconnaissance sites');
 
     this.mission = new Mission(this.engine.scene, this.flight.position, 5);
     this.screens.setTargets(this.mission.posts);
@@ -152,7 +220,7 @@ export class Game {
       this.cinematicCentre.y + Math.sin(this.cinematicTime * 0.05) * 260,
       this.cinematicCentre.z + Math.sin(a) * r,
     );
-    const look = this.cinematicCentre.clone();
+    const look = this._cinematicLook.copy(this.cinematicCentre);
     look.y -= 900;
     camera.up.set(0, 1, 0);
     camera.lookAt(look);
@@ -190,6 +258,11 @@ export class Game {
   }
 
   restart() {
+    for (const post of this.mission.posts) {
+      if (!post.photo) continue;
+      this.recon.releaseShot(post.photo);
+      post.photo = null;
+    }
     this.mission.dispose();
     this.mission = new Mission(this.engine.scene, this._startPosition(), 5);
     this.screens.setTargets(this.mission.posts);
@@ -212,11 +285,53 @@ export class Game {
   }
 
   setQuality(tier) {
+    const previousResolution = this.terrainResolution;
     this.settings.setTier(tier);
     this.engine.applySettings();
-    this.terrain.setQuality(this.settings.tier);
+    if (this.settings.tier.terrainRes !== previousResolution) {
+      this._rebuildTerrain(this.settings.tier.terrainRes, previousResolution);
+    } else {
+      this.terrain.setQuality(this.settings.tier);
+    }
+    this.water.setQuality(this.settings.tier.name);
+    if (tier === 'low' || tier === 'phone') this._disposeWaterRefraction();
     this.fx.setQuality(this.settings.tier);
     this.screens.setQuality(tier);
+  }
+
+  _rebuildTerrain(resolution, previousResolution = this.terrainResolution) {
+    const oldTerrain = this.terrain;
+    let replacement = null;
+    try {
+      configureTerrain({ res: resolution });
+      replacement = new Terrain(this.engine.renderer, this.environment);
+      replacement.setQuality(this.settings.tier);
+      const focus = this.state === 'flying' ? this.flight.position : this.engine.camera.position;
+      replacement.prime(focus);
+      this.engine.scene.add(replacement.group);
+      this.engine.scene.remove(oldTerrain.group);
+      this.terrain = replacement;
+      this.terrainResolution = resolution;
+      oldTerrain.dispose();
+      return true;
+    } catch (error) {
+      replacement?.group?.removeFromParent();
+      replacement?.dispose?.();
+      configureTerrain({ res: previousResolution });
+      console.error('[game] terrain quality rebuild failed', error);
+      this.screens.showNotice?.('Terrain quality could not be changed on this device.');
+      return false;
+    }
+  }
+
+  _setMasterVolume(value) {
+    this.settings.setMasterVolume(value);
+    this.audio.setVolume(this.settings.masterVolume);
+  }
+
+  _setMusicVolume(value) {
+    this.settings.setMusicVolume(value);
+    this.audio.music?.setVolume(this.settings.musicVolume);
   }
 
   _finish(success) {
@@ -277,6 +392,8 @@ export class Game {
 
     this.environment.update(dt, this.engine.camera.position);
     this.sky.update(this.engine.camera);
+    this._updateWaterRefraction(dt);
+    this._updatePostEffects(dt);
     this.screens.refreshTargets(this.mission?.posts ?? []);
     input.clearPresses();
   }
@@ -345,7 +462,7 @@ export class Game {
     }
 
     this.terrain.update(flight.position, this.settings.tier.terrainBudget);
-    this.fx.update(dt, flight, this.engine.camera.position);
+    this.fx.update(dt, flight, this.engine.camera.position, this.engine.camera);
 
     // Closing rate between camera and aircraft, for the Doppler shift. The
     // chase camera trails, so hard acceleration opens the gap and drops the
@@ -391,13 +508,15 @@ export class Game {
   }
 
   _takePhoto(evaluation) {
-    const shot = this.recon.capture(this.engine.renderer, this.engine.scene, evaluation);
+    const shot = this.recon.capture(this.engine, evaluation);
     this.mission.photosTaken++;
 
     const post = evaluation.post;
     if (evaluation.score > post.bestScore) {
+      if (post.photo) this.recon.releaseShot(post.photo);
       post.bestScore = evaluation.score;
       post.photo = shot;
+      this.recon.retainShot(shot);
     }
     // Fire the confirmation on the *transition*, not on the state. Testing
     // post.captured after the fact replayed the objective-secured cue on every
@@ -413,7 +532,175 @@ export class Game {
   onCrash() {
     this.crashTimer = 0;
     this.mission.fail('terrain');
-    this.audio.impact(Math.min(1, this.flight.impactSpeed / 320));
+    const strength = Math.min(1, this.flight.impactSpeed / 320);
+    this.fx.crash(this.flight, strength);
+    this._postCrashImpulse = Math.max(this._postCrashImpulse, 0.5 + strength * 0.5);
+    this.audio.impact(strength);
+  }
+
+  _updateWaterRefraction(dt) {
+    const camera = this.engine.camera;
+    this.water.update(dt, camera);
+    this.engine.renderer.getDrawingBufferSize(this._waterDrawingSize);
+    setFxResolution(this._waterDrawingSize.x, this._waterDrawingSize.y);
+    const tier = this.settings.tier.name;
+    if (tier !== 'high' && tier !== 'medium') {
+      this.water.clearRefractionSource();
+      return;
+    }
+    if (!this._waterBatchInView(camera)) {
+      this.water.clearRefractionSource();
+      return;
+    }
+
+    const dimensions = waterRefractionSize(
+      this._waterDrawingSize.x,
+      this._waterDrawingSize.y,
+      tier,
+      this._waterRefractionDimensions,
+    );
+    const width = dimensions[0];
+    const height = dimensions[1];
+    const textureType = waterRefractionType(this.engine.renderer, tier);
+    let target = this._waterRefractionTarget;
+    if (target && target.texture.type !== textureType) {
+      target.dispose();
+      target = null;
+      this._waterRefractionTarget = null;
+    }
+    if (!target) {
+      target = new THREE.WebGLRenderTarget(width, height, {
+        format: THREE.RGBAFormat,
+        type: textureType,
+        internalFormat: textureType === THREE.HalfFloatType ? 'RGBA16F' : null,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: true,
+        stencilBuffer: false,
+      });
+      target.texture.name = 'water-refraction-color';
+      target.depthTexture = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
+      target.depthTexture.name = 'water-refraction-depth';
+      this._waterRefractionTarget = target;
+    } else if (target.width !== width || target.height !== height) {
+      target.setSize(width, height);
+    }
+
+    this.engine.renderSceneToTarget(target, this.engine.scene, camera, this.water);
+    const source = this._waterRefractionSource;
+    source.colorTexture = target.texture;
+    source.depthTexture = target.depthTexture;
+    source.width = width;
+    source.height = height;
+    source.near = camera.near;
+    source.far = camera.far;
+    this.water.setRefractionSource(source);
+  }
+
+  /** Frustum-test the exact accepted lake batch with reusable scratch state. */
+  _waterBatchInView(camera) {
+    const water = this.water;
+    const field = water?.field;
+    const count = Math.min(
+      water?.visibleLakeCount ?? 0,
+      field?.activeCount ?? 0,
+      field?.active?.length ?? 0,
+    );
+    if (!water?.visible || count <= 0) return false;
+
+    this._waterViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this._waterFrustum.setFromProjectionMatrix(this._waterViewProjection);
+    const bounds = this._waterLakeBounds;
+    for (let i = 0; i < count; i++) {
+      const lake = field.active[i];
+      if (!lake) continue;
+      bounds.center.set(lake.x, lake.level, lake.z);
+      // rMax encloses the accepted shoreline. The extra margin conservatively
+      // covers vertical displacement without admitting behind-camera lakes.
+      bounds.radius = Math.max(lake.rMax ?? lake.rMean ?? 1, 1) + 16;
+      if (this._waterFrustum.intersectsSphere(bounds)) return true;
+    }
+    return false;
+  }
+
+  _disposeWaterRefraction() {
+    this.water?.clearRefractionSource();
+    this._waterRefractionTarget?.dispose();
+    this._waterRefractionTarget = null;
+    if (this._waterRefractionSource) {
+      this._waterRefractionSource.colorTexture = null;
+      this._waterRefractionSource.depthTexture = null;
+    }
+  }
+
+  _updatePostEffects(dt) {
+    const camera = this.engine.camera;
+    camera.getWorldDirection(this._cameraForwardNow);
+
+    this._sunWorld.copy(camera.position).addScaledVector(this.environment.sunDir, 100000);
+    this._sunNdc.copy(this._sunWorld).project(camera);
+    const sunFacing = THREE.MathUtils.smoothstep(
+      this._cameraForwardNow.dot(this.environment.sunDir),
+      -0.02,
+      0.18,
+    );
+    const sunOnScreen = Math.abs(this._sunNdc.x) < 1.12 &&
+      Math.abs(this._sunNdc.y) < 1.12 && this._sunNdc.z >= -1 && this._sunNdc.z <= 1;
+    const sunVisibility = sunOnScreen ? sunFacing : 0;
+    this.engine.setSunScreenPosition(
+      this._sunNdc.x * 0.5 + 0.5,
+      this._sunNdc.y * 0.5 + 0.5,
+      sunVisibility,
+    );
+
+    this._cameraDelta.subVectors(this._cameraForwardNow, this._cameraForward);
+    this._cameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    this._cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    const motionX = THREE.MathUtils.clamp(this._cameraDelta.dot(this._cameraRight) * 130, -18, 18);
+    const motionY = THREE.MathUtils.clamp(this._cameraDelta.dot(this._cameraUp) * 130, -18, 18);
+    const angularMotion = Math.min(1, this._cameraDelta.length() * 16);
+    const speedMotion = this.state === 'flying'
+      ? THREE.MathUtils.clamp((this.flight.airspeed - 160) / 360, 0, 1) * 0.18
+      : 0;
+    const crashMotion = this._postCrashImpulse * 0.45;
+    this.engine.setMotionBlur(motionX, motionY, Math.min(0.6, angularMotion * 0.34 + speedMotion + crashMotion));
+
+    const reheat = this.state === 'flying'
+      ? THREE.MathUtils.clamp((this.flight.throttleSmoothed - 0.84) / 0.16, 0, 1)
+      : 0;
+    this.engine.setHeatDistortion(Math.min(0.72, reheat * 0.38 + this._postCrashImpulse * 0.34));
+    this.engine.setLensArtifacts(
+      0.055 + sunVisibility * 0.12,
+      0.055 + sunVisibility * 0.075 + speedMotion * 0.08,
+    );
+
+    this._postCrashImpulse *= Math.exp(-dt * 2.3);
+    if (this._postCrashImpulse < 0.001) this._postCrashImpulse = 0;
+    this._cameraForward.copy(this._cameraForwardNow);
+  }
+
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    this._disposeWaterRefraction();
+    this.mission?.dispose?.();
+    this.recon?.dispose?.();
+    this.aircraft?.dispose?.();
+    this.fx?.dispose?.();
+    this.water?.removeFromParent();
+    this.water?.dispose?.();
+    this.terrain?.group?.removeFromParent();
+    this.terrain?.dispose?.();
+    this.sky?.mesh?.removeFromParent();
+    this.sky?.dispose?.();
+    this.engine.setClouds?.(null);
+    if (this.engine.scene.environment === this.envMap) this.engine.scene.environment = null;
+    this.environment?.dispose?.();
+    this.screens?.dispose?.();
+    this.hud?.dispose?.();
+    this.audio?.dispose?.();
+    this._skipHandlers?.clear?.();
+    this.input?.releaseTouch?.();
   }
 
   _updateHud(dt) {

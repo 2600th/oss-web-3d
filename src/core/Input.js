@@ -1,10 +1,19 @@
 /**
- * Keyboard / mouse / gamepad input, normalised into flight axes.
+ * Keyboard / gamepad / touch input, normalised into flight axes.
  *
  * Axes are smoothed toward their target rather than snapping. A jet's stick is
  * not a switch, and raw digital keys applied straight to a rate controller feel
  * like a spreadsheet. The smoothing time constants here are part of the flight
  * feel, not a UI nicety.
+ *
+ * There is deliberately no mouse-flying path. One existed here — a `mouseMode`
+ * flag, a mousemove listener and a branch that overrode pitch and roll from the
+ * cursor — but nothing ever set the flag, so it was unreachable from the first
+ * commit. Wiring it up properly would mean pointer lock (a free cursor over a
+ * fullscreen canvas cannot express a centred stick), and pointer lock needs a
+ * click to enter, which is the same click the title sequence uses to skip. A
+ * half-wired input mode is worse than none, so the path is gone rather than
+ * left as scaffolding: the game is flown on keys, a pad, or glass.
  */
 
 const AXIS_ATTACK = 7.0; // how fast a key press reaches full deflection
@@ -33,20 +42,33 @@ export class Input {
     this._rollTarget = 0;
     this._yawTarget = 0;
 
-    this.mouseMode = false;
-    this._mouseX = 0;
-    this._mouseY = 0;
-
     // Edge-triggered actions consumed once per frame by the game.
     this._pressed = new Set();
 
+    // Sampled once per update(); see the getter below.
+    this._pad = null;
+
     this._onKeyDown = (e) => {
       if (e.repeat) return;
-      // Never swallow browser-level combinations.
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Command is the one modifier still refused outright. macOS does not
+      // deliver keyup for a character key while Command is held, so anything
+      // recorded during a Cmd chord would stay in `keys` for the rest of the
+      // session and fly the aircraft on its own. Ctrl and Alt do deliver keyup,
+      // and losing the window to a shortcut fires blur, which clears the set.
+      if (e.metaKey) return;
       this.keys.add(e.code);
       this._pressed.add(e.code);
-      if (PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+      // Suppressing the default is what would swallow a browser shortcut —
+      // *recording* the key never could. The original guard returned early on
+      // any modifier, which meant Control's own keydown never reached `keys`
+      // (ctrlKey is already true on it), so the advertised throttle-down
+      // binding was unreachable and every other key was dropped for as long as
+      // Ctrl was held — i.e. for the whole time the player was pulling the
+      // throttle back. Gating the suppression instead gives both: Ctrl+R still
+      // reloads because we never call preventDefault on it, and bare Ctrl is an
+      // ordinary binding. Shift is excluded from the test because Shift is
+      // itself a binding and forms no browser accelerator with Space or Tab.
+      if (PREVENT_DEFAULT.has(e.code) && !e.ctrlKey && !e.altKey) e.preventDefault();
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
     this._onBlur = () => {
@@ -57,16 +79,10 @@ export class Input {
       // turning while the player is looking at something else.
       this.releaseTouch();
     };
-    this._onMouseMove = (e) => {
-      if (!this.mouseMode) return;
-      this._mouseX = e.clientX / window.innerWidth - 0.5;
-      this._mouseY = e.clientY / window.innerHeight - 0.5;
-    };
 
     target.addEventListener('keydown', this._onKeyDown);
     target.addEventListener('keyup', this._onKeyUp);
     target.addEventListener('blur', this._onBlur);
-    target.addEventListener('mousemove', this._onMouseMove);
     this._target = target;
   }
 
@@ -124,14 +140,35 @@ export class Input {
     this._pressed.clear();
   }
 
+  /**
+   * The active gamepad, as sampled at the top of this frame's update().
+   *
+   * navigator.getGamepads() is not a cheap accessor: the spec requires it to
+   * return a *fresh* array of freshly snapshotted Gamepad objects on every
+   * call, so reading it twice a frame — once for the axes, once for the recon
+   * button — allocated two arrays and two pad snapshots per frame for the whole
+   * session. Sampling once and caching costs nothing and cannot go stale within
+   * a frame, since the browser only refreshes pad state between tasks anyway.
+   */
   get gamepad() {
+    return this._pad;
+  }
+
+  _sampleGamepad() {
     if (!navigator.getGamepads) return null;
     const pads = navigator.getGamepads();
-    for (const p of pads) if (p && p.connected) return p;
+    // Indexed rather than for..of: the iterator protocol allocates too, and
+    // this runs every frame.
+    for (let i = 0; i < pads.length; i++) {
+      const p = pads[i];
+      if (p && p.connected) return p;
+    }
     return null;
   }
 
   update(dt, invertPitch = false) {
+    this._pad = this._sampleGamepad();
+
     if (!this.enabled) {
       this._pitchTarget = this._rollTarget = this._yawTarget = 0;
     } else {
@@ -140,23 +177,17 @@ export class Input {
       let r = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
       let y = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
 
-      const pad = this.gamepad;
+      const pad = this._pad;
       if (pad) {
-        const dz = (v) => (Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86);
-        const ax0 = dz(pad.axes[0] ?? 0);
-        const ax1 = dz(pad.axes[1] ?? 0);
+        const ax0 = deadzone(pad.axes[0] ?? 0);
+        const ax1 = deadzone(pad.axes[1] ?? 0);
         if (ax0) r = ax0;
         if (ax1) p = ax1;
         const lt = pad.buttons[6]?.value ?? 0;
         const rt = pad.buttons[7]?.value ?? 0;
         if (rt > 0.02 || lt > 0.02) this.throttle = Math.min(1, Math.max(0, this.throttle + (rt - lt) * dt * 1.1));
-        const yawAxis = dz(pad.axes[2] ?? 0);
+        const yawAxis = deadzone(pad.axes[2] ?? 0);
         if (yawAxis) y = yawAxis;
-      }
-
-      if (this.mouseMode) {
-        p = Math.max(-1, Math.min(1, this._mouseY * 2.6));
-        r = Math.max(-1, Math.min(1, this._mouseX * 2.6));
       }
 
       // Touch overrides, applied last so an on-screen stick wins over the keys
@@ -167,7 +198,7 @@ export class Input {
       // and release stored zeroes rather than clearing the axes, so from the
       // first touch onward every frame overwrote pitch and roll with 0. On a
       // tablet with a keyboard, or a touchscreen laptop, one tap disabled the
-      // keyboard, the mouse and the gamepad for the rest of the session.
+      // keyboard and the gamepad for the rest of the session.
       if (this.touchActive && this._touchPitch !== null) {
         p = this._touchPitch;
         r = this._touchRoll;
@@ -191,8 +222,7 @@ export class Input {
         this.throttle = Math.max(0, this.throttle - dt * 0.62);
       }
       this.brake = k.has('KeyZ') ? 1 : 0;
-      this.reconHeld =
-        k.has('Space') || !!this.gamepad?.buttons[5]?.value || this.touchRecon === true;
+      this.reconHeld = k.has('Space') || !!pad?.buttons[5]?.value || this.touchRecon === true;
     }
 
     this.pitch = approach(this.pitch, this._pitchTarget, dt);
@@ -204,8 +234,12 @@ export class Input {
     this._target.removeEventListener('keydown', this._onKeyDown);
     this._target.removeEventListener('keyup', this._onKeyUp);
     this._target.removeEventListener('blur', this._onBlur);
-    this._target.removeEventListener('mousemove', this._onMouseMove);
   }
+}
+
+/** Analogue stick deadzone, rescaled so the usable range still reaches 1. */
+function deadzone(v) {
+  return Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86;
 }
 
 const PREVENT_DEFAULT = new Set([

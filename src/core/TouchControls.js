@@ -30,6 +30,8 @@ export class TouchControls {
   constructor(input, root) {
     this.input = input;
     this.enabled = false;
+    this._listeners = [];
+    this._disposed = false;
 
     this.layer = document.createElement('div');
     this.layer.id = 'touch';
@@ -58,13 +60,31 @@ export class TouchControls {
   }
 
   setEnabled(on) {
-    this.enabled = on;
-    this.layer.classList.toggle('show', on);
+    if (this._disposed) return;
+    this.enabled = Boolean(on);
+    this.layer.classList.toggle('show', this.enabled);
+    this.layer.setAttribute('aria-hidden', String(!this.enabled));
+    if (!this.enabled) {
+      this._stickId = null;
+      this._throttleId = null;
+      this.stickRing.style.opacity = '0';
+      this.stickNub.style.opacity = '0';
+      this.input.releaseTouch();
+      this.input.touchRecon = false;
+      this.reconButton.classList.toggle('active', false);
+      this.layer.classList.toggle('recon-open', false);
+    }
+  }
+
+  _listen(target, type, handler, options) {
+    target.addEventListener(type, handler, options);
+    this._listeners.push([target, type, handler, options]);
   }
 
   _bind() {
     const stick = this.stickZone;
-    stick.addEventListener('pointerdown', (e) => {
+    this._listen(stick, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       if (this._stickId !== null) return;
       this._stickId = e.pointerId;
       stick.setPointerCapture(e.pointerId);
@@ -83,7 +103,7 @@ export class TouchControls {
       this._moveStick(e);
       e.preventDefault();
     };
-    stick.addEventListener('pointermove', move);
+    this._listen(stick, 'pointermove', move);
 
     const end = (e) => {
       if (e.pointerId !== this._stickId) return;
@@ -95,13 +115,13 @@ export class TouchControls {
       this.input.releaseTouch();
       e.preventDefault();
     };
-    stick.addEventListener('pointerup', end);
-    stick.addEventListener('pointercancel', end);
+    this._listen(stick, 'pointerup', end);
+    this._listen(stick, 'pointercancel', end);
     // Capture can be lost without a pointerup — a system gesture, the tab going
     // to the background — and a stick stuck at full deflection is the classic
     // mobile-web flight bug.
-    stick.addEventListener('lostpointercapture', end);
-    document.addEventListener('visibilitychange', () => {
+    this._listen(stick, 'lostpointercapture', end);
+    this._listen(document, 'visibilitychange', () => {
       if (document.hidden) {
         this._stickId = null;
         this.stickRing.style.opacity = '0';
@@ -118,13 +138,15 @@ export class TouchControls {
       this.input.setTouchThrottle(t);
       this.throttleFill.style.transform = `scaleY(${t})`;
     };
-    thr.addEventListener('pointerdown', (e) => {
+    this._listen(thr, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       this._throttleId = e.pointerId;
       thr.setPointerCapture(e.pointerId);
       applyThrottle(e);
       e.preventDefault();
     });
-    thr.addEventListener('pointermove', (e) => {
+    this._listen(thr, 'pointermove', (e) => {
+      if (!this.enabled) return;
       if (e.pointerId !== this._throttleId) return;
       applyThrottle(e);
       e.preventDefault();
@@ -134,35 +156,41 @@ export class TouchControls {
       this._throttleId = null;
       e.preventDefault();
     };
-    thr.addEventListener('pointerup', thrEnd);
-    thr.addEventListener('pointercancel', thrEnd);
+    this._listen(thr, 'pointerup', thrEnd);
+    this._listen(thr, 'pointercancel', thrEnd);
 
     // ---- buttons --------------------------------------------------------
     // Recon is held on the keyboard, so it is a toggle here: asking a player to
     // keep a thumb pinned while steering with the other and framing a shot is
     // one thumb too many.
-    this.reconButton.addEventListener('pointerdown', (e) => {
+    this._listen(this.reconButton, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       e.preventDefault();
       this.input.toggleTouchRecon();
       this.reconButton.classList.toggle('active', this.input.touchRecon);
       this.layer.classList.toggle('recon-open', this.input.touchRecon);
     });
-    this.shutterButton.addEventListener('pointerdown', (e) => {
+    this._listen(this.shutterButton, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       e.preventDefault();
       this.input.pressTouch('Enter');
     });
-    this.zoomInButton.addEventListener('pointerdown', (e) => {
+    this._listen(this.zoomInButton, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       e.preventDefault();
       this.input.pressTouch('KeyF');
     });
-    this.zoomOutButton.addEventListener('pointerdown', (e) => {
+    this._listen(this.zoomOutButton, 'pointerdown', (e) => {
+      if (!this.enabled) return;
       e.preventDefault();
       this.input.pressTouch('KeyV');
     });
 
     // Stop iOS from treating a two-finger flight input as a page zoom.
     for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
-      this.layer.addEventListener(ev, (e) => e.preventDefault());
+      this._listen(this.layer, ev, (e) => {
+        if (this.enabled) e.preventDefault();
+      });
     }
   }
 
@@ -193,6 +221,17 @@ export class TouchControls {
     };
     // Pull up is thumb-back, matching a real stick and every flight game.
     this.input.setTouchAxes(norm(dy), norm(dx));
+  }
+
+  dispose() {
+    if (this._disposed) return;
+    this.setEnabled(false);
+    this._disposed = true;
+    for (const [target, type, handler, options] of this._listeners) {
+      target.removeEventListener(type, handler, options);
+    }
+    this._listeners.length = 0;
+    this.layer.remove();
   }
 }
 

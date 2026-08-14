@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { terrainHeight, terrainNormal } from '../world/heightfield.js';
+import { terrainHeight } from '../world/heightfield.js';
 
 /**
  * Arcade flight model with real aerodynamic bones.
@@ -68,9 +68,9 @@ export const AIRCRAFT = {
 };
 
 const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
-const _n = { x: 0, y: 1, z: 0 };
 
 export function airDensity(altitude) {
   return SEA_LEVEL_DENSITY * Math.exp(-Math.max(altitude, 0) / SCALE_HEIGHT);
@@ -92,7 +92,6 @@ export class FlightModel {
     this.throttle = 0.72;
     this.reheat = false;
     this.airspeed = 0;
-    this.machish = 0;
     this.altitude = 0;
     this.agl = 0;
     this.groundHeight = 0;
@@ -103,12 +102,16 @@ export class FlightModel {
     this.crashed = false;
     this.throttleSmoothed = 0.72;
 
+    /** Where the aircraft entered the terrain clearance envelope, once crashed. */
+    this.impactPoint = new THREE.Vector3();
+    this.impactSpeed = 0;
+
     this._prevVelocity = new THREE.Vector3();
   }
 
   reset(position, headingRadians = 0, speed = 250) {
     this.position.copy(position);
-    this.orientation.setFromEuler(new THREE.Euler(0, headingRadians, 0, 'YXZ'));
+    this.orientation.setFromEuler(_e.set(0, headingRadians, 0, 'YXZ'));
     this._refreshAxes();
     this.velocity.copy(this.forward).multiplyScalar(speed);
     this.rates.set(0, 0, 0);
@@ -133,9 +136,6 @@ export class FlightModel {
     this.altitude = this.position.y;
     this.groundHeight = terrainHeight(this.position.x, this.position.z);
     this.agl = this.altitude - this.groundHeight;
-    // "Mach" here is only ever shown as an indicator; a true speed of sound
-    // model would need temperature, and nothing in the experience needs it.
-    this.machish = this.airspeed / 300;
   }
 
   /**
@@ -173,7 +173,6 @@ export class FlightModel {
     const targetPitch = -control.pitch * pitchCap;
     const targetRoll = -control.roll * AIRCRAFT.maxRollRate * authority;
     const targetYaw = -control.yaw * Math.min(AIRCRAFT.maxYawRate * authority, gLimitedRate * 0.5);
-    this.turnRateLimit = pitchCap;
 
     this.rates.x += (targetPitch - this.rates.x) * (1 - Math.exp(-AIRCRAFT.pitchAgility * dt));
     this.rates.z += (targetRoll - this.rates.z) * (1 - Math.exp(-AIRCRAFT.rollAgility * dt));
@@ -187,7 +186,10 @@ export class FlightModel {
     this.stalling = this.stallFactor > 0.25;
 
     // ---- integrate attitude ------------------------------------------------
-    _q.setFromEuler(new THREE.Euler(this.rates.x * dt, this.rates.y * dt, this.rates.z * dt, 'XYZ'));
+    // Module-scope Euler, like every other scratch object here. This ran at
+    // 120 Hz and was the only allocation left in the physics step.
+    _e.set(this.rates.x * dt, this.rates.y * dt, this.rates.z * dt, 'XYZ');
+    _q.setFromEuler(_e);
     this.orientation.multiply(_q).normalize();
     this._refreshAxes();
 
@@ -274,34 +276,55 @@ export class FlightModel {
   }
 
   /**
-   * Ground collision. Samples slightly ahead along the flight path as well as
-   * underneath, because at 250 m/s a per-frame point test under the aircraft
-   * misses a ridge entirely between frames.
+   * Ground collision along the segment the aircraft has just flown.
+   *
+   * update() advances the position by velocity * dt before this runs, so the
+   * step just travelled is exactly [position - velocity*dt, position]. That is
+   * what gets sampled, and the reconstruction is exact rather than an estimate:
+   * the integrator moved the aircraft with this very velocity.
+   *
+   * It used to sample [position, position + velocity*dt] instead — forward,
+   * into a step that had not happened yet, extrapolated with a velocity that
+   * the next call to update() was about to change. So the segment actually
+   * traversed was never tested by anyone: it was only ever approximated, one
+   * call early, by an extrapolation whose error is the acceleration term. A
+   * caller stepping at frame rate rather than at the 120 Hz physics rate leaves
+   * a hole the size of a whole frame of travel — 16 m at 500 m/s and 30 fps,
+   * against a 12 m clearance — and a jet can pass clean through a ridge with
+   * both endpoint tests reporting clear air. The docstring claimed the opposite
+   * ("samples slightly ahead ... as well as underneath"), which is why it stood.
+   *
+   * Sample spacing is held to half the clearance so the test cannot step over
+   * the envelope it is enforcing, whatever dt the caller passes.
    */
   checkTerrainCollision(dt, clearance = 12) {
     if (this.crashed) return false;
-    const steps = 4;
-    // Starts at i = 0, the current position. update() has already moved the
-    // aircraft by the time this runs, so beginning at i = 1 skipped the whole
-    // step just travelled: a jet that ended the frame inside a ridge went
-    // undetected whenever the four predictive samples came out the far side.
+
+    const travel = this.velocity.length() * dt;
+    const steps = Math.min(24, Math.max(4, Math.ceil(travel / (clearance * 0.5))));
+    // March from where the step began (t = -dt) forward to the aircraft (t = 0),
+    // so the breach reported is the point of *entry*. Marching the other way
+    // would return the far side of a ridge already flown through, and the
+    // wreck would be planted beyond the hill it hit. i = 0 duplicates the
+    // previous call's last sample, which is the correct overlap: it is the only
+    // way an aircraft that has just been repositioned can be tested at all.
     for (let i = 0; i <= steps; i++) {
-      const t = (dt * i) / steps;
+      const t = dt * (i / steps - 1);
       const x = this.position.x + this.velocity.x * t;
       const y = this.position.y + this.velocity.y * t;
       const z = this.position.z + this.velocity.z * t;
       if (y - terrainHeight(x, z) < clearance) {
         this.crashed = true;
-        this.impactPoint = new THREE.Vector3(x, terrainHeight(x, z), z);
-        terrainNormal(x, z, 8, _n);
-        this.impactNormal = new THREE.Vector3(_n.x, _n.y, _n.z);
+        this.impactPoint.set(x, terrainHeight(x, z), z);
         this.impactSpeed = this.velocity.length();
         // Put the aircraft on the ground it just hit. update() returns early
         // once crashed, so without this the jet hangs wherever the step left it
-        // — often a hundred metres clear of the slope, in mid-air — and holds
-        // that pose for the two seconds before the failure screen. Detecting
-        // the impact a fraction of a second early is what buys the margin; the
-        // aircraft still has to arrive.
+        // — which, now that the whole traversed segment is tested, can be well
+        // past the ridge, in clear air on the far side — and holds that pose
+        // for the two seconds before the failure screen. The breach point is
+        // the honest place for the wreck: it is on the face the aircraft
+        // actually flew into, a third of the clearance envelope above the rock
+        // so the airframe rests on the slope rather than buried in it.
         this.position.set(x, this.impactPoint.y + clearance * 0.35, z);
         this.velocity.set(0, 0, 0);
         // update() returns early once crashed, so this is the last chance to
