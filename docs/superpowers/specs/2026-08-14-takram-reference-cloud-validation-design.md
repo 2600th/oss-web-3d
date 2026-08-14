@@ -36,7 +36,7 @@ This profile reproduces the pinned upstream vanilla guidance:
   - blue: altitude `7,500`, height `500`, density `0.003`, shape `0.4`, no detail, bias `0.35`, filter width `0.5`;
 - official pinned local-weather, shape, shape-detail, turbulence, STBN and Bruneton atmosphere textures;
 - Takram haze and accurate lighting enabled for the ordinary composited reference view;
-- a dedicated reference camera scenario that is clearly outside every layer boundary and does not place cumulus below the visible terrain.
+- a dedicated sky-only reference diagnostic that is clearly outside every layer boundary and explicitly reports that exact low-altitude cumulus is terrain-occluded in the Himalayan world.
 
 The exact upstream layer altitudes are geodetic and mostly below Himalayan terrain. Therefore this profile proves reference fidelity and integration correctness, not final mission art direction.
 
@@ -68,7 +68,7 @@ Diagnostics are comparison-build-only, publish their mode in the result JSON, an
 
 Both profiles run the existing deterministic opening, side-bank, motion, recon-cut and objective scenarios. The validation set adds:
 
-- `reference-sky`: camera between the exact upstream cumulus and cirrus shells with visible sky silhouettes;
+- `reference-sky`: an explicitly labelled sky-only/raw-buffer diagnostic between the exact upstream cumulus and cirrus shells; it proves the pinned density model independently of Himalayan terrain depth and is not presented as an in-scene mission capture;
 - `himalayan-opening`: the real opening route with altitude-translated cumulus banks framing but not blocking the route;
 - `himalayan-side-bank`: an oblique terrain/cloud view exposing cloud bases, crowns and depth intersection;
 - `cloud-buffer`: the same camera used for composite, cloud-alpha and cloud-color captures.
@@ -106,7 +106,7 @@ Implementation is test-first.
 
 ### Visual and performance gates
 
-At 1920 x 1080 High, fresh Chrome captures must show:
+At 1920 x 1080 High, fresh Chrome captures of `takram-himalayan` must show:
 
 - at least two recognisable volumetric cloud bodies with irregular silhouettes;
 - readable darker bases and brighter crowns or silver lining;
@@ -127,4 +127,3 @@ The result records cloud-pass GPU median/p95, end-to-end cadence, exact GPU memo
 - Deterministic reference and Himalayan scenarios.
 - Fresh machine-readable results and 1920 x 1080 Chrome captures for both profiles.
 - An updated comparison decision that distinguishes reference fidelity, Himalayan suitability and production adoption.
-
