@@ -29,11 +29,21 @@ export class Input {
     this.brake = 0;
     this.reconHeld = false;
     this.enabled = true;
+    this.intent = {
+      turn: 0,
+      climb: 0,
+      speed: 0,
+      boost: false,
+      brake: 0,
+      throttle: 0.72,
+    };
+    this.modality = 'keyboard';
 
     // Touch state. `touchActive` latches on first use so a desktop session is
     // never affected by these being present.
     this.touchActive = false;
     this.touchRecon = false;
+    this.touchBoost = false;
     this._touchPitch = null;
     this._touchRoll = null;
     this._touchThrottle = null;
@@ -47,6 +57,8 @@ export class Input {
 
     // Sampled once per update(); see the getter below.
     this._pad = null;
+    this._padReleaseQuarantined = false;
+    this._reconWasHeld = false;
 
     this._onKeyDown = (e) => {
       if (e.repeat) return;
@@ -56,6 +68,7 @@ export class Input {
       // session and fly the aircraft on its own. Ctrl and Alt do deliver keyup,
       // and losing the window to a shortcut fires blur, which clears the set.
       if (e.metaKey) return;
+      this.modality = 'keyboard';
       this.keys.add(e.code);
       this._pressed.add(e.code);
       // Suppressing the default is what would swallow a browser shortcut —
@@ -71,18 +84,16 @@ export class Input {
       if (PREVENT_DEFAULT.has(e.code) && !e.ctrlKey && !e.altKey) e.preventDefault();
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
-    this._onBlur = () => {
-      this.keys.clear();
-      this._pitchTarget = this._rollTarget = this._yawTarget = 0;
-      // Also release the touch stick. Losing the window mid-gesture otherwise
-      // leaves it held at whatever deflection it had, and the aircraft keeps
-      // turning while the player is looking at something else.
-      this.releaseTouch();
+    this._onBlur = () => this.releaseAll();
+    this._onVisibilityChange = () => {
+      if (this._document.hidden) this.releaseAll();
     };
 
     target.addEventListener('keydown', this._onKeyDown);
     target.addEventListener('keyup', this._onKeyUp);
     target.addEventListener('blur', this._onBlur);
+    this._document = target.document ?? globalThis.document ?? null;
+    this._document?.addEventListener('visibilitychange', this._onVisibilityChange);
     this._target = target;
   }
 
@@ -98,16 +109,24 @@ export class Input {
    * @param {number|null} roll
    */
   setTouchAxes(pitch, roll) {
+    this.modality = 'touch';
     this.touchActive = pitch !== null;
     this._touchPitch = pitch;
     this._touchRoll = roll;
   }
 
   setTouchThrottle(t) {
+    this.modality = 'touch';
     this._touchThrottle = t;
   }
 
+  setTouchBoost(held) {
+    this.modality = 'touch';
+    this.touchBoost = held === true;
+  }
+
   toggleTouchRecon() {
+    this.modality = 'touch';
     this.touchRecon = !this.touchRecon;
     this.touchActive = true;
   }
@@ -121,6 +140,7 @@ export class Input {
 
   /** Fire an edge-triggered action from an on-screen button. */
   pressTouch(code) {
+    this.modality = 'touch';
     this.touchActive = true;
     this._pressed.add(code);
   }
@@ -138,6 +158,26 @@ export class Input {
 
   clearPresses() {
     this._pressed.clear();
+  }
+
+  /** Clear every transient input source without replacing the stable intent. */
+  releaseAll() {
+    this.keys.clear();
+    this._pressed.clear();
+    this._pitchTarget = this._rollTarget = this._yawTarget = 0;
+    this.touchActive = false;
+    this.touchRecon = false;
+    this.touchBoost = false;
+    this._touchPitch = null;
+    this._touchRoll = null;
+    this._touchThrottle = null;
+    this._pad = null;
+    this._padReleaseQuarantined = true;
+    this._reconWasHeld = false;
+    this.reconHeld = false;
+    this.brake = 0;
+    this.throttle = 0.72;
+    setNeutralIntent(this.intent, this.throttle);
   }
 
   /**
@@ -166,28 +206,56 @@ export class Input {
     return null;
   }
 
-  update(dt, invertPitch = false) {
+  update(dt, verticalMode = 'upToClimb') {
     this._pad = this._sampleGamepad();
+    if (this._padReleaseQuarantined) {
+      if (!this._pad || isPadNeutral(this._pad)) this._padReleaseQuarantined = false;
+      else this._pad = null;
+    }
+    const invertAnalogue = verticalMode === 'upToDive' || verticalMode === true;
+    const intent = this.intent;
+    setNeutralIntent(intent, this.throttle);
 
     if (!this.enabled) {
       this._pitchTarget = this._rollTarget = this._yawTarget = 0;
+      this.reconHeld = false;
+      this._reconWasHeld = false;
     } else {
       const k = this.keys;
       let p = (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0);
       let r = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
       let y = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
+      let analogueVertical = false;
+      intent.climb = p ? -p : 0;
+      intent.turn = r;
+      intent.speed = k.has('ControlLeft') || k.has('ControlRight') ? -1 : 0;
+      intent.boost = k.has('ShiftLeft') || k.has('ShiftRight') || this.touchBoost;
 
       const pad = this._pad;
       if (pad) {
         const ax0 = deadzone(pad.axes[0] ?? 0);
         const ax1 = deadzone(pad.axes[1] ?? 0);
-        if (ax0) r = ax0;
-        if (ax1) p = ax1;
+        if (ax0) {
+          r = ax0;
+          intent.turn = ax0;
+        }
+        if (ax1) {
+          p = ax1;
+          analogueVertical = true;
+          intent.climb = invertAnalogue ? ax1 : -ax1;
+        }
         const lt = pad.buttons[6]?.value ?? 0;
         const rt = pad.buttons[7]?.value ?? 0;
-        if (rt > 0.02 || lt > 0.02) this.throttle = Math.min(1, Math.max(0, this.throttle + (rt - lt) * dt * 1.1));
+        if (rt > 0.02 || lt > 0.02) {
+          const triggerSpeed = rt - lt;
+          intent.speed = triggerSpeed;
+          this.throttle = Math.min(1, Math.max(0, this.throttle + triggerSpeed * dt * 1.1));
+        }
         const yawAxis = deadzone(pad.axes[2] ?? 0);
         if (yawAxis) y = yawAxis;
+        if (ax0 || ax1 || yawAxis || rt > 0.02 || lt > 0.02 || hasPressedButton(pad.buttons)) {
+          this.modality = 'gamepad';
+        }
       }
 
       // Touch overrides, applied last so an on-screen stick wins over the keys
@@ -202,6 +270,9 @@ export class Input {
       if (this.touchActive && this._touchPitch !== null) {
         p = this._touchPitch;
         r = this._touchRoll;
+        analogueVertical = true;
+        intent.climb = invertAnalogue ? p : -p;
+        intent.turn = r;
       }
       // Throttle is a position rather than a rate, so the last touched value
       // does persist — but only until a key moves it, which the clauses below
@@ -211,7 +282,7 @@ export class Input {
         this._touchThrottle = null;
       }
 
-      this._pitchTarget = invertPitch ? -p : p;
+      this._pitchTarget = analogueVertical && invertAnalogue ? -p : p;
       this._rollTarget = r;
       this._yawTarget = y;
 
@@ -223,6 +294,10 @@ export class Input {
       }
       this.brake = k.has('KeyZ') ? 1 : 0;
       this.reconHeld = k.has('Space') || !!pad?.buttons[5]?.value || this.touchRecon === true;
+      if (this.reconHeld && !this._reconWasHeld) this._pressed.add('Space');
+      this._reconWasHeld = this.reconHeld;
+      intent.brake = this.brake;
+      intent.throttle = this.throttle;
     }
 
     this.pitch = approach(this.pitch, this._pitchTarget, dt);
@@ -231,10 +306,38 @@ export class Input {
   }
 
   dispose() {
+    this.releaseAll();
     this._target.removeEventListener('keydown', this._onKeyDown);
     this._target.removeEventListener('keyup', this._onKeyUp);
     this._target.removeEventListener('blur', this._onBlur);
+    this._document?.removeEventListener('visibilitychange', this._onVisibilityChange);
   }
+}
+
+function setNeutralIntent(intent, throttle) {
+  intent.turn = 0;
+  intent.climb = 0;
+  intent.speed = 0;
+  intent.boost = false;
+  intent.brake = 0;
+  intent.throttle = throttle;
+}
+
+function hasPressedButton(buttons) {
+  for (let i = 0; i < buttons.length; i++) {
+    if (buttons[i]?.value) return true;
+  }
+  return false;
+}
+
+function isPadNeutral(pad) {
+  for (let i = 0; i < pad.axes.length; i++) {
+    if (deadzone(pad.axes[i] ?? 0)) return false;
+  }
+  for (let i = 0; i < pad.buttons.length; i++) {
+    if ((pad.buttons[i]?.value ?? 0) > 0.02) return false;
+  }
+  return true;
 }
 
 /** Analogue stick deadzone, rescaled so the usable range still reaches 1. */
