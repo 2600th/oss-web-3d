@@ -39,6 +39,10 @@ import {
 import { createTakramAtmosphereComposition } from './TakramAtmosphereComposition.js';
 import { TakramCloudRendererAdapter } from './TakramCloudRendererAdapter.js';
 import {
+  createReferenceRawFullFarDepthTexture,
+  describeReferenceRawFullFarDepthTexture,
+} from './ReferenceRawDepthTexture.js';
+import {
   nearestLayerBoundaryDistance,
   validateTakramProfileScenario,
 } from './TakramCloudProfiles.js';
@@ -444,6 +448,8 @@ export function describeCloudLifecycleResources(runtime) {
   add('takram-stbn-external', runtime.backend?.stbnTexture);
   add('takram-aerial-perspective', runtime.atmosphereComposition?.aerialPerspective,
     'takram-aerial-perspective-effect');
+  add('reference-raw-full-far-depth', runtime.referenceRawDepthTexture,
+    '1x1:basic-depth-packing:far');
   return descriptors;
 }
 
@@ -666,12 +672,23 @@ export function shouldBypassTerrainDepth({ backendName, view, scenario }) {
     && scenario.terrainDepthPolicy === 'raw-diagnostic-bypass-only';
 }
 
-function configureDiagnosticDepth(runtime) {
+export function releaseReferenceRawDepthTexture(runtime) {
+  const texture = runtime.referenceRawDepthTexture;
+  if (texture == null) return;
+  runtime.referenceRawDepthTexture = null;
+  texture.dispose();
+}
+
+export function configureDiagnosticDepth(runtime) {
   const bypassTerrainDepth = shouldBypassTerrainDepth(runtime);
   runtime.terrainDepthBypassed = bypassTerrainDepth;
-  runtime.backend.setDepthTexture(
-    bypassTerrainDepth ? null : runtime.engine.composer.stableDepthTexture,
-  );
+  if (bypassTerrainDepth) {
+    runtime.referenceRawDepthTexture ??= createReferenceRawFullFarDepthTexture();
+    runtime.backend.setDepthTexture(runtime.referenceRawDepthTexture);
+    return;
+  }
+  releaseReferenceRawDepthTexture(runtime);
+  runtime.backend.setDepthTexture(runtime.engine.composer.stableDepthTexture);
 }
 
 function resolvedPose(pose, objectiveAim) {
@@ -1061,6 +1078,7 @@ export class CloudComparisonHarness {
     this.cloudAssetMode = null;
     this.atmosphereComposition = null;
     this.cloudBufferDebugEffect = null;
+    this.referenceRawDepthTexture = null;
     this.terrainDepthBypassed = false;
     this._restoreConsole = installConsoleIssueCapture(console, this.consoleIssues);
 
@@ -1167,6 +1185,7 @@ export class CloudComparisonHarness {
     releaseDedicatedCloudPass(this.engine);
     disposeComparisonEffects(this);
     this.backend.dispose();
+    releaseReferenceRawDepthTexture(this);
     this.atmosphereGenerator?.dispose();
     disposeAtmosphereTextures(this.atmosphereTextures);
     this.stbnTexture?.dispose();
@@ -1322,6 +1341,10 @@ export class CloudComparisonHarness {
 
   _publishIneligibleAssetResult(assetEligibility) {
     const reason = assetEligibility.reason ?? 'official-cloud-assets-unavailable';
+    const referenceRawDepthResource = describeReferenceRawFullFarDepthTexture(
+      this.referenceRawDepthTexture,
+    );
+    const resourceItems = referenceRawDepthResource == null ? [] : [referenceRawDepthResource];
     const cameraGeodeticAltitude = this.profileContext?.cameraAltitude
       ?? this.engine.camera.position.y;
     const rawMetrics = { status: 'UNVERIFIED', reason };
@@ -1365,7 +1388,7 @@ export class CloudComparisonHarness {
       },
       quality: this.quality,
       benchmark: unverifiedBenchmarkReport(),
-      resources: { ...summarizeResourceReport({ resources: [] }), items: [] },
+      resources: { ...summarizeResourceReport({ resources: resourceItems }), items: resourceItems },
       objective: { status: 'UNVERIFIED', reason: 'ineligible-before-warmup' },
       temporal: { status: 'UNVERIFIED', reason: 'ineligible-before-warmup' },
       consoleIssues: this.consoleIssues ?? [],
@@ -1382,6 +1405,7 @@ export class CloudComparisonHarness {
         inSceneMissionCapture: diagnosticMetadata.inSceneMissionCapture,
         rawCloudBuffer: rawMetrics,
         rawCloudCaptureEvidence: null,
+        referenceRawDepth: referenceRawDepthResource,
         ineligibleBeforeWarmup: true,
         ineligibilityReason: reason,
         lifecycleAudits: structuredClone(this.lifecycleAudit?.reports ?? []),
@@ -1616,6 +1640,9 @@ export class CloudComparisonHarness {
       const atmosphereResources = describeAtmosphereTextures(this.atmosphereTextures);
       const compositionResources = this.atmosphereComposition?.getResourceReport() ?? null;
       const cloudAssetResources = describeOfficialTakramCloudAssets(this.cloudAssets);
+      const referenceRawDepthResource = describeReferenceRawFullFarDepthTexture(
+        this.referenceRawDepthTexture,
+      );
       const stbnResource = this.stbnTexture == null ? null : {
         name: 'official-stbn', kind: 'sampling-texture', source: DEFAULT_STBN_URL,
         width: 128, height: 128, depth: 64, channels: 1, bytesPerChannel: 1,
@@ -1628,6 +1655,7 @@ export class CloudComparisonHarness {
       });
       resourceItems.push(...(cloudAssetResources?.resources ?? []));
       resourceItems.push(...(compositionResources?.resources ?? []));
+      if (referenceRawDepthResource != null) resourceItems.push(referenceRawDepthResource);
       const cameraGeodeticAltitude = this.profileContext?.cameraAltitude
         ?? this.engine.camera.position.y;
       const diagnosticMetadata = createCloudDiagnosticMetadata({
@@ -1685,6 +1713,7 @@ export class CloudComparisonHarness {
           inSceneMissionCapture: diagnosticMetadata.inSceneMissionCapture,
           rawCloudBuffer: rawMetrics,
           rawCloudCaptureEvidence: frozenEvidence?.evidence ?? null,
+          referenceRawDepth: referenceRawDepthResource,
           cloudAssetSource: cloudAssetResources == null ? null : {
             payloadBytes: cloudAssetResources.payloadBytes,
             gpuBytes: cloudAssetResources.totalBytes,
@@ -1742,6 +1771,7 @@ export class CloudComparisonHarness {
     this.lifecycleAudit.dispose();
     this.benchmark.dispose();
     this.backend.dispose();
+    releaseReferenceRawDepthTexture(this);
     this.atmosphereGenerator?.dispose();
     disposeAtmosphereTextures(this.atmosphereTextures);
     this.stbnTexture?.dispose();
