@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  BasicDepthPacking,
   Data3DTexture,
   DataTexture,
   PerspectiveCamera,
@@ -81,6 +82,15 @@ test('constructs and preallocates the real vanilla Takram backend', () => {
     backend.effect.cloudsPass.currentMaterial.depthBuffer,
     options.stableDepthTexture,
   );
+  assert.equal(
+    backend.effect.cloudsPass.currentMaterial.depthPacking,
+    BasicDepthPacking,
+    'Takram only declares readDepthValue when DEPTH_PACKING is defined',
+  );
+  assert.equal(
+    backend.effect.cloudsPass.currentMaterial.defines.DEPTH_PACKING,
+    String(BasicDepthPacking),
+  );
   assert.equal(backend.effect.clouds.accurateSunSkyLight, false);
   assert.equal(backend.effect.skyLightScale > 0 && backend.effect.skyLightScale <= 1, true);
   assert.equal(backend.effect.groundBounceScale >= 0 && backend.effect.groundBounceScale <= 1, true);
@@ -100,6 +110,22 @@ test('constructs and preallocates the real vanilla Takram backend', () => {
   assert.equal(weather.bytes, 1_398_100);
   assert.equal(turbulence.mipLevels, 8);
   assert.equal(turbulence.bytes, 87_380);
+
+  backend.dispose();
+});
+
+test('keeps Takram depth sampling compiled when the stable depth texture changes', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const nextDepthTexture = new Texture();
+
+  backend.setDepthTexture(nextDepthTexture);
+
+  assert.strictEqual(backend.effect.cloudsPass.currentMaterial.depthBuffer, nextDepthTexture);
+  assert.equal(backend.effect.cloudsPass.currentMaterial.depthPacking, BasicDepthPacking);
+  assert.equal(
+    backend.effect.cloudsPass.currentMaterial.defines.DEPTH_PACKING,
+    String(BasicDepthPacking),
+  );
 
   backend.dispose();
 });

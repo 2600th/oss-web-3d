@@ -7,6 +7,7 @@ import {
 } from '@takram/three-clouds';
 import { AtmosphereParameters } from '@takram/three-atmosphere';
 import {
+  BasicDepthPacking,
   ByteType,
   Data3DTexture,
   DataTexture,
@@ -308,7 +309,7 @@ export class TakramCloudRendererAdapter {
     this.fallbackAtmosphereTextures = createFallbackAtmosphereTextures();
     this._setEnvironment(this.environment, effect);
 
-    effect.setDepthTexture(this.depthTexture);
+    effect.setDepthTexture(this.depthTexture, BasicDepthPacking);
     effect.setSize(this._width, this._height);
     effect.shadowPass.setSize(
       effect.shadow.mapSize.x,
@@ -379,7 +380,7 @@ export class TakramCloudRendererAdapter {
 
   setDepthTexture(texture) {
     this.depthTexture = texture;
-    this.effect?.setDepthTexture(texture);
+    this.effect?.setDepthTexture(texture, BasicDepthPacking);
   }
 
   update(frame) {
