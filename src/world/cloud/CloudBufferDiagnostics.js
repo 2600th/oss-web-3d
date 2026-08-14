@@ -11,6 +11,7 @@ function deepFreeze(value) {
 
 export function assessRawCloudDiagnosticEligibility({
   cloudAssetMode,
+  stbnMode,
   nearestLayerBoundaryDistance,
   rawMetrics,
   captureEvidence = null,
@@ -21,6 +22,7 @@ export function assessRawCloudDiagnosticEligibility({
     || captureEvidence.sameCloudFrame !== true
   )) reasons.push('cloud-buffer-state-mismatch');
   if (cloudAssetMode !== 'official-pinned') reasons.push('official-cloud-assets-unavailable');
+  if (stbnMode !== 'official-pinned') reasons.push('official-stbn-unavailable');
   if (!(nearestLayerBoundaryDistance >= 500)) reasons.push('camera-near-zero-density-boundary');
   if (rawMetrics?.status !== 'MEASURED') reasons.push('cloud-buffer-readback-unavailable');
   else if (!(rawMetrics.alphaOccupancy > 0)) reasons.push('empty-cloud-buffer-alpha');

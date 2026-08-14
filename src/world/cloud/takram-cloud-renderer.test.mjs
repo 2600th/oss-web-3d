@@ -110,12 +110,12 @@ test('applies the selected faithful cloud profile without mutating quality', () 
   assert.equal(himalayan.cloudProfile.name, 'takram-himalayan');
   assert.deepEqual(
     [...himalayan.effect.cloudLayers].slice(0, 3).map(layer => layer.altitude),
-    [7735.246, 7985.246, 9485.246],
+    [7736.246, 7986.246, 9486.246],
   );
   assert.deepEqual(himalayan.getProfileReport(), {
     name: 'takram-himalayan',
-    altitudeTranslation: { cumulus: 6985.246, cirrus: 1985.246 },
-    nearestLayerBoundaryDistance: 500,
+    altitudeTranslation: { cumulus: 6986.246, cirrus: 1986.246 },
+    nearestLayerBoundaryDistance: 501,
     eligible: true,
     reasons: [],
   });

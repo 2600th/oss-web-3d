@@ -49,11 +49,11 @@ test('Himalayan profile translates only layer altitudes above terrain and camera
   const reference = getTakramCloudProfile('takram-reference');
 
   assert.equal(profile.name, 'takram-himalayan');
-  assert.equal(profile.altitudeTranslation.cumulus, 6985.246);
-  assert.equal(profile.altitudeTranslation.cirrus, 1985.246);
+  assert.equal(profile.altitudeTranslation.cumulus, 6986.246);
+  assert.equal(profile.altitudeTranslation.cirrus, 1986.246);
   assert.deepEqual(
     profile.layers.map(layer => layer.altitude),
-    [7735.246, 7985.246, 9485.246, 0],
+    [7736.246, 7986.246, 9486.246, 0],
   );
   for (let index = 0; index < reference.layers.length; index += 1) {
     const { altitude: _referenceAltitude, ...referenceRest } = reference.layers[index];
@@ -64,7 +64,7 @@ test('Himalayan profile translates only layer altitudes above terrain and camera
   assert.deepEqual(profile.localWeatherRepeat, reference.localWeatherRepeat);
   assert.deepEqual(profile.localWeatherVelocity, reference.localWeatherVelocity);
   assert.ok(profile.layers[0].altitude >= context.terrainMax + 350);
-  assert.ok(profile.layers[0].altitude >= context.cameraAltitude + 500);
+  assert.ok(profile.layers[0].altitude >= context.cameraAltitude + 501);
   assert.ok(profile.layers[2].altitude >= profile.layers[1].altitude + profile.layers[1].height + 300);
 });
 
@@ -85,15 +85,29 @@ test('scenario validation reports boundary and terrain eligibility without hidin
     cameraAltitude: profile.layers[0].altitude - 100,
   });
 
-  assert.equal(nearestLayerBoundaryDistance(profile.layers, 7235.246), 500);
+  assert.equal(nearestLayerBoundaryDistance(profile.layers, 7235.246), 501);
   assert.deepEqual(valid, {
     eligible: true,
-    nearestBoundaryDistance: 500,
+    nearestBoundaryDistance: 501,
     reasons: [],
   });
   assert.equal(boundaryFailure.eligible, false);
   assert.ok(boundaryFailure.reasons.includes('camera-near-zero-density-boundary'));
   assert.equal(boundaryFailure.nearestBoundaryDistance, 100);
+});
+
+test('Himalayan clearance stays above 500 m after representative WGS84 reconstruction drift', () => {
+  const context = { terrainMin: 4700, terrainMax: 6300, cameraAltitude: 7235.246 };
+  const profile = deriveHimalayanCloudProfile(context);
+  // The production geodetic reconstruction can raise a local-y camera by a
+  // sub-millimetre equivalent. Preserve a deterministic one-metre margin.
+  const reconstructedAltitude = context.cameraAltitude + 0.0004374;
+
+  assert.ok(nearestLayerBoundaryDistance(profile.layers, reconstructedAltitude) >= 500);
+  assert.equal(validateTakramProfileScenario(profile, {
+    ...context,
+    cameraAltitude: reconstructedAltitude,
+  }).eligible, true);
 });
 
 test('profile selection rejects unknown names and missing Himalayan context', () => {

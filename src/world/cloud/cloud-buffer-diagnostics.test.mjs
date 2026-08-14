@@ -52,6 +52,7 @@ test('raw metrics and eligibility retain fixed thresholds and reject mismatched 
   });
   const eligibility = assessRawCloudDiagnosticEligibility({
     cloudAssetMode: 'official-pinned',
+    stbnMode: 'official-pinned',
     nearestLayerBoundaryDistance: 750,
     rawMetrics: metrics,
     captureEvidence: { sameOutputBufferIdentity: false, sameCloudFrame: true },
@@ -62,5 +63,22 @@ test('raw metrics and eligibility retain fixed thresholds and reject mismatched 
     eligible: false,
     reason: 'cloud-buffer-state-mismatch',
     reasons: ['cloud-buffer-state-mismatch'],
+  });
+});
+
+test('raw diagnostics reject a missing or invalid official STBN volume', () => {
+  const metrics = measureCloudBufferPixels({
+    pixels: new Uint8Array([0, 0, 0, 255]), width: 1, height: 1,
+  });
+
+  assert.deepEqual(assessRawCloudDiagnosticEligibility({
+    cloudAssetMode: 'official-pinned',
+    stbnMode: 'fallback-unverified',
+    nearestLayerBoundaryDistance: 750,
+    rawMetrics: metrics,
+  }), {
+    eligible: false,
+    reason: 'official-stbn-unavailable',
+    reasons: ['official-stbn-unavailable'],
   });
 });

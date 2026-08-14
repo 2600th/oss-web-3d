@@ -503,10 +503,14 @@ export function assessTakramReferenceAssetEligibility({
   backend,
   requiresEnabledTakram,
   cloudAssetMode,
+  stbnMode,
 }) {
   if (backend !== 'takram' || !requiresEnabledTakram) return { eligible: true, reason: null };
   if (cloudAssetMode !== 'official-pinned') {
     return { eligible: false, reason: 'official-cloud-assets-unavailable' };
+  }
+  if (stbnMode !== 'official-pinned') {
+    return { eligible: false, reason: 'official-stbn-unavailable' };
   }
   return { eligible: true, reason: null };
 }
@@ -520,6 +524,7 @@ export function createCloudDiagnosticMetadata({
   cameraGeodeticAltitude,
   profileContext,
   cloudAssetMode,
+  stbnMode,
   rawMetrics,
   captureEvidence = null,
   terrainDepthBypassed,
@@ -535,6 +540,7 @@ export function createCloudDiagnosticMetadata({
   const eligibility = raw
     ? assessRawCloudDiagnosticEligibility({
       cloudAssetMode,
+      stbnMode,
       nearestLayerBoundaryDistance,
       rawMetrics,
       captureEvidence,
@@ -1352,6 +1358,7 @@ export class CloudComparisonHarness {
       backend: this.backendName,
       requiresEnabledTakram: this.requiresEnabledTakram,
       cloudAssetMode: this.cloudAssetMode,
+      stbnMode: this.stbnMode,
     });
   }
 
@@ -1373,6 +1380,7 @@ export class CloudComparisonHarness {
       cameraGeodeticAltitude,
       profileContext: this.profileContext,
       cloudAssetMode: this.cloudAssetMode,
+      stbnMode: this.stbnMode,
       rawMetrics,
       terrainDepthBypassed: this.terrainDepthBypassed,
     });
@@ -1683,6 +1691,7 @@ export class CloudComparisonHarness {
         cameraGeodeticAltitude,
         profileContext: this.profileContext,
         cloudAssetMode: this.cloudAssetMode,
+        stbnMode: this.stbnMode,
         rawMetrics,
         captureEvidence: frozenEvidence?.evidence ?? null,
         terrainDepthBypassed: this.terrainDepthBypassed,

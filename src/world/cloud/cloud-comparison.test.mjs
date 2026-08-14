@@ -204,6 +204,7 @@ test('raw cloud buffer measurements use alpha from the source buffer and report 
 test('raw diagnostic eligibility rejects an empty alpha buffer, missing official assets, and unsafe layer separation', () => {
   const empty = assessRawCloudDiagnosticEligibility({
     cloudAssetMode: 'official-pinned',
+    stbnMode: 'official-pinned',
     nearestLayerBoundaryDistance: 750,
     rawMetrics: { status: 'MEASURED', alphaOccupancy: 0 },
   });
@@ -215,6 +216,7 @@ test('raw diagnostic eligibility rejects an empty alpha buffer, missing official
 
   const invalid = assessRawCloudDiagnosticEligibility({
     cloudAssetMode: 'unavailable',
+    stbnMode: 'official-pinned',
     nearestLayerBoundaryDistance: 499,
     rawMetrics: { status: 'MEASURED', alphaOccupancy: 0.1 },
   });
@@ -222,6 +224,18 @@ test('raw diagnostic eligibility rejects an empty alpha buffer, missing official
     eligible: false,
     reason: 'official-cloud-assets-unavailable',
     reasons: ['official-cloud-assets-unavailable', 'camera-near-zero-density-boundary'],
+  });
+
+  const missingStbn = assessRawCloudDiagnosticEligibility({
+    cloudAssetMode: 'official-pinned',
+    stbnMode: 'fallback-unverified',
+    nearestLayerBoundaryDistance: 750,
+    rawMetrics: { status: 'MEASURED', alphaOccupancy: 0.1 },
+  });
+  assert.deepEqual(missingStbn, {
+    eligible: false,
+    reason: 'official-stbn-unavailable',
+    reasons: ['official-stbn-unavailable'],
   });
 });
 
@@ -237,6 +251,7 @@ test('raw result metadata identifies the buffer source and keeps reference-sky o
     cameraGeodeticAltitude: 5600,
     profileContext: null,
     cloudAssetMode: 'official-pinned',
+    stbnMode: 'official-pinned',
     rawMetrics: { status: 'MEASURED', alphaOccupancy: 0.1 },
     terrainDepthBypassed: true,
   });
@@ -593,16 +608,30 @@ test('comparison disposes the STBN loader placeholder when loading fails', async
   assert.equal(disposeCount, 1);
 });
 
-test('comparison makes an unavailable official cloud asset ineligible before warmup', () => {
+test('comparison requires official cloud assets and STBN before warmup for enabled Takram', () => {
   assert.deepEqual(assessTakramReferenceAssetEligibility({
     backend: 'takram',
     requiresEnabledTakram: true,
     cloudAssetMode: 'unavailable',
+    stbnMode: 'official-pinned',
   }), { eligible: false, reason: 'official-cloud-assets-unavailable' });
   assert.deepEqual(assessTakramReferenceAssetEligibility({
     backend: 'takram',
     requiresEnabledTakram: true,
     cloudAssetMode: 'official-pinned',
+    stbnMode: 'fallback-unverified',
+  }), { eligible: false, reason: 'official-stbn-unavailable' });
+  assert.deepEqual(assessTakramReferenceAssetEligibility({
+    backend: 'takram',
+    requiresEnabledTakram: true,
+    cloudAssetMode: 'official-pinned',
+    stbnMode: 'official-pinned',
+  }), { eligible: true, reason: null });
+  assert.deepEqual(assessTakramReferenceAssetEligibility({
+    backend: 'takram',
+    requiresEnabledTakram: false,
+    cloudAssetMode: 'not-applicable-disabled',
+    stbnMode: 'not-applicable-disabled',
   }), { eligible: true, reason: null });
 });
 
@@ -689,6 +718,89 @@ test('startRun publishes and returns an ineligible result before warmup when clo
   assert.equal(calls.benchmarkFrames, 0);
 });
 
+test('startRun publishes and returns an ineligible result before warmup when official STBN fails', async () => {
+  const calls = { stbnLoader: 0, render: 0, benchmarkFrames: 0 };
+  const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
+    disposed: false,
+    running: false,
+    phase: 'ready',
+    frame: 0,
+    runResult: null,
+    backendName: 'takram',
+    initialQuality: 'high',
+    quality: 'high',
+    settings: { tier: {} },
+    requiresEnabledTakram: true,
+    stbnTexture: null,
+    stbnMode: 'loading-official',
+    cloudAssets: { mode: 'official-pinned' },
+    cloudAssetMode: 'official-pinned',
+    profileName: 'takram-reference',
+    view: 'cloud-alpha',
+    profileContext: null,
+    terrainDepthBypassed: false,
+    historyResets: [],
+    contextEvents: [],
+    lifecycleAudit: { reports: [] },
+    scenario: {
+      name: 'cloud-buffer', warmupFrames: 120, events: [], fixedDeltaSeconds: 1 / 60,
+      captureKind: 'raw-cloud-buffer-diagnostic', inSceneMissionCapture: false,
+    },
+    environment: { uniforms: { uTime: { value: 0 }, uCloudTime: { value: 0 } } },
+    benchmark: {
+      minimumSamples: 1,
+      reset() {},
+      recordFrameInterval() { calls.benchmarkFrames += 1; },
+    },
+    backend: {
+      profile: { enabled: true },
+      cloudProfile: null,
+      setSize() {},
+      setCloudTextures() {},
+    },
+    engine: {
+      maxPixelRatio: 1,
+      camera: { position: { y: 6000 }, updateProjectionMatrix() {} },
+      renderer: {
+        setPixelRatio() {},
+        setSize() {},
+        getDrawingBufferSize(vector) { return vector.set(320, 180); },
+      },
+      composer: { setSize() {} },
+      render() { calls.render += 1; },
+    },
+    canvas: { width: 320, height: 180 },
+    _prepareAtmosphere: async () => {},
+    async _prepareStbn() {
+      calls.stbnLoader += 1;
+      this.stbnMode = 'fallback-unverified';
+      this.stbnError = 'fixture STBN load failed';
+    },
+    _prepareCloudAssets: async () => {},
+  });
+  const previousWindow = globalThis.window;
+  globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
+  try {
+    const result = await runtime.startRun();
+    assert.strictEqual(result, runtime.runResult);
+    assert.equal(result.profile, 'takram-reference');
+    assert.equal(result.view, 'cloud-alpha');
+    assert.equal(result.cloudAssetMode, 'official-pinned');
+    assert.deepEqual(result.eligibility, {
+      eligible: false,
+      reason: 'official-stbn-unavailable',
+      reasons: ['official-stbn-unavailable'],
+    });
+  } finally {
+    globalThis.window = previousWindow;
+  }
+
+  assert.equal(calls.stbnLoader, 1);
+  assert.equal(runtime.phase, 'ineligible');
+  assert.equal(calls.render, 0);
+  assert.equal(calls.benchmarkFrames, 0);
+});
+
 test('startRun publishes a fresh ineligible result when a context-restore asset reload fails', async () => {
   const calls = { render: 0, benchmarkFrames: 0 };
   const staleResult = Object.freeze({ profile: 'stale-profile', sentinel: 'pre-context-result' });
@@ -712,6 +824,7 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
     quality: 'high',
     settings: { tier: {} },
     requiresEnabledTakram: true,
+    stbnMode: 'official-pinned',
     cloudAssets: { mode: 'official-pinned' },
     cloudAssetMode: 'official-pinned',
     profileName: 'takram-reference',
@@ -831,6 +944,131 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
   lifecycleAudit.dispose();
   lifecycleAudit.dispose();
   assert.strictEqual(lifecycleResource.dispose, originalLifecycleDispose);
+});
+
+test('startRun publishes an ineligible result when official STBN fails during context restore', async () => {
+  const calls = { render: 0, benchmarkFrames: 0 };
+  const lifecycleResource = { dispose() {} };
+  const lifecycleAudit = new CloudLifecycleAuditor(() => [{
+    key: 'restore-stbn-fixture-resource', resource: lifecycleResource, signature: 'fixture',
+  }]);
+  const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
+    disposed: false,
+    running: false,
+    phase: 'ready',
+    frame: 0,
+    contextLost: false,
+    runResult: null,
+    backendName: 'takram',
+    initialQuality: 'high',
+    quality: 'high',
+    settings: { tier: {} },
+    requiresEnabledTakram: true,
+    stbnMode: 'official-pinned',
+    cloudAssets: { mode: 'official-pinned' },
+    cloudAssetMode: 'official-pinned',
+    profileName: 'takram-reference',
+    view: 'cloud-alpha',
+    profileContext: null,
+    terrainDepthBypassed: false,
+    historyResets: [],
+    contextEvents: [],
+    lifecycleAudit,
+    scenario: {
+      name: 'cloud-buffer', warmupFrames: 120, fixedDeltaSeconds: 1 / 60, minimumClearance: 0,
+      events: [{
+        frame: 0,
+        context: 'lose',
+        resetHistory: 'context-loss',
+        camera: { kind: 'world', position: [0, 6000, 0], target: [0, 0, 0], roll: 0, fov: 50 },
+      }],
+      captureKind: 'raw-cloud-buffer-diagnostic', inSceneMissionCapture: false,
+    },
+    environment: {
+      uniforms: { uTime: { value: 0 }, uCloudTime: { value: 0 } },
+      update() {},
+    },
+    sky: { update() {} },
+    terrain: { update() {} },
+    objective: { aimPoint: new Vector3(0, 0, 0) },
+    benchmark: {
+      minimumSamples: 1,
+      reset() {},
+      recordFrameInterval() { calls.benchmarkFrames += 1; },
+    },
+    backend: {
+      profile: { enabled: true },
+      cloudProfile: null,
+      setSize() {},
+      setCloudTextures() {},
+      resetHistory() {},
+    },
+    engine: {
+      maxPixelRatio: 1,
+      camera: new PerspectiveCamera(50, 1),
+      renderer: {
+        setPixelRatio() {},
+        setSize() {},
+        getDrawingBufferSize(vector) { return vector.set(320, 180); },
+      },
+      composer: { setSize() {} },
+      render() { calls.render += 1; },
+    },
+    canvas: { width: 320, height: 180 },
+    _prepareAtmosphere: async () => {},
+    _prepareStbn: async () => {},
+    _prepareCloudAssets: async () => {},
+    _onContextRestored() {
+      this._beginContextRestore();
+    },
+    async _recreateAfterContextRestore() {
+      this._assertTakramReferenceAssetsAvailable();
+    },
+    contextLossExtension: {
+      loseContext() {
+        setTimeout(() => {
+          runtime.stbnMode = 'fallback-unverified';
+          runtime._onContextRestored();
+          runtime._contextRestorePromise.catch(() => {});
+        }, 0);
+      },
+      restoreContext() {},
+    },
+  });
+  const previousWindow = globalThis.window;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
+  globalThis.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+  try {
+    const result = await runtime.startRun();
+    assert.strictEqual(result, runtime.runResult);
+    assert.equal(result.profile, 'takram-reference');
+    assert.equal(result.view, 'cloud-alpha');
+    assert.equal(result.cloudAssetMode, 'official-pinned');
+    assert.deepEqual(result.eligibility, {
+      eligible: false,
+      reason: 'official-stbn-unavailable',
+      reasons: ['official-stbn-unavailable'],
+    });
+    assert.equal(result.artifacts[0].renderedFrames, 0);
+    assert.deepEqual(result.artifacts[0].lifecycleAudits, [{
+      reason: 'context-restore',
+      resetReason: 'context-loss',
+      state: 'ABORTED',
+      abortReason: 'official-stbn-unavailable',
+      resetBeforeRender: false,
+      reconstructionCompleted: false,
+    }]);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousAnimationFrame;
+  }
+
+  assert.equal(runtime.contextLost, true);
+  assert.equal(runtime.phase, 'ineligible');
+  assert.equal(calls.render, 0);
+  assert.equal(calls.benchmarkFrames, 0);
+  assert.equal(lifecycleAudit.beforeRender(), null);
 });
 
 test('context restore gate keeps rendering disabled until reconstruction resolves', async () => {

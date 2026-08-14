@@ -26,6 +26,8 @@ const REFERENCE_PROFILE = {
   layers: REFERENCE_LAYERS,
 };
 
+const HIMALAYAN_CAMERA_CLEARANCE = 501;
+
 function deepFreeze(value) {
   if (value == null || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -63,7 +65,7 @@ export function deriveHimalayanCloudProfile(context) {
   requireFiniteContext(context);
   const cumulusOffset = Math.round(Math.max(
     context.terrainMax + 350 - REFERENCE_LAYERS[0].altitude,
-    context.cameraAltitude + 500 - REFERENCE_LAYERS[0].altitude,
+    context.cameraAltitude + HIMALAYAN_CAMERA_CLEARANCE - REFERENCE_LAYERS[0].altitude,
   ) * 1000) / 1000;
   const translatedGreenTop = REFERENCE_LAYERS[1].altitude
     + cumulusOffset
