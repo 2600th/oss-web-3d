@@ -131,8 +131,13 @@ withNavigator(() => [], () => {
   input.update(0.1);
   assert.equal(input.intent.boost, true, 'touch Boost must share semantic boost intent');
   assert.equal(input.modality, 'touch');
+  const throttleBeforeRelease = input.throttle;
   input.releaseAll();
-  assert.deepEqual(input.intent, NEUTRAL_INTENT, 'explicit release must immediately neutralize semantic intent');
+  assert.deepEqual(
+    input.intent,
+    { ...NEUTRAL_INTENT, throttle: throttleBeforeRelease },
+    'explicit release must immediately neutralize semantic intent without moving throttle',
+  );
   assert.equal(input.reconHeld, false);
   input.dispose();
 
@@ -202,7 +207,11 @@ function neutralizePad(pad) {
 }
 
 function assertHeldPadIgnored(input, message) {
-  assert.deepEqual(input.intent, NEUTRAL_INTENT, `${message}: semantic intent must remain neutral`);
+  assert.deepEqual(
+    input.intent,
+    { ...NEUTRAL_INTENT, throttle: input.throttle },
+    `${message}: semantic intent must remain neutral`,
+  );
   assert.equal(input.reconHeld, false, `${message}: held recon must remain released`);
   assert.equal(input.consumePress('Space'), false, `${message}: held recon must not emit another rising edge`);
 }
@@ -282,24 +291,65 @@ withNavigator(() => [], () => {
     const input = new Input(target);
     target.fire('keydown', keyEvent('KeyW'));
     input.update(0.1);
+    input.throttle = 0.43;
     target.fire('blur', {});
-    assert.deepEqual(input.intent, NEUTRAL_INTENT, 'blur must neutralize held intent');
+    assert.deepEqual(input.intent, { ...NEUTRAL_INTENT, throttle: 0.43 }, 'blur must neutralize held intent');
+    assert.deepEqual(
+      { pitch: input.pitch, roll: input.roll, yaw: input.yaw },
+      { pitch: 0, roll: 0, yaw: 0 },
+      'blur must synchronously zero the public Direct axes',
+    );
+    assert.equal(input.throttle, 0.43, 'blur must preserve the positional Direct throttle');
 
     target.fire('keydown', keyEvent('KeyD'));
     input.update(0.1);
+    input.throttle = 0.51;
     visibilityTarget.hidden = true;
     visibilityTarget.fire('visibilitychange', {});
-    assert.deepEqual(input.intent, NEUTRAL_INTENT, 'visibility loss must neutralize held intent');
+    assert.deepEqual(input.intent, { ...NEUTRAL_INTENT, throttle: 0.51 }, 'visibility loss must neutralize held intent');
+    assert.deepEqual(
+      { pitch: input.pitch, roll: input.roll, yaw: input.yaw },
+      { pitch: 0, roll: 0, yaw: 0 },
+      'visibility loss must synchronously zero the public Direct axes',
+    );
+    assert.equal(input.throttle, 0.51, 'visibility loss must preserve the positional Direct throttle');
 
     target.fire('keydown', keyEvent('KeyS'));
     input.update(0.1);
+    input.throttle = 0.37;
     input.dispose();
-    assert.deepEqual(input.intent, NEUTRAL_INTENT, 'disposal must neutralize held intent');
+    assert.deepEqual(input.intent, { ...NEUTRAL_INTENT, throttle: 0.37 }, 'disposal must neutralize held intent');
+    assert.deepEqual(
+      { pitch: input.pitch, roll: input.roll, yaw: input.yaw },
+      { pitch: 0, roll: 0, yaw: 0 },
+      'disposal must synchronously zero the public Direct axes',
+    );
+    assert.equal(input.throttle, 0.37, 'disposal must preserve the positional Direct throttle');
     assert.equal(target.listeners.size, 0, 'disposal must remove target listeners');
     assert.equal(visibilityTarget.listeners.size, 0, 'disposal must remove visibility listener');
   } finally {
     Object.defineProperty(globalThis, 'document', { configurable: true, value: oldDocument });
   }
+});
+
+withNavigator(() => [], () => {
+  const target = new Target();
+  const input = new Input(target);
+  target.fire('keydown', keyEvent('KeyD'));
+  input.update(0.4);
+  assert.ok(input.roll > 0.9, 'sustained Direct KeyD must establish smoothed roll authority');
+  input.throttle = 0.41;
+
+  input.releaseAll(); // same hard release used by pause and lifecycle cleanup
+  assert.equal(input.roll, 0, 'pause cleanup must remove stale Direct roll immediately');
+  assert.equal(input.throttle, 0.41, 'pause cleanup must preserve Direct throttle position');
+  input.update(1 / 120);
+  assert.equal(input.roll, 0, 'resume without a fresh keydown must not restore stale roll authority');
+
+  input.resetForLaunch();
+  assert.equal(input.throttle, 0.72, 'explicit sortie launch must restore the desired throttle baseline');
+  assert.equal(input.intent.throttle, 0.72);
+  input.dispose();
 });
 
 {

@@ -289,7 +289,7 @@ export class Game {
 
   launch() {
     this.navigationHint?.reset();
-    this._resetFlightControls();
+    this._resetFlightControls(true);
     this.screens.hideAll();
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
@@ -372,8 +372,9 @@ export class Game {
     this.touchControls?.setMode?.(nextMode);
   }
 
-  _resetFlightControls() {
-    if (this.input?.releaseAll) this.input.releaseAll();
+  _resetFlightControls(forLaunch = false) {
+    if (forLaunch && this.input?.resetForLaunch) this.input.resetForLaunch();
+    else if (this.input?.releaseAll) this.input.releaseAll();
     else this.input?.releaseTouch?.();
     this.assist?.reset?.();
     this.accumulator = 0;

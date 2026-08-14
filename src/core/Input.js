@@ -160,7 +160,11 @@ export class Input {
     this._pressed.clear();
   }
 
-  /** Clear every transient input source without replacing the stable intent. */
+  /**
+   * Clear every transient input source without changing the positional
+   * throttle. Lifecycle safety releases (blur, pause, visibility and dispose)
+   * must not silently move the Direct-mode throttle lever.
+   */
   releaseAll() {
     this.keys.clear();
     this._pressed.clear();
@@ -176,7 +180,14 @@ export class Input {
     this._reconWasHeld = false;
     this.reconHeld = false;
     this.brake = 0;
-    this.throttle = 0.72;
+    this.pitch = this.roll = this.yaw = 0;
+    setNeutralIntent(this.intent, this.throttle);
+  }
+
+  /** Reset transient input and the throttle baseline for a new sortie. */
+  resetForLaunch(throttle = 0.72) {
+    this.releaseAll();
+    this.throttle = Number.isFinite(throttle) ? Math.min(1, Math.max(0, throttle)) : 0.72;
     setNeutralIntent(this.intent, this.throttle);
   }
 

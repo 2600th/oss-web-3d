@@ -191,12 +191,13 @@ test('settings option setters clamp, persist, and retain assisted-control choice
 });
 
 function makeControlGame(mode = 'assisted') {
-  const resets = { input: 0, assist: 0 };
+  const resets = { input: 0, launch: 0, assist: 0 };
   const intent = { turn: 0.5, climb: -0.25, speed: 0, boost: false, brake: 0, throttle: 0.72 };
   const input = {
     intent,
     reconHeld: false,
     releaseAll() { resets.input++; },
+    resetForLaunch() { resets.launch++; },
     consumePress() { return false; },
   };
   const output = { pitch: 0.1, roll: 0.2, yaw: 0.05, throttle: 0.82, brake: 0 };
@@ -326,7 +327,7 @@ test('mode switches clean held state, reset accumulation, and synchronize touch 
   fixture.game.touchControls = { setMode: (mode) => modes.push(mode) };
   fixture.game.settings.controlMode = 'direct';
   fixture.game._syncControlMode();
-  assert.deepEqual(fixture.resets, { input: 1, assist: 1 });
+  assert.deepEqual(fixture.resets, { input: 1, launch: 0, assist: 1 });
   assert.equal(fixture.game.accumulator, 0);
   assert.equal(fixture.game.reconActive, false);
   assert.deepEqual(modes, ['direct']);
@@ -348,7 +349,7 @@ test('control lifecycle cleanup covers pause, launch hook, blur, and disposal', 
   fixture.game.hud = { show() {} };
   fixture.game.screens = { show() {}, pauseLayer: {} };
   fixture.game.pause();
-  assert.deepEqual(fixture.resets, { input: 1, assist: 1 });
+  assert.deepEqual(fixture.resets, { input: 1, launch: 0, assist: 1 });
 
   class EventTargetStub {
     constructor() { this.listeners = new Map(); }
@@ -361,13 +362,39 @@ test('control lifecycle cleanup covers pause, launch hook, blur, and disposal', 
   visibility.hidden = false;
   fixture.game._installControlLifecycle(target, visibility);
   target.fire('blur');
-  assert.deepEqual(fixture.resets, { input: 2, assist: 2 });
+  assert.deepEqual(fixture.resets, { input: 2, launch: 0, assist: 2 });
   visibility.hidden = true;
   visibility.fire('visibilitychange');
-  assert.deepEqual(fixture.resets, { input: 3, assist: 3 });
+  assert.deepEqual(fixture.resets, { input: 3, launch: 0, assist: 3 });
   fixture.game._disposeControlLifecycle();
   assert.equal(target.listeners.size, 0);
   assert.equal(visibility.listeners.size, 0);
+});
+
+test('sortie launch uses the explicit throttle reset while pause remains a preserving hard release', () => {
+  const fixture = makeControlGame('direct');
+  Object.assign(fixture.game, {
+    state: 'flying',
+    navigationHint: { reset() {} },
+    screens: { hideAll() {}, show() {}, pauseLayer: {} },
+    flight: { reset() {}, position: new THREE.Vector3() },
+    chase: { baseFov: 58, reset() {} },
+    reconActive: false,
+    terrain: { prime() {} },
+    fx: { reset() {} },
+    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    mission: { begin() {} },
+    hud: { show() {} },
+    engine: { camera: { fov: 58, updateProjectionMatrix() {} } },
+    _startPosition: () => new THREE.Vector3(),
+    _resetMotionBaseline() {},
+  });
+
+  fixture.game.pause();
+  assert.deepEqual(fixture.resets, { input: 1, launch: 0, assist: 1 });
+  fixture.game.resume();
+  fixture.game.launch();
+  assert.deepEqual(fixture.resets, { input: 1, launch: 1, assist: 2 });
 });
 
 test('touch controls receive the current flight mode when attached', () => {
