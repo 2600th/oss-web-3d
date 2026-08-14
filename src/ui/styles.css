@@ -1534,12 +1534,30 @@ body {
 }
 .option:last-child { border-bottom: 0; }
 .option .panel-title { margin: 0 0 8px; }
+.flying-options {
+  display: grid;
+  gap: 10px;
+}
+.flying-options .panel-title { margin-bottom: 0; }
+.control-choice {
+  display: grid;
+  gap: 6px;
+}
+.option-label {
+  color: var(--paper-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 .segmented {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   background: var(--rule-soft);
   border: 1px solid var(--rule-soft);
+}
+.control-choice .segmented {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
 }
 .menu .segmented button {
   min-width: 0;
@@ -1742,6 +1760,11 @@ input:focus-visible {
   .menu { width: 100%; }
   .menu button { width: 100%; min-width: 0; }
   .options { width: 100%; }
+  .flying-options {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .flying-options .segmented button { padding-inline: 5px; font-size: 9px; }
   .contact-sheet { grid-template-columns: 1fr; gap: 10px; }
   .debrief { width: 100%; }
   .result-title { font-size: 34px; letter-spacing: 0.16em; text-indent: 0.16em; }

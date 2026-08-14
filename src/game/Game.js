@@ -146,13 +146,20 @@ export class Game {
       onQuality: (tier) => this.setQuality(tier),
       onMasterVolume: (value) => this._setMasterVolume(value),
       onMusicVolume: (value) => this._setMusicVolume(value),
-      onInvertPitch: (value) => this.settings.setInvertPitch(value),
+      onControlMode: (value) => this._setControlMode(value),
+      onControlSensitivity: (value) => this.settings.setControlSensitivity(value),
+      onAutoThrottle: (value) => this.settings.setAutoThrottle(value),
+      onVerticalMode: (value) => this.settings.setVerticalMode(value),
     });
     this.screens.setOptions({
       masterVolume: settings.masterVolume,
       musicVolume: settings.musicVolume,
-      invertPitch: settings.invertPitch,
+      controlMode: settings.controlMode,
+      controlSensitivity: settings.controlSensitivity,
+      autoThrottle: settings.autoThrottle,
+      verticalMode: settings.verticalMode,
     });
+    this.screens.setControlContext({ controlMode: this._controlMode, modality: input.modality });
     this.hud = new Hud(ui);
 
     this._skipHandlers = new Set();
@@ -237,6 +244,12 @@ export class Game {
     if (this.state !== 'title') return;
     this.state = 'briefing';
     this.screens.show(this.screens.briefingLayer);
+    if (this._controlMode === 'assisted' && !this.settings.assistedNoticeSeen) {
+      this.screens.showNotice(
+        'Assisted Controls active. Direct mode is available under Pause → Flying.',
+        () => this.settings.setAssistedNoticeSeen(true),
+      );
+    }
   }
 
   _startPosition() {
@@ -455,6 +468,16 @@ export class Game {
     this.audio.music?.setVolume(this.settings.musicVolume);
   }
 
+  _setControlMode(value) {
+    this.settings.setControlMode(value);
+    this._syncControlMode();
+    this.screens.setOptions({ controlMode: this._controlMode });
+    this.screens.setControlContext({
+      controlMode: this._controlMode,
+      modality: this.input.modality,
+    });
+  }
+
   _finish(success) {
     this.state = success ? 'complete' : 'failed';
     this.audio.music?.play(success ? 'return' : 'loss');
@@ -467,6 +490,7 @@ export class Game {
     const input = this.input;
     input.update(dt, this.settings.verticalMode);
     this._syncControlMode();
+    this.screens.setControlContext({ controlMode: this._controlMode, modality: input.modality });
 
     // Browsers require a gesture before audio can start, so the first key press
     // of the session is what brings the engine up.

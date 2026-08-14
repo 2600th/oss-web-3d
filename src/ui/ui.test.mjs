@@ -3,10 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const here = new URL('./', import.meta.url);
-const [hud, screens, css] = await Promise.all([
+const [hud, screens, css, game] = await Promise.all([
   readFile(new URL('Hud.js', here), 'utf8'),
   readFile(new URL('Screens.js', here), 'utf8'),
   readFile(new URL('styles.css', here), 'utf8'),
+  readFile(new URL('../game/Game.js', here), 'utf8'),
 ]);
 
 test('HUD owns the navigation cue lifecycle and navigation CSS stays unfilled and calm', () => {
@@ -47,7 +48,7 @@ globalThis.document = {
 globalThis.cancelAnimationFrame = () => {};
 
 const ScreenModule = await import('./Screens.js');
-const { Screens } = ScreenModule;
+const { Screens, controlRows } = ScreenModule;
 
 class FakeElement {
   constructor(tag) {
@@ -94,7 +95,10 @@ function buildPause() {
         onQuality() {},
         onMasterVolume() {},
         onMusicVolume() {},
-        onInvertPitch() {},
+        onControlMode() {},
+        onControlSensitivity() {},
+        onAutoThrottle() {},
+        onVerticalMode() {},
       },
     });
     instance._buildPause();
@@ -307,13 +311,100 @@ test('phone quality is represented by a real selected pause-menu choice', () => 
   );
 });
 
-test('invert pitch toggle keeps a stable accessible name while state changes', () => {
+test('control rows match the selected mode and active input modality', () => {
+  assert.deepEqual(controlRows('assisted', 'keyboard')[0], ['W / Up', 'Climb']);
+  assert.deepEqual(controlRows('assisted', 'keyboard')[1], ['S / Down', 'Descend']);
+  assert.equal(
+    controlRows('assisted', 'touch').some(([key]) => /W|Shift|Ctrl|Space/.test(key)),
+    false,
+  );
+  assert.match(controlRows('direct', 'keyboard').flat().join(' '), /hold/i);
+  assert.match(controlRows('assisted', 'gamepad').flat().join(' '), /left stick/i);
+});
+
+test('setControlContext renders only the active modality rows', () => {
+  const grid = new FakeElement('div');
+  const instance = Object.assign(Object.create(Screens.prototype), {
+    controlsGrid: grid,
+    _controlMode: null,
+    _controlModality: null,
+  });
+  const original = document.createElement;
+  document.createElement = (tag) => new FakeElement(tag);
+  try {
+    instance.setControlContext({ controlMode: 'assisted', modality: 'touch' });
+  } finally {
+    document.createElement = original;
+  }
+  const copy = grid.children.map((node) => node.textContent).join(' ');
+  assert.match(copy, /Drag up Climb/);
+  assert.doesNotMatch(copy, /W \/ Up|Shift|keyboard/i);
+});
+
+test('flight options keep accessible state and emit authoritative values', () => {
+  const calls = [];
   const screensInstance = buildPause();
-  const button = screensInstance.invertButton;
-  assert.equal(button.getAttribute('aria-label'), 'Invert pitch');
-  assert.equal(button.getAttribute('aria-pressed'), 'false');
-  button.dispatch('click');
-  assert.equal(button.getAttribute('aria-label'), 'Invert pitch');
-  assert.equal(button.getAttribute('aria-pressed'), 'true');
-  assert.equal(button.textContent, 'On');
+  screensInstance.callbacks = {
+    ...screensInstance.callbacks,
+    onControlMode: (value) => calls.push(['mode', value]),
+    onControlSensitivity: (value) => calls.push(['sensitivity', value]),
+    onAutoThrottle: (value) => calls.push(['auto', value]),
+    onVerticalMode: (value) => calls.push(['vertical', value]),
+  };
+
+  screensInstance.setOptions({
+    controlMode: 'direct',
+    controlSensitivity: 'high',
+    autoThrottle: false,
+    verticalMode: 'upToDive',
+  });
+  assert.equal(screensInstance.controlModeButtons.direct.getAttribute('aria-pressed'), 'true');
+  assert.equal(screensInstance.sensitivityButtons.high.getAttribute('aria-pressed'), 'true');
+  assert.equal(screensInstance.autoThrottleButton.getAttribute('aria-pressed'), 'false');
+  assert.equal(screensInstance.verticalModeButtons.upToDive.getAttribute('aria-pressed'), 'true');
+
+  screensInstance.controlModeButtons.assisted.dispatch('click');
+  screensInstance.sensitivityButtons.low.dispatch('click');
+  screensInstance.autoThrottleButton.dispatch('click');
+  screensInstance.verticalModeButtons.upToClimb.dispatch('click');
+  assert.deepEqual(calls, [
+    ['mode', 'assisted'],
+    ['sensitivity', 'low'],
+    ['auto', true],
+    ['vertical', 'upToClimb'],
+  ]);
+});
+
+test('assisted notice is concise, acknowledged on dismiss, and legacy inversion UI is gone', () => {
+  assert.doesNotMatch(screens, /Invert pitch|onInvertPitch|invertButton|_setInvert/);
+  assert.match(game, /Assisted Controls active\.[^'\n]*Pause[^'\n]*Flying/);
+  assert.match(game, /setAssistedNoticeSeen\(true\)/);
+  assert.match(game, /onControlMode:[\s\S]*setControlMode/);
+  assert.match(game, /onControlSensitivity:[\s\S]*setControlSensitivity/);
+  assert.match(game, /onAutoThrottle:[\s\S]*setAutoThrottle/);
+  assert.match(game, /onVerticalMode:[\s\S]*setVerticalMode/);
+
+  let acknowledged = 0;
+  const notice = Object.assign(Object.create(Screens.prototype), {
+    noticeText: { textContent: '' },
+    noticeBar: {
+      classList: { add() {}, remove() {} },
+      setAttribute() {},
+    },
+  });
+  notice.showNotice('Assisted Controls active.', () => acknowledged++);
+  notice.clearNotice();
+  notice.clearNotice();
+  assert.equal(acknowledged, 1);
+});
+
+test('flying option layout remains phone-safe and does not force wide controls', () => {
+  assert.match(css, /\.flying-options[\s\S]*?display:\s*grid/);
+  assert.match(css, /@media \(max-width: 720px\), \(max-aspect-ratio: 3 \/ 4\)[\s\S]*?\.flying-options/);
+  assert.doesNotMatch(css, /\.flying-options[^}]*min-width:\s*[4-9][0-9]{2}px/);
+});
+
+test('legacy invert pitch option is absent', () => {
+  const screensInstance = buildPause();
+  assert.equal(screensInstance.invertButton, undefined);
 });

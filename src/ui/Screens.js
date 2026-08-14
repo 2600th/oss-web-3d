@@ -120,6 +120,73 @@ const LOAD_STAGES = [
 /** Every persisted renderer tier must have an honest, reversible UI state. */
 export const QUALITY_CHOICES = Object.freeze(['phone', 'low', 'medium', 'high']);
 
+const CONTROL_COPY = Object.freeze({
+  assisted: Object.freeze({
+    keyboard: Object.freeze([
+      ['W / Up', 'Climb'],
+      ['S / Down', 'Descend'],
+      ['A / Left', 'Turn left'],
+      ['D / Right', 'Turn right'],
+      ['Shift', 'Boost (hold)'],
+      ['Ctrl', 'Slow down (hold)'],
+      ['Z', 'Airbrake'],
+      ['Space', 'Toggle recon'],
+      ['F / V', 'Zoom in / out'],
+      ['Enter', 'Shutter'],
+      ['Tab', 'Cycle objective'],
+      ['Esc', 'Pause'],
+    ]),
+    touch: Object.freeze([
+      ['Drag left / right', 'Turn'],
+      ['Drag up', 'Climb'],
+      ['Drag down', 'Descend'],
+      ['BOOST', 'Boost while held'],
+      ['RECON', 'Toggle recon'],
+      ['SHOOT', 'Shutter'],
+      ['+ / −', 'Zoom'],
+    ]),
+    gamepad: Object.freeze([
+      ['Left stick', 'Turn and climb'],
+      ['RT / LT', 'Speed up / slow down'],
+      ['RB', 'Reconnaissance'],
+    ]),
+  }),
+  direct: Object.freeze({
+    keyboard: Object.freeze([
+      ['W / S', 'Pitch down / up (hold)'],
+      ['A / D', 'Roll (hold)'],
+      ['Q / E', 'Rudder (hold)'],
+      ['Shift / Ctrl', 'Throttle (hold)'],
+      ['Z', 'Airbrake (hold)'],
+      ['Space', 'Recon camera (hold)'],
+      ['F / V', 'Zoom in / out'],
+      ['Enter', 'Shutter'],
+      ['Tab', 'Cycle objective'],
+      ['Esc', 'Pause'],
+    ]),
+    touch: Object.freeze([
+      ['Drag', 'Pitch and roll while held'],
+      ['THR', 'Throttle strip'],
+      ['RECON', 'Recon camera'],
+      ['SHOOT', 'Shutter'],
+      ['+ / −', 'Zoom'],
+    ]),
+    gamepad: Object.freeze([
+      ['Left stick', 'Pitch and roll'],
+      ['Right stick', 'Rudder'],
+      ['RT / LT', 'Throttle'],
+      ['RB', 'Recon camera (hold)'],
+    ]),
+  }),
+});
+
+/** Briefing rows for one selected control mode and the current input device. */
+export function controlRows(mode = 'assisted', modality = 'keyboard') {
+  const safeMode = mode === 'direct' ? 'direct' : 'assisted';
+  const safeModality = ['touch', 'gamepad'].includes(modality) ? modality : 'keyboard';
+  return CONTROL_COPY[safeMode][safeModality].map((row) => [...row]);
+}
+
 const COARSE_POINTER = window.matchMedia?.('(pointer: coarse)').matches ?? false;
 const REDUCED_MOTION = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 const FOCUSABLE_SELECTOR = [
@@ -218,8 +285,9 @@ export class Screens {
    * that exists today is the airframe failing to load, which leaves them flying
    * an invisible aircraft with nothing on screen to explain it.
    */
-  showNotice(text) {
+  showNotice(text, onDismiss = null) {
     this.noticeText.textContent = text;
+    this._noticeDismiss = typeof onDismiss === 'function' ? onDismiss : null;
     this.noticeBar.classList.add('show');
     this.noticeBar.setAttribute('aria-hidden', 'false');
   }
@@ -227,6 +295,9 @@ export class Screens {
   clearNotice() {
     this.noticeBar.classList.remove('show');
     this.noticeBar.setAttribute('aria-hidden', 'true');
+    const acknowledge = this._noticeDismiss;
+    this._noticeDismiss = null;
+    acknowledge?.();
   }
 
   /**
@@ -518,11 +589,10 @@ export class Screens {
     const right = el('div', '', grid);
     const controls = el('div', 'panel', right);
     el('div', 'panel-title', controls, 'Controls');
-    const grid2 = el('div', 'controls-grid', controls);
-    for (const [key, label] of CONTROLS) {
-      el('kbd', '', grid2, key);
-      el('div', '', grid2, label);
-    }
+    this.controlsGrid = el('div', 'controls-grid', controls);
+    this._controlMode = null;
+    this._controlModality = null;
+    this.setControlContext({ controlMode: 'assisted', modality: COARSE_POINTER ? 'touch' : 'keyboard' });
 
     const menu = el('div', 'menu', right);
     menu.style.marginTop = '20px';
@@ -559,6 +629,20 @@ export class Screens {
       row.classList.toggle('done', post.captured);
       row._mark.textContent = post.captured ? '■' : '□';
     });
+  }
+
+  setControlContext({ controlMode = 'assisted', modality = 'keyboard' } = {}) {
+    const mode = controlMode === 'direct' ? 'direct' : 'assisted';
+    const device = ['touch', 'gamepad'].includes(modality) ? modality : 'keyboard';
+    if (mode === this._controlMode && device === this._controlModality) return;
+    this._controlMode = mode;
+    this._controlModality = device;
+    if (!this.controlsGrid) return;
+    this.controlsGrid.innerHTML = '';
+    for (const [key, label] of controlRows(mode, device)) {
+      el('kbd', '', this.controlsGrid, key);
+      el('div', '', this.controlsGrid, label);
+    }
   }
 
   // ------------------------------------------------------------- debrief --
@@ -746,18 +830,41 @@ export class Screens {
     );
     this.musicSlider = this._slider(audio, 'Score', (v) => this.callbacks.onMusicVolume?.(v));
 
-    const flying = el('div', 'option', options);
+    const flying = el('div', 'option flying-options', options);
     el('div', 'panel-title', flying, 'Flying');
-    const invertRow = el('div', 'toggle-row', flying);
-    el('span', '', invertRow, 'Invert pitch');
-    this.invertButton = el('button', 'toggle', invertRow, 'Off');
-    this.invertButton.setAttribute('aria-label', 'Invert pitch');
-    this.invertButton.setAttribute('aria-pressed', 'false');
-    this.invertButton.addEventListener('click', () => {
-      const next = this.invertButton.getAttribute('aria-pressed') !== 'true';
-      this._setInvert(next);
-      this.callbacks.onInvertPitch?.(next);
+    this.controlModeButtons = this._choiceButtons(
+      flying, 'Control mode', [['assisted', 'Assisted'], ['direct', 'Direct']],
+      (value) => {
+        this._setChoice(this.controlModeButtons, value);
+        this.setControlContext({ controlMode: value, modality: this._controlModality });
+        this.callbacks.onControlMode?.(value);
+      },
+    );
+    this.sensitivityButtons = this._choiceButtons(
+      flying, 'Sensitivity', [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']],
+      (value) => {
+        this._setChoice(this.sensitivityButtons, value);
+        this.callbacks.onControlSensitivity?.(value);
+      },
+    );
+    const autoRow = el('div', 'toggle-row', flying);
+    el('span', '', autoRow, 'Auto throttle');
+    this.autoThrottleButton = el('button', 'toggle', autoRow, 'On');
+    this.autoThrottleButton.setAttribute('aria-label', 'Auto throttle');
+    this.autoThrottleButton.setAttribute('aria-pressed', 'true');
+    this.autoThrottleButton.addEventListener('click', () => {
+      const next = this.autoThrottleButton.getAttribute('aria-pressed') !== 'true';
+      this._setToggle(this.autoThrottleButton, next);
+      this.callbacks.onAutoThrottle?.(next);
     });
+    this.verticalModeButtons = this._choiceButtons(
+      flying, 'Analogue vertical direction',
+      [['upToClimb', 'Up climbs'], ['upToDive', 'Up dives']],
+      (value) => {
+        this._setChoice(this.verticalModeButtons, value);
+        this.callbacks.onVerticalMode?.(value);
+      },
+    );
 
     const restart = el('button', '', menu, 'Abort and Restart');
     restart.addEventListener('click', () => this.callbacks.onRestart());
@@ -784,16 +891,45 @@ export class Screens {
     return input;
   }
 
-  _setInvert(on) {
-    this.invertButton.setAttribute('aria-pressed', String(on));
-    this.invertButton.textContent = on ? 'On' : 'Off';
+  _choiceButtons(parent, label, choices, onChoice) {
+    const wrap = el('div', 'control-choice', parent);
+    el('span', 'option-label', wrap, label);
+    const row = el('div', 'segmented', wrap);
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', label);
+    const buttons = {};
+    for (const [value, copy] of choices) {
+      const button = el('button', '', row, copy);
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => onChoice(value));
+      buttons[value] = button;
+    }
+    return buttons;
+  }
+
+  _setChoice(buttons, selected) {
+    for (const [value, button] of Object.entries(buttons)) {
+      button.setAttribute('aria-pressed', String(value === selected));
+    }
+  }
+
+  _setToggle(button, on) {
+    button.setAttribute('aria-pressed', String(on));
+    button.textContent = on ? 'On' : 'Off';
   }
 
   /**
    * Seed the option controls from persisted Settings. Safe to call at any time;
    * anything omitted keeps its current value.
    */
-  setOptions({ masterVolume, musicVolume, invertPitch } = {}) {
+  setOptions({
+    masterVolume,
+    musicVolume,
+    controlMode,
+    controlSensitivity,
+    autoThrottle,
+    verticalMode,
+  } = {}) {
     const apply = (input, v) => {
       if (typeof v !== 'number') return;
       input.value = String(Math.round(Math.max(0, Math.min(1, v)) * 100));
@@ -801,7 +937,17 @@ export class Screens {
     };
     apply(this.masterSlider, masterVolume);
     apply(this.musicSlider, musicVolume);
-    if (typeof invertPitch === 'boolean') this._setInvert(invertPitch);
+    if (controlMode === 'assisted' || controlMode === 'direct') {
+      this._setChoice(this.controlModeButtons, controlMode);
+      this.setControlContext({ controlMode, modality: this._controlModality });
+    }
+    if (['low', 'normal', 'high'].includes(controlSensitivity)) {
+      this._setChoice(this.sensitivityButtons, controlSensitivity);
+    }
+    if (typeof autoThrottle === 'boolean') this._setToggle(this.autoThrottleButton, autoThrottle);
+    if (verticalMode === 'upToClimb' || verticalMode === 'upToDive') {
+      this._setChoice(this.verticalModeButtons, verticalMode);
+    }
   }
 
   setQuality(tier) {
@@ -898,16 +1044,3 @@ export class Screens {
 function promptLabel() {
   return COARSE_POINTER ? 'Tap to continue' : 'Press any key or click to continue';
 }
-
-const CONTROLS = [
-  ['W / S', 'Pitch down / up'],
-  ['A / D', 'Roll left / right'],
-  ['Q / E', 'Rudder'],
-  ['Shift / Ctrl', 'Throttle — hold Shift for reheat'],
-  ['Z', 'Airbrake'],
-  ['Space', 'Reconnaissance camera (hold)'],
-  ['F / V', 'Zoom in / out'],
-  ['Enter', 'Shutter'],
-  ['Tab', 'Cycle objective'],
-  ['Esc', 'Pause'],
-];
