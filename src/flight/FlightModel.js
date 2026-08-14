@@ -104,6 +104,8 @@ export class FlightModel {
 
     /** Where the aircraft entered the terrain clearance envelope, once crashed. */
     this.impactPoint = new THREE.Vector3();
+    this.impactVelocity = new THREE.Vector3();
+    this.impactNormal = new THREE.Vector3(0, 1, 0);
     this.impactSpeed = 0;
 
     this._prevVelocity = new THREE.Vector3();
@@ -121,6 +123,8 @@ export class FlightModel {
     this.stalling = false;
     this.stallFactor = 0;
     this.gLoad = 1;
+    this.impactVelocity.set(0, 0, 0);
+    this.impactNormal.set(0, 1, 0);
     this._prevVelocity.copy(this.velocity);
     this._updateDerived();
   }
@@ -316,7 +320,14 @@ export class FlightModel {
       if (y - terrainHeight(x, z) < clearance) {
         this.crashed = true;
         this.impactPoint.set(x, terrainHeight(x, z), z);
-        this.impactSpeed = this.velocity.length();
+        this.impactVelocity.copy(this.velocity);
+        const epsilon = 4;
+        const left = terrainHeight(x - epsilon, z);
+        const right = terrainHeight(x + epsilon, z);
+        const back = terrainHeight(x, z - epsilon);
+        const front = terrainHeight(x, z + epsilon);
+        this.impactNormal.set(left - right, epsilon * 2, back - front).normalize();
+        this.impactSpeed = this.impactVelocity.length();
         // Put the aircraft on the ground it just hit. update() returns early
         // once crashed, so without this the jet hangs wherever the step left it
         // — which, now that the whole traversed segment is tested, can be well

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Input } from './Input.js';
 import { ChaseCamera } from '../flight/ChaseCamera.js';
 import { FlightModel } from '../flight/FlightModel.js';
+import { terrainHeight } from '../world/heightfield.js';
 
 class Target {
   constructor() { this.listeners = new Map(); }
@@ -388,10 +389,34 @@ withNavigator(() => [], () => {
 
 {
   const flight = new FlightModel();
+  const impactVelocityIdentity = flight.impactVelocity;
+  const impactNormalIdentity = flight.impactNormal;
   flight.position.set(0, -10000, 0);
   flight.velocity.set(0, 0, 500);
+  const incomingVelocity = flight.velocity.clone();
   assert.equal(flight.checkTerrainCollision(1 / 30), true, 'collision must inspect the segment just travelled');
   assert.equal(flight.velocity.length(), 0, 'impact must stop the simulated aircraft');
+  assert.strictEqual(flight.impactVelocity, impactVelocityIdentity);
+  assert.deepEqual(flight.impactVelocity.toArray(), incomingVelocity.toArray(), 'impact preserves incoming direction and magnitude');
+  assert.ok(flight.impactVelocity.length() > 1, 'impact keeps incoming velocity before stop');
+  assert.ok(Math.abs(flight.impactVelocity.length() - flight.impactSpeed) < 1e-6);
+  assert.ok(Math.abs(flight.impactNormal.length() - 1) < 1e-6);
+  assert.ok(flight.impactNormal.y > 0.2, 'terrain normal points away from terrain');
+
+  const epsilon = 4;
+  const { x, z } = flight.impactPoint;
+  const expectedNormal = new THREE.Vector3(
+    terrainHeight(x - epsilon, z) - terrainHeight(x + epsilon, z),
+    epsilon * 2,
+    terrainHeight(x, z - epsilon) - terrainHeight(x, z + epsilon),
+  ).normalize();
+  assert.ok(flight.impactNormal.distanceTo(expectedNormal) < 1e-6, 'impact normal must follow the local heightfield');
+
+  flight.reset(new THREE.Vector3(0, 1000, 0));
+  assert.strictEqual(flight.impactVelocity, impactVelocityIdentity, 'reset keeps impact velocity identity stable');
+  assert.strictEqual(flight.impactNormal, impactNormalIdentity, 'reset keeps impact normal identity stable');
+  assert.deepEqual(flight.impactVelocity.toArray(), [0, 0, 0], 'reset clears prior impact velocity');
+  assert.deepEqual(flight.impactNormal.toArray(), [0, 1, 0], 'reset restores the default upward impact normal');
 }
 
 {
