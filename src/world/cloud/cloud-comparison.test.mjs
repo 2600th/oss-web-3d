@@ -1,28 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Data3DTexture, RedFormat, Texture } from 'three';
+import { Data3DTexture, DataUtils, HalfFloatType, RedFormat, Texture } from 'three';
 import { DEFAULT_STBN_URL } from '@takram/three-geospatial';
 
 import {
   COMPARISON_SCENARIO_NAMES,
   CloudComparisonHarness,
   assessTakramReferenceAssetEligibility,
+  assessRawCloudDiagnosticEligibility,
   assessVisualEligibility,
   applyContextEvent,
   applyComparisonEvent,
   createScenario,
+  createCloudDiagnosticMetadata,
+  deriveTakramProfileContext,
   describeOfficialTakramCloudAssets,
   describeCloudLifecycleResources,
   loadOfficialStbnTexture,
   installDedicatedCloudPass,
   installConsoleIssueCapture,
+  measureCloudBufferPixels,
   parseComparisonQuery,
   publishComparisonResult,
   renderComparisonFrame,
   resetScenarioClock,
+  readCloudOutputBuffer,
   sampleScenarioCameraPose,
+  shouldBypassTerrainDepth,
 } from './CloudComparisonHarness.js';
 import { CloudLifecycleAuditor } from './CloudBenchmark.js';
+import { getTakramCloudProfile, validateTakramProfileScenario } from './TakramCloudProfiles.js';
 import { findPostSites } from '../../game/Mission.js';
 import { terrainHeight } from '../heightfield.js';
 
@@ -42,6 +49,10 @@ const EXPECTED_SCENARIOS = [
   'high-to-phone',
   'context-loss',
   'context-restore',
+  'reference-sky',
+  'himalayan-opening',
+  'himalayan-side-bank',
+  'cloud-buffer',
 ];
 
 function stripBackend(value) {
@@ -82,15 +93,200 @@ test('scenario creation rejects unknown scenarios and backends', () => {
   assert.throws(() => createScenario('opening-3.5', 'other'), /Unknown cloud comparison backend: other/);
 });
 
-test('comparison query accepts only the published backend, quality, and scenario values', () => {
+test('comparison query accepts only the published backend, quality, scenario, profile, and view values', () => {
   assert.deepEqual(
     parseComparisonQuery('?backend=takram&quality=high&scenario=opening-3.5'),
-    { backend: 'takram', quality: 'high', scenario: 'opening-3.5' },
+    {
+      backend: 'takram', quality: 'high', scenario: 'opening-3.5',
+      profile: 'takram-reference', view: 'composite',
+    },
+  );
+  assert.deepEqual(
+    parseComparisonQuery('?backend=takram&profile=takram-himalayan&view=cloud-alpha&scenario=cloud-buffer'),
+    {
+      backend: 'takram', quality: 'high', scenario: 'cloud-buffer',
+      profile: 'takram-himalayan', view: 'cloud-alpha',
+    },
+  );
+  assert.deepEqual(
+    parseComparisonQuery('?backend=current'),
+    {
+      backend: 'current', quality: 'high', scenario: 'opening-3.5',
+      profile: null, view: 'composite',
+    },
   );
   assert.throws(() => parseComparisonQuery('?backend=other'), /Unknown backend query value: other/);
   assert.throws(() => parseComparisonQuery('?quality=ultra'), /Unknown quality query value: ultra/);
   assert.throws(() => parseComparisonQuery('?scenario=other'), /Unknown scenario query value: other/);
+  assert.throws(() => parseComparisonQuery('?backend=takram&profile=storm'), /Unknown profile query value: storm/);
+  assert.throws(() => parseComparisonQuery('?backend=takram&view=cloud-depth'), /Unknown view query value: cloud-depth/);
+  assert.throws(() => parseComparisonQuery('?backend=current&profile=takram-reference'), /only valid for Takram/);
+  assert.throws(() => parseComparisonQuery('?backend=current&view=cloud-alpha'), /only valid for Takram/);
   assert.throws(() => parseComparisonQuery('?backend=current&extra=1'), /Unknown query parameter: extra/);
+});
+
+test('raw diagnostic scenarios expose deterministic sky-only and Himalayan capture contracts', () => {
+  const referenceSky = createScenario('reference-sky', 'takram');
+  assert.equal(referenceSky.captureKind, 'sky-only-reference');
+  assert.equal(referenceSky.inSceneMissionCapture, false);
+  assert.equal(referenceSky.terrainDepthPolicy, 'raw-diagnostic-bypass-only');
+  assert.equal(referenceSky.depthSetup.owner, 'comparison-harness');
+
+  const cloudBuffer = createScenario('cloud-buffer', 'takram');
+  assert.equal(cloudBuffer.captureKind, 'raw-cloud-buffer-diagnostic');
+  assert.equal(cloudBuffer.terrainDepthPolicy, 'preserve-terrain-depth');
+
+  const site = findPostSites({ x: 0, y: 0, z: 0, clone() { return this; } }, 1)[0];
+  const objectiveAim = [site.position.x, site.position.y + 12, site.position.z];
+  for (const name of ['himalayan-opening', 'himalayan-side-bank']) {
+    const scenario = createScenario(name, 'takram');
+    const context = deriveTakramProfileContext(scenario, objectiveAim, terrainHeight);
+    const profile = getTakramCloudProfile('takram-himalayan', context);
+    const validation = validateTakramProfileScenario(profile, context);
+    assert.equal(scenario.profileRequirement, 'takram-himalayan');
+    const minimumTerrainSamples = name === 'himalayan-side-bank' ? 151 * 9 : 9;
+    assert.ok(context.sampleCount >= minimumTerrainSamples, `${name} terrain sample coverage`);
+    assert.equal(validation.eligible, true, name);
+    assert.ok(validation.nearestBoundaryDistance >= 500, name);
+  }
+});
+
+test('reference-sky bypasses terrain depth only for its raw Takram diagnostic views', () => {
+  const referenceSky = createScenario('reference-sky', 'takram');
+  const cloudBuffer = createScenario('cloud-buffer', 'takram');
+  assert.equal(shouldBypassTerrainDepth({
+    backendName: 'takram', view: 'cloud-alpha', scenario: referenceSky,
+  }), true);
+  assert.equal(shouldBypassTerrainDepth({
+    backendName: 'takram', view: 'cloud-color', scenario: referenceSky,
+  }), true);
+  assert.equal(shouldBypassTerrainDepth({
+    backendName: 'takram', view: 'composite', scenario: referenceSky,
+  }), false);
+  assert.equal(shouldBypassTerrainDepth({
+    backendName: 'takram', view: 'cloud-alpha', scenario: cloudBuffer,
+  }), false);
+  assert.equal(shouldBypassTerrainDepth({
+    backendName: 'current', view: 'cloud-alpha', scenario: referenceSky,
+  }), false);
+});
+
+test('raw cloud buffer measurements use alpha from the source buffer and report its composite contrast overlap', () => {
+  const pixels = new Uint8Array([
+    // Bottom row: two connected occupied pixels.
+    0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+    // Top row: the component continues and has a three-pixel horizontal run.
+    0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+  ]);
+  const finalCompositePixels = new Uint8Array([
+    0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+    0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255,
+  ]);
+  const measured = measureCloudBufferPixels({
+    pixels,
+    width: 4,
+    height: 2,
+    finalCompositePixels,
+    finalCompositeWidth: 4,
+    finalCompositeHeight: 2,
+  });
+
+  assert.equal(measured.status, 'MEASURED');
+  assert.equal(measured.alphaOccupancy, 5 / 8);
+  assert.equal(measured.topHalfAlphaOccupancy, 3 / 4);
+  assert.equal(measured.connectedComponents, 1);
+  assert.equal(measured.maxHorizontalRun, 3);
+  assert.equal(measured.finalCompositeContrast.status, 'MEASURED');
+  assert.ok(measured.finalCompositeContrast.overlapRatio > 0);
+});
+
+test('raw cloud readback resolves the exact output buffer target and decodes half-float alpha values', () => {
+  const output = { name: 'resolved-history' };
+  const target = { width: 2, height: 1, texture: output };
+  const clouds = {
+    cloudsPass: {
+      outputBuffer: output,
+      historyRenderTarget: target,
+      resolveRenderTarget: { texture: { name: 'stale-resolve' } },
+    },
+  };
+  target.texture.type = HalfFloatType;
+  const renderer = {
+    readRenderTargetPixels(actualTarget, x, y, width, height, pixels) {
+      assert.strictEqual(actualTarget, target);
+      assert.equal(x, 0);
+      assert.equal(y, 0);
+      assert.equal(width, 2);
+      assert.equal(height, 1);
+      assert.ok(pixels instanceof Uint16Array);
+      pixels.set([
+        DataUtils.toHalfFloat(0.1), DataUtils.toHalfFloat(0.2),
+        DataUtils.toHalfFloat(0.3), DataUtils.toHalfFloat(0.4),
+        DataUtils.toHalfFloat(0.5), DataUtils.toHalfFloat(0.6),
+        DataUtils.toHalfFloat(0.7), DataUtils.toHalfFloat(0.8),
+      ]);
+    },
+  };
+
+  const readback = readCloudOutputBuffer(renderer, clouds);
+  assert.equal(readback.status, 'MEASURED');
+  assert.ok(readback.pixels instanceof Float32Array);
+  assert.ok(Math.abs(readback.pixels[3] - 0.4) < 0.001);
+  assert.ok(Math.abs(readback.pixels[7] - 0.8) < 0.001);
+});
+
+test('raw diagnostic eligibility rejects an empty alpha buffer, missing official assets, and unsafe layer separation', () => {
+  const empty = assessRawCloudDiagnosticEligibility({
+    cloudAssetMode: 'official-pinned',
+    nearestLayerBoundaryDistance: 750,
+    rawMetrics: { status: 'MEASURED', alphaOccupancy: 0 },
+  });
+  assert.deepEqual(empty, {
+    eligible: false,
+    reason: 'empty-cloud-buffer-alpha',
+    reasons: ['empty-cloud-buffer-alpha'],
+  });
+
+  const invalid = assessRawCloudDiagnosticEligibility({
+    cloudAssetMode: 'unavailable',
+    nearestLayerBoundaryDistance: 499,
+    rawMetrics: { status: 'MEASURED', alphaOccupancy: 0.1 },
+  });
+  assert.deepEqual(invalid, {
+    eligible: false,
+    reason: 'official-cloud-assets-unavailable',
+    reasons: ['official-cloud-assets-unavailable', 'camera-near-zero-density-boundary'],
+  });
+});
+
+test('raw result metadata identifies the buffer source and keeps reference-sky out of mission capture claims', () => {
+  const scenario = createScenario('reference-sky', 'takram');
+  const profile = getTakramCloudProfile('takram-reference');
+  const metadata = createCloudDiagnosticMetadata({
+    backend: 'takram',
+    profileName: 'takram-reference',
+    view: 'cloud-alpha',
+    scenario,
+    cloudProfile: profile,
+    cameraGeodeticAltitude: 5600,
+    profileContext: null,
+    cloudAssetMode: 'official-pinned',
+    rawMetrics: { status: 'MEASURED', alphaOccupancy: 0.1 },
+    terrainDepthBypassed: true,
+  });
+
+  assert.deepEqual(metadata, {
+    profile: 'takram-reference',
+    view: 'cloud-alpha',
+    cameraGeodeticAltitude: 5600,
+    nearestLayerBoundaryDistance: 1900,
+    cloudAssetMode: 'official-pinned',
+    compositionMode: 'takram-cloud-buffer-debug',
+    terrainDepthMode: 'bypassed-for-raw-reference-sky',
+    captureKind: 'sky-only-reference',
+    inSceneMissionCapture: false,
+    eligibility: { eligible: true, reason: null, reasons: [] },
+  });
 });
 
 test('a comparison frame delegates cloud rendering only to the production composer', () => {
