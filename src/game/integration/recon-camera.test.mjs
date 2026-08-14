@@ -35,6 +35,7 @@ URL.createObjectURL = (blob) => {
 URL.revokeObjectURL = (url) => revokedUrls.push(url);
 
 const { ReconCamera } = await import('../ReconCamera.js');
+const { terrainVisibility } = await import('../TerrainVisibility.js');
 const TRANSIENT_SHOT_RELEASE_MS = 4200;
 
 function flushPromises(turns = 8) {
@@ -174,6 +175,13 @@ test('evaluate reuses one stable record per post without corrupting another cand
   assert.equal(firstA.post, postA);
   assert.equal(firstA.score, aScore, 'evaluating another post must not overwrite the held best record');
   assert.equal(firstB.post, postB);
+  recon.dispose();
+});
+
+test('recon line of sight uses the shared terrain visibility contract', () => {
+  const recon = makeRecon();
+  const target = new THREE.Vector3(21000, 2500, 6000);
+  assert.equal(recon.lineOfSight(recon.camera.position, target), terrainVisibility(recon.camera.position, target));
   recon.dispose();
 });
 

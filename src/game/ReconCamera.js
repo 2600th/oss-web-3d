@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { terrainHeight } from '../world/heightfield.js';
 import { POST_RADIUS } from './ObservationPost.js';
+import { terrainVisibility } from './TerrainVisibility.js';
 
 /**
  * The reconnaissance camera: a fixed forward-oblique installation in the nose,
@@ -239,27 +239,8 @@ export class ReconCamera {
    * agrees with what the pilot can actually see.
    */
   lineOfSight(from, to) {
-    // Sample the span between the camera and the target, excluding both ends.
-    // The target *is* ground — the aim point sits a few metres above a hillside
-    // — so including the last few per cent measures the site against itself and
-    // caps every shot at a low score no matter how clear the approach. The near
-    // end is skipped for the same reason when flying low.
-    const steps = 30;
-    const first = 0.05;
-    const last = 0.9;
-    let clearance = Infinity;
-    for (let i = 0; i <= steps; i++) {
-      const t = first + ((last - first) * i) / steps;
-      const x = from.x + (to.x - from.x) * t;
-      const y = from.y + (to.y - from.y) * t;
-      const z = from.z + (to.z - from.z) * t;
-      const margin = y - terrainHeight(x, z);
-      if (margin < clearance) clearance = margin;
-    }
-    if (clearance <= 0) return 0;
-    // Soft edge: skimming a ridge crest degrades the shot rather than being
-    // pass/fail, which keeps low approaches tense instead of binary.
-    return clamp01(clearance / 40);
+    // Keep scoring and navigation on the same terrain-occlusion contract.
+    return terrainVisibility(from, to);
   }
 
   /**
