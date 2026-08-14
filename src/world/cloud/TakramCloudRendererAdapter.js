@@ -268,6 +268,8 @@ export class TakramCloudRendererAdapter {
     this.cloudProfile = getTakramCloudProfile(profileName, profileContext);
     this.effect = null;
     this.generatedResources = [];
+    this.cloudAssets = null;
+    this.cloudAssetMode = 'procedural-unverified';
     this.fallbackAtmosphereTextures = null;
     this.stbnTexture = null;
     this.fallbackStbnTexture = null;
@@ -315,18 +317,22 @@ export class TakramCloudRendererAdapter {
     effect.cloudLayers.set(this.cloudProfile.layers);
     effect.sunDirection.copy(this.sunDirection).transformDirection(effect.worldToECEFMatrix);
 
-    const generatedResources = [
+    const generatedResources = this.cloudAssets == null ? [
       new LocalWeather(),
       new CloudShape(),
       new CloudShapeDetail(),
       new Turbulence(),
-    ];
-    [
-      effect.localWeatherTexture,
-      effect.shapeTexture,
-      effect.shapeDetailTexture,
-      effect.turbulenceTexture,
-    ] = generatedResources;
+    ] : [];
+    if (this.cloudAssets == null) {
+      [
+        effect.localWeatherTexture,
+        effect.shapeTexture,
+        effect.shapeDetailTexture,
+        effect.turbulenceTexture,
+      ] = generatedResources;
+    } else {
+      this._applyCloudTextures(effect, this.cloudAssets);
+    }
 
     if (this.stbnTexture == null) {
       this.stbnTexture = createFallbackStbnTexture();
@@ -448,6 +454,32 @@ export class TakramCloudRendererAdapter {
     this.resetHistory('sampling-texture-change');
   }
 
+  _applyCloudTextures(effect, assets) {
+    effect.localWeatherTexture = assets.localWeatherTexture;
+    effect.shapeTexture = assets.shapeTexture;
+    effect.shapeDetailTexture = assets.shapeDetailTexture;
+    effect.turbulenceTexture = assets.turbulenceTexture;
+  }
+
+  setCloudTextures(assets) {
+    if (
+      assets?.mode !== 'official-pinned'
+      || assets.localWeatherTexture?.isTexture !== true
+      || assets.shapeTexture?.isData3DTexture !== true
+      || assets.shapeDetailTexture?.isData3DTexture !== true
+      || assets.turbulenceTexture?.isTexture !== true
+    ) {
+      throw new TypeError('Takram cloud textures must be the complete official-pinned asset set');
+    }
+    const generatedResources = this.generatedResources;
+    this.cloudAssets = assets;
+    this.cloudAssetMode = assets.mode;
+    if (this.effect != null) this._applyCloudTextures(this.effect, assets);
+    this.generatedResources = [];
+    for (const resource of new Set(generatedResources)) resource.dispose();
+    this.resetHistory('cloud-texture-change');
+  }
+
   update(frame) {
     this.camera = frame.camera;
     this.scene = frame.scene;
@@ -560,6 +592,7 @@ export class TakramCloudRendererAdapter {
       backend: 'takram',
       enabled: true,
       profile: this.profile.name,
+      cloudAssetMode: this.cloudAssetMode,
       renderTargetCount: targetResources.length,
       proceduralTextureCount: generatedResources.length,
       fallbackTextureCount: fallbackResources.length,
@@ -606,5 +639,6 @@ export class TakramCloudRendererAdapter {
     this._disposed = true;
     this._disposeEffect();
     this.stbnTexture = null;
+    this.cloudAssets = null;
   }
 }

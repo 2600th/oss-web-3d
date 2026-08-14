@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Data3DTexture } from 'three';
+import { Data3DTexture, RedFormat, Texture } from 'three';
 import { DEFAULT_STBN_URL } from '@takram/three-geospatial';
 
 import {
   COMPARISON_SCENARIO_NAMES,
+  assessTakramReferenceAssetEligibility,
   assessVisualEligibility,
   applyContextEvent,
   applyComparisonEvent,
   createScenario,
+  describeOfficialTakramCloudAssets,
   describeCloudLifecycleResources,
   loadOfficialStbnTexture,
   installDedicatedCloudPass,
@@ -391,16 +393,67 @@ test('comparison disposes the STBN loader placeholder when loading fails', async
   assert.equal(disposeCount, 1);
 });
 
+test('comparison makes an unavailable official cloud asset ineligible before warmup', () => {
+  assert.deepEqual(assessTakramReferenceAssetEligibility({
+    backend: 'takram',
+    requiresEnabledTakram: true,
+    cloudAssetMode: 'unavailable',
+  }), { eligible: false, reason: 'official-cloud-assets-unavailable' });
+  assert.deepEqual(assessTakramReferenceAssetEligibility({
+    backend: 'takram',
+    requiresEnabledTakram: true,
+    cloudAssetMode: 'official-pinned',
+  }), { eligible: true, reason: null });
+});
+
+test('comparison accounts for each harness-owned official cloud texture exactly once', () => {
+  const localWeatherTexture = new Texture({ width: 512, height: 512 });
+  localWeatherTexture.generateMipmaps = true;
+  const shapeTexture = new Data3DTexture(new Uint8Array(128 * 128 * 128), 128, 128, 128);
+  shapeTexture.format = RedFormat;
+  shapeTexture.generateMipmaps = false;
+  const shapeDetailTexture = new Data3DTexture(new Uint8Array(32 * 32 * 32), 32, 32, 32);
+  shapeDetailTexture.format = RedFormat;
+  shapeDetailTexture.generateMipmaps = false;
+  const turbulenceTexture = new Texture({ width: 128, height: 128 });
+  turbulenceTexture.generateMipmaps = true;
+
+  const report = describeOfficialTakramCloudAssets({
+    mode: 'official-pinned',
+    localWeatherTexture,
+    shapeTexture,
+    shapeDetailTexture,
+    turbulenceTexture,
+  });
+
+  assert.equal(report.owner, 'comparison-harness');
+  assert.equal(report.resources.length, 4);
+  assert.equal(report.resources.reduce((total, resource) => total + resource.payloadBytes, 0), 2_859_264);
+  assert.equal(report.resources.reduce((total, resource) => total + resource.bytes, 0), 3_615_400);
+  assert.deepEqual(report.resources.map(resource => resource.name), [
+    'official-local-weather',
+    'official-cloud-shape',
+    'official-cloud-shape-detail',
+    'official-turbulence',
+  ]);
+});
+
 test('Takram stays visually pending until composited imagery is reviewed', () => {
   assert.deepEqual(assessVisualEligibility({
     backend: 'current', enabled: true, lightingMode: 'shipping-environment', stbnMode: null,
   }), { eligible: true, reason: null });
   assert.deepEqual(assessVisualEligibility({
     backend: 'takram', enabled: true, lightingMode: 'takram-precomputed-lut', stbnMode: 'official-pinned',
+    cloudAssetMode: 'official-pinned',
   }), { eligible: false, reason: 'pending-composited-visual-review' });
   assert.deepEqual(assessVisualEligibility({
     backend: 'takram', enabled: true, lightingMode: 'fallback-lighting', stbnMode: 'official-pinned',
+    cloudAssetMode: 'official-pinned',
   }), { eligible: false, reason: 'fallback-lighting' });
+  assert.deepEqual(assessVisualEligibility({
+    backend: 'takram', enabled: true, lightingMode: 'takram-precomputed-lut', stbnMode: 'official-pinned',
+    cloudAssetMode: 'unavailable',
+  }), { eligible: false, reason: 'official-cloud-assets-unavailable' });
 });
 
 test('comparison publishes machine-readable result in a hidden ordinary DOM node', () => {

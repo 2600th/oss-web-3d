@@ -24,6 +24,11 @@ import {
   flipPixelRows,
   summarizeResourceReport,
 } from './CloudBenchmark.js';
+import {
+  TAKRAM_CLOUD_ASSET_MANIFEST,
+  disposeTakramCloudAssets,
+  loadOfficialTakramCloudAssets,
+} from './TakramCloudAssets.js';
 import { TakramCloudRendererAdapter } from './TakramCloudRendererAdapter.js';
 
 const BACKENDS = new Set(['current', 'takram']);
@@ -295,6 +300,9 @@ export function describeCloudLifecycleResources(runtime) {
     add(`atmosphere-${name}`, texture);
   }
   add('official-stbn', runtime.stbnTexture);
+  for (const [name, texture] of Object.entries(runtime.cloudAssets ?? {})) {
+    if (name.endsWith('Texture')) add(`official-cloud-${name}`, texture);
+  }
 
   const current = runtime.backend?.cloudVolume;
   for (let index = 0; index < (current?._temporalTargets?.length ?? 0); index += 1) {
@@ -363,14 +371,29 @@ export function loadOfficialStbnTexture(loader = new STBNLoader()) {
   });
 }
 
-export function assessVisualEligibility({ backend, enabled, lightingMode, stbnMode }) {
+export function assessVisualEligibility({ backend, enabled, lightingMode, stbnMode, cloudAssetMode }) {
   if (backend === 'current') return { eligible: true, reason: null };
   if (!enabled) return { eligible: false, reason: 'takram-disabled-phone' };
+  if (cloudAssetMode !== 'official-pinned') {
+    return { eligible: false, reason: 'official-cloud-assets-unavailable' };
+  }
   if (lightingMode === 'fallback-lighting') return { eligible: false, reason: 'fallback-lighting' };
   if (stbnMode !== 'official-pinned') return { eligible: false, reason: 'official-stbn-unavailable' };
   // Assets and shaders are necessary but not sufficient: silhouette, terrain
   // occlusion, repetition and horizon artifacts require composited image review.
   return { eligible: false, reason: 'pending-composited-visual-review' };
+}
+
+export function assessTakramReferenceAssetEligibility({
+  backend,
+  requiresEnabledTakram,
+  cloudAssetMode,
+}) {
+  if (backend !== 'takram' || !requiresEnabledTakram) return { eligible: true, reason: null };
+  if (cloudAssetMode !== 'official-pinned') {
+    return { eligible: false, reason: 'official-cloud-assets-unavailable' };
+  }
+  return { eligible: true, reason: null };
 }
 
 function selectedEffectForComposer(name, adapter) {
@@ -606,6 +629,32 @@ function describeAtmosphereTextures(textures) {
   };
 }
 
+export function describeOfficialTakramCloudAssets(assets) {
+  if (assets?.mode !== 'official-pinned') return null;
+  const textureEntries = [
+    ['official-local-weather', 'localWeather', 'localWeatherTexture'],
+    ['official-cloud-shape', 'shape', 'shapeTexture'],
+    ['official-cloud-shape-detail', 'shapeDetail', 'shapeDetailTexture'],
+    ['official-turbulence', 'turbulence', 'turbulenceTexture'],
+  ];
+  const resources = textureEntries.map(([name, manifestName, textureName]) => {
+    const entry = TAKRAM_CLOUD_ASSET_MANIFEST[manifestName];
+    return {
+      name,
+      kind: 'official-cloud-texture',
+      source: `/cloud-comparison/takram/${entry.file}`,
+      payloadBytes: entry.bytes,
+      ...textureBytes(assets[textureName]),
+    };
+  });
+  return {
+    owner: 'comparison-harness',
+    resources,
+    payloadBytes: resources.reduce((total, resource) => total + resource.payloadBytes, 0),
+    totalBytes: resources.reduce((total, resource) => total + resource.bytes, 0),
+  };
+}
+
 function disposeAtmosphereTextures(textures) {
   const disposed = new Set();
   for (const texture of Object.values(textures ?? {})) {
@@ -757,6 +806,8 @@ export class CloudComparisonHarness {
     this.historyResets = [];
     this.contextEvents = [];
     this.consoleIssues = [];
+    this.cloudAssets = null;
+    this.cloudAssetMode = null;
     this._restoreConsole = installConsoleIssueCapture(console, this.consoleIssues);
 
     this.settings = { tier: TIERS[this.quality] };
@@ -823,6 +874,7 @@ export class CloudComparisonHarness {
       this.backend = new CurrentCloudRendererAdapter(new CloudVolume(this.environment, this.engine.camera));
       this.lightingMode = 'shipping-environment';
       this.requiresEnabledTakram = false;
+      this.cloudAssetMode = 'not-applicable-current';
       return;
     }
     this.backend = new TakramCloudRendererAdapter({
@@ -843,9 +895,11 @@ export class CloudComparisonHarness {
       });
       this.lightingMode = 'precomputing-takram-lut';
       this.stbnMode = 'loading-official';
+      this.cloudAssetMode = 'loading-official';
     } else {
       this.lightingMode = 'not-applicable-disabled';
       this.stbnMode = 'not-applicable-disabled';
+      this.cloudAssetMode = 'not-applicable-disabled';
     }
   }
 
@@ -860,6 +914,7 @@ export class CloudComparisonHarness {
     this.atmosphereGenerator?.dispose();
     disposeAtmosphereTextures(this.atmosphereTextures);
     this.stbnTexture?.dispose();
+    disposeTakramCloudAssets(this.cloudAssets);
     this.benchmark.dispose();
     this.mission.dispose();
     this.terrain.dispose();
@@ -869,6 +924,7 @@ export class CloudComparisonHarness {
     this.atmosphereGenerator = null;
     this.atmosphereTextures = null;
     this.stbnTexture = null;
+    this.cloudAssets = null;
 
     this.settings.tier = TIERS[this.quality];
     this.engine = new Engine(this.canvas, this.settings);
@@ -900,7 +956,8 @@ export class CloudComparisonHarness {
     );
     this.backend.setDepthTexture(this.engine.composer.stableDepthTexture);
     setRuntimeSize(this, window.innerWidth, window.innerHeight);
-    await Promise.all([this._prepareAtmosphere(), this._prepareStbn()]);
+    await Promise.all([this._prepareAtmosphere(), this._prepareStbn(), this._prepareCloudAssets()]);
+    this._assertTakramReferenceAssetsAvailable();
     this.backend.resetHistory('context-restore-recreated');
     this.lifecycleAudit.markReset('context-restore-recreated');
     this.lifecycleAudit.completeMutation();
@@ -920,6 +977,7 @@ export class CloudComparisonHarness {
         : null,
       lightingMode: this.lightingMode,
       stbnMode: this.stbnMode ?? null,
+      cloudAssetMode: this.cloudAssetMode,
     });
   }
 
@@ -958,6 +1016,34 @@ export class CloudComparisonHarness {
       }
     }
     this.backend.setStbnTexture(this.stbnTexture);
+  }
+
+  async _prepareCloudAssets() {
+    if (!this.requiresEnabledTakram) return;
+    if (this.cloudAssets == null) {
+      try {
+        this.cloudAssets = await loadOfficialTakramCloudAssets();
+        this.cloudAssetMode = this.cloudAssets.mode;
+      } catch (error) {
+        this.cloudAssetError = error instanceof Error ? error.message : String(error);
+        this.cloudAssetMode = 'unavailable';
+        console.error('[cloud-comparison] Official Takram cloud asset load failed', error);
+        return;
+      }
+    }
+    this.backend.setCloudTextures(this.cloudAssets);
+  }
+
+  _assertTakramReferenceAssetsAvailable() {
+    const eligibility = assessTakramReferenceAssetEligibility({
+      backend: this.backendName,
+      requiresEnabledTakram: this.requiresEnabledTakram,
+      cloudAssetMode: this.cloudAssetMode,
+    });
+    if (eligibility.eligible) return;
+    const error = new Error(`Ineligible Takram reference: ${eligibility.reason}`);
+    error.code = 'ineligible-reference';
+    throw error;
   }
 
   async _replayTemporalStop({ freshReset, noCloud = false }) {
@@ -1058,7 +1144,8 @@ export class CloudComparisonHarness {
       resetScenarioClock(this.environment, this.scenario);
       setRuntimeQuality(this, this.initialQuality);
       setRuntimeSize(this, window.innerWidth, window.innerHeight);
-      await Promise.all([this._prepareAtmosphere(), this._prepareStbn()]);
+      await Promise.all([this._prepareAtmosphere(), this._prepareStbn(), this._prepareCloudAssets()]);
+      this._assertTakramReferenceAssetsAvailable();
       this.phase = 'warming';
       for (this.frame = 0; this.frame < maximumFrames; this.frame += 1) {
         for (const item of this.scenario.events) {
@@ -1090,9 +1177,11 @@ export class CloudComparisonHarness {
         enabled: this.backendName === 'current' || this.backend.profile?.enabled === true,
         lightingMode: this.lightingMode,
         stbnMode: this.stbnMode,
+        cloudAssetMode: this.cloudAssetMode,
       });
       const backendResources = this.backend.getResourceReport();
       const atmosphereResources = describeAtmosphereTextures(this.atmosphereTextures);
+      const cloudAssetResources = describeOfficialTakramCloudAssets(this.cloudAssets);
       const stbnResource = this.stbnTexture == null ? null : {
         name: 'official-stbn', kind: 'sampling-texture', source: DEFAULT_STBN_URL,
         width: 128, height: 128, depth: 64, channels: 1, bytesPerChannel: 1,
@@ -1103,6 +1192,7 @@ export class CloudComparisonHarness {
         atmosphereResources: atmosphereResources?.resources ?? [],
         stbnResource,
       });
+      resourceItems.push(...(cloudAssetResources?.resources ?? []));
       this.runResult = deepFreeze(createCloudComparisonResult({
         backend: this.backendName,
         versions: {
@@ -1136,6 +1226,12 @@ export class CloudComparisonHarness {
             : null,
           lightingMode: this.lightingMode,
           stbnMode: this.stbnMode ?? null,
+          cloudAssetMode: this.cloudAssetMode,
+          cloudAssetSource: cloudAssetResources == null ? null : {
+            payloadBytes: cloudAssetResources.payloadBytes,
+            gpuBytes: cloudAssetResources.totalBytes,
+            gpuOwnership: 'comparison-harness',
+          },
           visualComparisonEligible: visualGate.eligible,
           visualEligibilityReason: visualGate.reason,
           historyResets: structuredClone(this.historyResets),
@@ -1152,7 +1248,7 @@ export class CloudComparisonHarness {
       publishComparisonResult(document, this.runResult);
       return this.runResult;
     } catch (error) {
-      this.phase = 'error';
+      this.phase = error?.code === 'ineligible-reference' ? 'ineligible' : 'error';
       throw error;
     } finally {
       this.running = false;
@@ -1180,6 +1276,7 @@ export class CloudComparisonHarness {
     this.atmosphereGenerator?.dispose();
     disposeAtmosphereTextures(this.atmosphereTextures);
     this.stbnTexture?.dispose();
+    disposeTakramCloudAssets(this.cloudAssets);
     this.mission.dispose();
     this.terrain.dispose();
     this.sky.dispose();

@@ -61,6 +61,21 @@ function createOptions(quality = { name: 'high' }, overrides = {}) {
   };
 }
 
+function createOfficialCloudAssets() {
+  const localWeatherTexture = new Texture({ width: 512, height: 512 });
+  const shapeTexture = new Data3DTexture(new Uint8Array(128 * 128 * 128), 128, 128, 128);
+  const shapeDetailTexture = new Data3DTexture(new Uint8Array(32 * 32 * 32), 32, 32, 32);
+  const turbulenceTexture = new Texture({ width: 128, height: 128 });
+  return {
+    mode: 'official-pinned',
+    localWeatherTexture,
+    shapeTexture,
+    shapeDetailTexture,
+    turbulenceTexture,
+    textures: [localWeatherTexture, shapeTexture, shapeDetailTexture, turbulenceTexture],
+  };
+}
+
 test('applies the selected faithful cloud profile without mutating quality', () => {
   const reference = new TakramCloudRendererAdapter(createOptions());
   const himalayan = new TakramCloudRendererAdapter(createOptions(
@@ -314,6 +329,46 @@ test('replaces and disposes the fallback without taking ownership of official ST
   assert.equal(fallbackDisposals, 1);
   assert.equal(officialDisposals, 0);
   official.dispose();
+});
+
+test('uses harness-owned official cloud textures without retaining generated cloud resources', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const generated = [...backend.generatedResources];
+  let generatedDisposals = 0;
+  for (const resource of generated) {
+    const dispose = resource.dispose.bind(resource);
+    resource.dispose = () => {
+      generatedDisposals += 1;
+      dispose();
+    };
+  }
+  const assets = createOfficialCloudAssets();
+  const officialDisposals = new Map(assets.textures.map(texture => [texture, 0]));
+  for (const texture of assets.textures) {
+    texture.addEventListener('dispose', () => {
+      officialDisposals.set(texture, officialDisposals.get(texture) + 1);
+    });
+  }
+
+  backend.setCloudTextures(assets);
+
+  assert.equal(generatedDisposals, 4);
+  assert.deepEqual(backend.generatedResources, []);
+  assert.strictEqual(backend.effect.localWeatherTexture, assets.localWeatherTexture);
+  assert.strictEqual(backend.effect.shapeTexture, assets.shapeTexture);
+  assert.strictEqual(backend.effect.shapeDetailTexture, assets.shapeDetailTexture);
+  assert.strictEqual(backend.effect.turbulenceTexture, assets.turbulenceTexture);
+  const report = backend.getResourceReport();
+  assert.equal(report.cloudAssetMode, 'official-pinned');
+  assert.equal(report.proceduralTextureCount, 0);
+  assert.equal(
+    report.resources.some(resource => ['local-weather', 'cloud-shape', 'cloud-shape-detail', 'turbulence']
+      .includes(resource.name)),
+    false,
+  );
+
+  backend.dispose();
+  assert.equal([...officialDisposals.values()].every(count => count === 0), true);
 });
 
 test('phone quality is an explicit disabled profile with no Takram targets', () => {
