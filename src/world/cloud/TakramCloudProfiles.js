@@ -19,6 +19,7 @@ const REFERENCE_LAYERS = [
 
 const REFERENCE_PROFILE = {
   name: 'takram-reference',
+  haze: true,
   coverage: 0.4,
   localWeatherRepeat: [100, 100],
   localWeatherVelocity: [0.001, 0],
@@ -85,6 +86,7 @@ export function deriveHimalayanCloudProfile(context) {
   return cloneProfile({
     ...REFERENCE_PROFILE,
     name: 'takram-himalayan',
+    haze: false,
     altitudeTranslation: { cumulus: cumulusOffset, cirrus: cirrusOffset },
     layers,
   });

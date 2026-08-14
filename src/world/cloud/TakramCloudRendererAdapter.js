@@ -310,6 +310,7 @@ export class TakramCloudRendererAdapter {
     );
     effect.skipRendering = false;
     effect.qualityPreset = this.profile.takram;
+    effect.haze = this.cloudProfile.haze;
     effect.coverage = this.cloudProfile.coverage;
     effect.localWeatherRepeat.fromArray(this.cloudProfile.localWeatherRepeat);
     effect.localWeatherOffset.set(0.18, 0.42);
@@ -359,6 +360,7 @@ export class TakramCloudRendererAdapter {
     if (this.profileContext == null) {
       return {
         name: this.cloudProfile.name,
+        haze: this.cloudProfile.haze,
         altitudeTranslation: { ...this.cloudProfile.altitudeTranslation },
         nearestLayerBoundaryDistance: null,
         eligible: null,
@@ -371,6 +373,7 @@ export class TakramCloudRendererAdapter {
     );
     return {
       name: this.cloudProfile.name,
+      haze: this.cloudProfile.haze,
       altitudeTranslation: { ...this.cloudProfile.altitudeTranslation },
       nearestLayerBoundaryDistance: validation.nearestBoundaryDistance,
       eligible: validation.eligible,

@@ -88,6 +88,8 @@ test('applies the selected faithful cloud profile without mutating quality', () 
 
   assert.equal(reference.profile.name, 'high');
   assert.equal(reference.cloudProfile.name, 'takram-reference');
+  assert.equal(reference.effect.haze, true);
+  assert.equal(reference.getProfileReport().haze, true);
   assert.equal(reference.effect.coverage, 0.4);
   assert.deepEqual(reference.effect.localWeatherRepeat.toArray(), [100, 100]);
   assert.deepEqual(reference.effect.localWeatherVelocity.toArray(), [0.001, 0]);
@@ -108,12 +110,15 @@ test('applies the selected faithful cloud profile without mutating quality', () 
   assert.equal(reference.activeLayerCount, 3);
 
   assert.equal(himalayan.cloudProfile.name, 'takram-himalayan');
+  assert.equal(himalayan.effect.haze, false);
+  assert.equal(himalayan.getProfileReport().haze, false);
   assert.deepEqual(
     [...himalayan.effect.cloudLayers].slice(0, 3).map(layer => layer.altitude),
     [7736.246, 7986.246, 9486.246],
   );
   assert.deepEqual(himalayan.getProfileReport(), {
     name: 'takram-himalayan',
+    haze: false,
     altitudeTranslation: { cumulus: 6986.246, cirrus: 1986.246 },
     nearestLayerBoundaryDistance: 501,
     eligible: true,

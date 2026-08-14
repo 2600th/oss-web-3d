@@ -33,6 +33,7 @@ test('reference profile reproduces pinned Takram vanilla cloud guidance', () => 
 
   assert.deepEqual(TAKRAM_PROFILE_NAMES, ['takram-reference', 'takram-himalayan']);
   assert.equal(profile.name, 'takram-reference');
+  assert.equal(getTakramCloudProfile('takram-reference').haze, true);
   assert.equal(profile.coverage, 0.4);
   assert.deepEqual(profile.localWeatherRepeat, [100, 100]);
   assert.deepEqual(profile.localWeatherVelocity, [0.001, 0]);
@@ -49,6 +50,7 @@ test('Himalayan profile translates only layer altitudes above terrain and camera
   const reference = getTakramCloudProfile('takram-reference');
 
   assert.equal(profile.name, 'takram-himalayan');
+  assert.equal(deriveHimalayanCloudProfile(context).haze, false);
   assert.equal(profile.altitudeTranslation.cumulus, 6986.246);
   assert.equal(profile.altitudeTranslation.cirrus, 1986.246);
   assert.deepEqual(
