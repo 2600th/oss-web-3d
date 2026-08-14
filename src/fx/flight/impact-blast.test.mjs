@@ -44,6 +44,24 @@ test('changes every tier ring detail with drawRange while retaining the prewarme
   blast.dispose();
 });
 
+test('phone pressure shell and ring scale against portrait short-side coverage', () => {
+  const high = new ImpactBlast();
+  high.setQuality({ name: 'high' });
+  high.trigger(impact());
+  high.update(0.3);
+  const highShell = high.shell.scale.x;
+  const highRing = high.ring.scale.x;
+
+  const phone = new ImpactBlast();
+  phone.setQuality({ name: 'phone' });
+  phone.trigger(impact());
+  phone.update(0.3);
+  assert.ok(phone.shell.scale.x <= highShell * 0.65);
+  assert.ok(phone.ring.scale.x <= highRing * 0.65);
+  high.dispose();
+  phone.dispose();
+});
+
 test('trigger reveals and aligns the prewarmed blast resources to the terrain normal', () => {
   const blast = new ImpactBlast();
   const shell = blast.shell;
@@ -73,9 +91,25 @@ test('ages out the fixed flash before hiding the shell and ring', () => {
   assert.equal(blast.shell.visible, true);
   assert.equal(blast.ring.visible, true);
 
+  blast.update(0.14);
+  assert.equal(blast.shell.visible, false, 'pressure shell must clear by 500 ms');
+
   blast.update(1.25);
   assert.equal(blast.shell.visible, false);
   assert.equal(blast.ring.visible, false);
+  blast.dispose();
+});
+
+test('live visual gate keeps the pressure shell and terrain ring bounded near the chase camera', () => {
+  const blast = new ImpactBlast();
+  blast.trigger(impact());
+  blast.update(0.3);
+
+  assert.ok(blast.shell.scale.x <= 4.8, `shell scale ${blast.shell.scale.x} exceeds visual gate`);
+  assert.ok(blast.ring.scale.x <= 8, `ring scale ${blast.ring.scale.x} exceeds visual gate`);
+  assert.equal(blast.shell.material.toneMapped, true);
+  assert.equal(blast.ring.material.toneMapped, true);
+  assert.ok(blast.shell.geometry.attributes.position.count > 2000, 'shell silhouette remains faceted');
   blast.dispose();
 });
 
@@ -138,6 +172,8 @@ test('ships one displaced dissolving shell and a GLSL3 shock-ring profile', asyn
   assert.match(shaders, /\bout\s+vec4\s+outColor\s*;/);
   assert.match(implementation, /glslVersion:\s*THREE\.GLSL3/);
   assert.doesNotMatch(shaders, /gl_FragColor/);
+  assert.doesNotMatch(shaders, /vec3\(1\.85,\s*1\.42,\s*0\.82\)/, 'shell radiance clips to white');
+  assert.match(shaders, /float\s+pressureEnvelope/);
 });
 
 test('shell ignition has nonzero alpha at trigger age without an update-order birth gate', async () => {

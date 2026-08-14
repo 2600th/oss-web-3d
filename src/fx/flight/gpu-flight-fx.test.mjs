@@ -245,7 +245,7 @@ test('speed streak shape exposes a wider core without changing its outer dimensi
   fx.dispose();
 });
 
-test('only camera-shell speed streaks bypass hardware and soft scene depth', () => {
+test('camera streaks and terrain-contact impact systems bypass only the unsafe soft-depth path', () => {
   const fx = new FlightFx(environment());
   const fakeDepth = new THREE.DepthTexture(16, 16);
   setSceneDepth(fakeDepth, 16, 16);
@@ -254,10 +254,15 @@ test('only camera-shell speed streaks bypass hardware and soft scene depth', () 
     assert.equal('FX_SOFT_DEPTH' in fx.speedStreaks.material.defines, false);
     assert.equal(fx.speedStreaks.material.userData.fxSoftDepth, false);
 
-    for (const system of [fx.condensation, fx.spindrift, fx.smoke, fx.sparks, fx.debris]) {
+    for (const system of [fx.condensation, fx.spindrift]) {
       assert.equal(system.material.depthTest, true, `${system.name} lost hardware depth`);
       assert.equal('FX_SOFT_DEPTH' in system.material.defines, true, `${system.name} lost soft depth`);
       assert.notEqual(system.material.userData.fxSoftDepth, false);
+    }
+    for (const system of [fx.explosion, fx.smoke, fx.sparks, fx.debris]) {
+      assert.equal(system.material.depthTest, true, `${system.name} lost hardware depth`);
+      assert.equal('FX_SOFT_DEPTH' in system.material.defines, false, `${system.name} was suppressed by scene depth`);
+      assert.equal(system.material.userData.fxSoftDepth, false);
     }
   } finally {
     setSceneDepth(null, 16, 16);
@@ -339,11 +344,86 @@ test('quality changes apply strict draw budgets and compile out phone contrails'
   assert.ok(fx.spindrift.active <= 48);
   assert.ok(fx.trails.every((trail) => trail.active === 0));
   assert.ok(fx.smoke.active <= 96);
+  assert.ok(fx.explosion.uniforms.uSizeScale.value <= 0.65);
+  assert.equal(fx.smoke.uniforms.uSizeScale.value, 1);
+  assert.equal(fx.sparks.uniforms.uSizeScale.value, 1);
 
   fx.setQuality(TIERS.high);
   assert.equal(fx.speedStreaks.active, TIERS.high.speedParticles);
+  assert.equal(fx.explosion.uniforms.uSizeScale.value, 1);
   assert.ok(fx.trails.every((trail) => trail.active > 0));
   fx.dispose();
+});
+
+test('phone orange lobe stays below 32 percent of a true 390x844 short side', () => {
+  const viewportWidth = 390;
+  const viewportHeight = 844;
+  const camera = new THREE.PerspectiveCamera(58, viewportWidth / viewportHeight, 4, 1000);
+  const incoming = new THREE.Vector3(90, 0, -40).normalize();
+  camera.position.copy(incoming).multiplyScalar(-48).add(new THREE.Vector3(0, 18, 0));
+  camera.lookAt(0, 4, 0);
+  camera.updateMatrixWorld(true);
+  camera.updateProjectionMatrix();
+  const impact = {
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(90, -165, -40),
+    normal: new THREE.Vector3(0, 1, 0),
+    speed: 192,
+    strength: 1,
+  };
+  const originalRandom = Math.random;
+  let worst = 0;
+  try {
+    for (let sample = 0; sample < 24; sample++) {
+      let seed = (0x7f4a7c15 ^ (sample * 0x9e3779b9)) >>> 0;
+      Math.random = () => {
+        seed = (1664525 * seed + 1013904223) >>> 0;
+        return seed / 0x100000000;
+      };
+      const fx = new FlightFx(environment());
+      fx.setQuality(TIERS.phone);
+      fx.crash(impact);
+      const system = fx.explosion;
+      const age = 0.3;
+      const gravity = system.uniforms.uGravity.value;
+      const drag = Math.max(system.uniforms.uDrag.value, 1e-3);
+      const travel = (1 - Math.exp(-drag * age)) / drag;
+      const focal = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5));
+      const point = new THREE.Vector3();
+      const velocity = new THREE.Vector3();
+      const viewPoint = new THREE.Vector3();
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i < system.active; i++) {
+        const life = system.data.life[i];
+        if (life < age) continue;
+        point.fromArray(system.data.start, i * 3);
+        velocity.fromArray(system.data.velocity, i * 3);
+        point.addScaledVector(velocity, travel).addScaledVector(gravity, 0.5 * age * age);
+        viewPoint.copy(point).applyMatrix4(camera.matrixWorldInverse);
+        if (viewPoint.z >= -camera.near) continue;
+        const projected = point.clone().project(camera);
+        const t = age / life;
+        const grownSize = system.data.size[i]
+          * system.uniforms.uSizeScale.value
+          * THREE.MathUtils.lerp(1, system.uniforms.uEndSize.value, t);
+        const radiusPx = grownSize * 0.5 * focal / -viewPoint.z;
+        const x = (projected.x * 0.5 + 0.5) * viewportWidth;
+        const y = (-projected.y * 0.5 + 0.5) * viewportHeight;
+        minX = Math.min(minX, x - radiusPx);
+        maxX = Math.max(maxX, x + radiusPx);
+        minY = Math.min(minY, y - radiusPx);
+        maxY = Math.max(maxY, y + radiusPx);
+      }
+      worst = Math.max(worst, Math.max(maxX - minX, maxY - minY) / viewportWidth);
+      fx.dispose();
+    }
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.ok(worst <= 0.32, `worst seeded portrait lobe extent ${(worst * 100).toFixed(1)}%`);
 });
 
 test('crash stages an impact blast with owned depth fades and directional particles', () => {
@@ -363,9 +443,15 @@ test('crash stages an impact blast with owned depth fades and directional partic
     system.emit = (count, spawn) => {
       emissions.set(system, {
         count,
+        position: spawn.position?.clone(),
         velocity: spawn.velocity?.clone(),
         direction: spawn.direction?.clone(),
         inherit: spawn.inherit?.clone(),
+        spread: spawn.spread,
+        size: spawn.size,
+        sizeVariance: spawn.sizeVariance,
+        life: spawn.life,
+        lifeVariance: spawn.lifeVariance,
       });
       emit(count, spawn);
     };
@@ -381,14 +467,177 @@ test('crash stages an impact blast with owned depth fades and directional partic
   assert.equal(fx.explosion.uniforms.uSoftFade.value, 4);
   assert.equal(fx.smoke.uniforms.uSoftFade.value, 10);
   assert.equal(frameUniforms.uSoftFade.value, 40);
+  assert.ok(emissions.get(fx.explosion).position.clone().sub(impact.position).dot(impact.normal) >= 2.5);
+  assert.ok(emissions.get(fx.smoke).position.clone().sub(impact.position).dot(impact.normal) >= 4.5);
+  assert.ok(emissions.get(fx.sparks).position.clone().sub(impact.position).dot(impact.normal) >= 2);
+  assert.equal(emissions.get(fx.smoke).inherit.lengthSq(), 0);
+  assert.equal(emissions.get(fx.sparks).inherit.lengthSq(), 0);
   assert.ok(emissions.get(fx.debris).inherit.dot(impact.velocity) > 0);
+  assert.ok(emissions.get(fx.debris).inherit.length() <= impact.speed * 0.05);
   assert.ok(emissions.get(fx.sparks).velocity.dot(impact.normal) > 0);
   assert.ok(fx.smoke.cursor <= fx.smoke.active);
+  assert.ok(fx.explosion.uniforms.uGlow.value <= 1.4);
+  assert.ok(fx.explosion.uniforms.uOpacity.value <= 0.7);
+  assert.ok(fx.explosion.uniforms.uEndSize.value <= 2.1);
 
   fx.resetImpact();
   assert.equal(fx.impactBlast.shell.visible, false);
   assert.equal(fx.impactBlast.light.intensity, 0);
   fx.dispose();
+});
+
+test('orange lobe footprint clears the measured 300 and 800 ms coverage gates', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+  let lobe = null;
+  const emit = fx.explosion.emit.bind(fx.explosion);
+  fx.explosion.emit = (count, spawn) => {
+    lobe = {
+      count,
+      spread: spawn.spread,
+      size: spawn.size,
+      sizeVariance: spawn.sizeVariance,
+      life: spawn.life,
+      lifeVariance: spawn.lifeVariance,
+    };
+    emit(count, spawn);
+  };
+  fx.crash({
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(90, -165, -40),
+    normal: new THREE.Vector3(0, 1, 0),
+    speed: 192,
+    strength: 1,
+  });
+
+  const maximumLife = lobe.life * (1 + lobe.lifeVariance);
+  const minimumLife = lobe.life * (1 - lobe.lifeVariance);
+  const t300 = THREE.MathUtils.clamp(0.3 / minimumLife, 0, 1);
+  const maximumDiameter300 = lobe.size * (1 + lobe.sizeVariance)
+    * THREE.MathUtils.lerp(1, fx.explosion.uniforms.uEndSize.value, t300);
+  const t800 = THREE.MathUtils.clamp(0.8 / maximumLife, 0, 1);
+  const warmFade800 = 1 - smoothstep(fx.explosion.uniforms.uFadeOut.value, 1, t800);
+
+  assert.ok(maximumLife <= 0.87, `orange lobe survives ${maximumLife.toFixed(3)}s`);
+  assert.ok(maximumDiameter300 <= 7.5, `300ms billboard diameter ${maximumDiameter300.toFixed(2)}m`);
+  assert.ok(lobe.spread <= 0.56, `orange lobe spread ${lobe.spread}`);
+  assert.ok(warmFade800 <= 0.06, `800ms warm fade ${warmFade800.toFixed(3)}`);
+  fx.dispose();
+});
+
+test('orange lobe 300ms screen extent stays below 32 percent across random seeds', () => {
+  const viewportWidth = 990;
+  const viewportHeight = 912;
+  const camera = new THREE.PerspectiveCamera(58, viewportWidth / viewportHeight, 4, 1000);
+  const incoming = new THREE.Vector3(90, 0, -40).normalize();
+  camera.position.copy(incoming).multiplyScalar(-48).add(new THREE.Vector3(0, 18, 0));
+  camera.lookAt(0, 4, 0);
+  camera.updateMatrixWorld(true);
+  camera.updateProjectionMatrix();
+  const impact = {
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(90, -165, -40),
+    normal: new THREE.Vector3(0, 1, 0),
+    speed: 192,
+    strength: 1,
+  };
+  const originalRandom = Math.random;
+  let worst = 0;
+  try {
+    for (let sample = 0; sample < 24; sample++) {
+      let seed = (0x9e3779b9 ^ (sample * 0x85ebca6b)) >>> 0;
+      Math.random = () => {
+        seed = (1664525 * seed + 1013904223) >>> 0;
+        return seed / 0x100000000;
+      };
+      const fx = new FlightFx(environment());
+      fx.setQuality(TIERS.high);
+      fx.crash(impact);
+      const system = fx.explosion;
+      const age = 0.3;
+      const gravity = system.uniforms.uGravity.value;
+      const drag = Math.max(system.uniforms.uDrag.value, 1e-3);
+      const travel = (1 - Math.exp(-drag * age)) / drag;
+      const focal = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5));
+      const point = new THREE.Vector3();
+      const velocity = new THREE.Vector3();
+      const viewPoint = new THREE.Vector3();
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i < system.active; i++) {
+        const life = system.data.life[i];
+        if (life < age) continue;
+        point.fromArray(system.data.start, i * 3);
+        velocity.fromArray(system.data.velocity, i * 3);
+        point.addScaledVector(velocity, travel).addScaledVector(gravity, 0.5 * age * age);
+        viewPoint.copy(point).applyMatrix4(camera.matrixWorldInverse);
+        if (viewPoint.z >= -camera.near) continue;
+        const projected = point.clone().project(camera);
+        const t = age / life;
+        const grownSize = system.data.size[i]
+          * THREE.MathUtils.lerp(1, system.uniforms.uEndSize.value, t);
+        const radiusPx = grownSize * 0.5 * focal / -viewPoint.z;
+        const x = (projected.x * 0.5 + 0.5) * viewportWidth;
+        const y = (-projected.y * 0.5 + 0.5) * viewportHeight;
+        minX = Math.min(minX, x - radiusPx);
+        maxX = Math.max(maxX, x + radiusPx);
+        minY = Math.min(minY, y - radiusPx);
+        maxY = Math.max(maxY, y + radiusPx);
+      }
+      const extent = Math.max(maxX - minX, maxY - minY) / viewportHeight;
+      worst = Math.max(worst, extent);
+      fx.dispose();
+    }
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.ok(worst <= 0.32, `worst seeded 300ms lobe extent ${(worst * 100).toFixed(1)}%`);
+});
+
+test('crash particles remain alive above the impact plane after shell clearance', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+  const impact = {
+    position: new THREE.Vector3(0, 5000, 0),
+    velocity: new THREE.Vector3(90, -165, -40),
+    normal: new THREE.Vector3(0.2, 0.96, -0.1).normalize(),
+    speed: 192,
+    strength: 1,
+  };
+  let seed = 0x1badb002;
+  const originalRandom = Math.random;
+  Math.random = () => {
+    seed = (1664525 * seed + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  try {
+    fx.crash(impact);
+    const aliveAbove = (system, age, minimumHeight = 0) => {
+      let count = 0;
+      const point = new THREE.Vector3();
+      const velocity = new THREE.Vector3();
+      const gravity = system.uniforms.uGravity.value;
+      const drag = Math.max(system.uniforms.uDrag.value, 1e-3);
+      const travel = (1 - Math.exp(-drag * age)) / drag;
+      for (let i = 0; i < system.active; i++) {
+        if (system.data.life[i] < age) continue;
+        point.fromArray(system.data.start, i * 3);
+        velocity.fromArray(system.data.velocity, i * 3);
+        point.addScaledVector(velocity, travel).addScaledVector(gravity, 0.5 * age * age);
+        if (point.sub(impact.position).dot(impact.normal) >= minimumHeight) count++;
+      }
+      return count;
+    };
+
+    assert.ok(aliveAbove(fx.explosion, 0.3, 0.5) >= 8, 'fire lobes buried or dead at 300 ms');
+    assert.ok(aliveAbove(fx.sparks, 0.3, 0.25) >= 16, 'sparks buried at 300 ms');
+    assert.ok(aliveAbove(fx.smoke, 0.8, 1) >= 20, 'smoke buried at 800 ms');
+  } finally {
+    Math.random = originalRandom;
+    fx.dispose();
+  }
 });
 
 test('staged crash fire stays within the active phone particle budget', () => {

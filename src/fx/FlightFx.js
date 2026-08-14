@@ -80,19 +80,20 @@ export class FlightFx {
     });
     this.explosion = new ParticleSystem({
       name: 'impact-fireball', capacity: 96, shape: ParticleShape.SOFT,
-      additive: true, curl: true, softFade: 4, renderOrder: 15,
+      additive: true, curl: true, softDepth: false, softFade: 4, renderOrder: 15,
     });
     this.smoke = new ParticleSystem({
       name: 'impact-smoke', capacity: 256, shape: ParticleShape.SMOKE,
-      additive: false, lit: true, curl: true, wind: true, softFade: 10, renderOrder: 13,
+      additive: false, lit: true, curl: true, wind: true,
+      softDepth: false, softFade: 10, renderOrder: 13,
     });
     this.sparks = new ParticleSystem({
       name: 'impact-sparks', capacity: 240, shape: ParticleShape.STREAK,
-      additive: true, stretch: true, renderOrder: 16,
+      additive: true, stretch: true, softDepth: false, renderOrder: 16,
     });
     this.debris = new ParticleSystem({
       name: 'impact-debris', capacity: 64, shape: ParticleShape.CHIP,
-      additive: false, lit: true, stretch: true, renderOrder: 14,
+      additive: false, lit: true, stretch: true, softDepth: false, renderOrder: 14,
     });
     this.impactBlast = new ImpactBlast();
 
@@ -175,8 +176,9 @@ export class FlightFx {
 
     this.explosion.uniforms.uGravity.value.set(0, 2.0, 0);
     this.explosion.uniforms.uDrag.value = 2.5;
-    this.explosion.uniforms.uEndSize.value = 3.5;
-    this.explosion.uniforms.uGlow.value = 2.4;
+    this.explosion.uniforms.uEndSize.value = 2.0;
+    this.explosion.uniforms.uGlow.value = 1.35;
+    this.explosion.uniforms.uOpacity.value = 0.68;
     this.explosion.setGradient(new THREE.Color(1.0, 0.92, 0.62), EMBER, FIRE, SOOT);
 
     this.smoke.uniforms.uGravity.value.set(0, 2.8, 0);
@@ -217,6 +219,8 @@ export class FlightFx {
     this.smoke.setActive(budget.smoke);
     this.sparks.setActive(budget.sparks);
     this.debris.setActive(budget.debris);
+    this._impactScale = name === 'phone' ? 0.55 : 1;
+    this.explosion.uniforms.uSizeScale.value = this._impactScale;
     this.impactBlast.setQuality(tier);
     for (const trail of this.trails) trail.setActive(tier?.contrails ? budget.trail : 0);
     this._tier = name;
@@ -389,6 +393,7 @@ export class FlightFx {
 
   crash(impact) {
     const s = THREE.MathUtils.clamp(impact.strength, 0.2, 1);
+    const fireScale = this._impactScale ?? 1;
     this.impactBlast.trigger(impact);
 
     const normal = this._impactNormal.copy(impact.normal);
@@ -403,17 +408,17 @@ export class FlightFx {
     else tangent.normalize();
 
     const spawn = this._spawn;
-    spawn.position.copy(impact.position);
-    spawn.inherit.copy(impact.velocity).multiplyScalar(0.18);
+    spawn.position.copy(impact.position).addScaledVector(normal, 3);
+    spawn.inherit.copy(impact.velocity).multiplyScalar(0.02 * fireScale);
     spawn.time = frameUniforms.uTime.value;
 
     // The short core reads as ignition, while the second emission supplies the
     // slower orange fuel lobes without allocating another particle material.
-    spawn.velocity.copy(normal).multiplyScalar(9 + 5 * s);
-    spawn.radius = 1.2;
+    spawn.velocity.copy(normal).multiplyScalar((9 + 5 * s) * fireScale);
+    spawn.radius = 1.2 * fireScale;
     spawn.speedVariance = 0.35;
     spawn.spread = 0.45;
-    spawn.size = 3.2 + 2.2 * s;
+    spawn.size = 2.4 + 1.4 * s;
     spawn.sizeVariance = 0.25;
     spawn.life = 0.11;
     spawn.lifeVariance = 0.18;
@@ -422,21 +427,24 @@ export class FlightFx {
     const coreCount = Math.min(this.explosion.active, Math.round(6 + 10 * s));
     this.explosion.emit(coreCount, spawn);
 
-    spawn.velocity.copy(reflected).multiplyScalar(12 + 10 * s).addScaledVector(normal, 5);
-    spawn.radius = 2.4;
-    spawn.speedVariance = 0.65;
-    spawn.spread = 0.75;
-    spawn.size = 4 + 4 * s;
-    spawn.sizeVariance = 0.45;
-    spawn.life = 0.7 + s * 0.55;
-    spawn.lifeVariance = 0.3;
+    spawn.velocity.copy(reflected).multiplyScalar((10 + 8 * s) * fireScale)
+      .addScaledVector(normal, 4 * fireScale);
+    spawn.radius = 2 * fireScale;
+    spawn.speedVariance = 0.55;
+    spawn.spread = 0.55;
+    spawn.size = 1.55 + 1.55 * s;
+    spawn.sizeVariance = 0.35;
+    spawn.life = 0.48 + s * 0.25;
+    spawn.lifeVariance = 0.18;
     spawn.tint = EMBER;
     const lobeCount = Math.min(
       Math.max(0, this.explosion.active - coreCount),
-      Math.round(12 + 36 * s),
+      Math.round(10 + 22 * s),
     );
     this.explosion.emit(lobeCount, spawn);
 
+    spawn.position.copy(impact.position).addScaledVector(normal, 5);
+    spawn.inherit.set(0, 0, 0);
     spawn.velocity.copy(tangent).multiplyScalar(5 + 4 * s).addScaledVector(normal, 12 + 8 * s);
     spawn.radius = 3.5;
     spawn.size = 4.5 + 3 * s;
@@ -445,6 +453,8 @@ export class FlightFx {
     spawn.tint = SOOT;
     this.smoke.emit(Math.round(22 + 58 * s), spawn);
 
+    spawn.position.copy(impact.position).addScaledVector(normal, 2.5);
+    spawn.inherit.set(0, 0, 0);
     spawn.velocity.copy(reflected).multiplyScalar(22 + 16 * s).addScaledVector(normal, 18);
     spawn.radius = 1.5;
     spawn.size = 0.11 + s * 0.12;
@@ -453,8 +463,9 @@ export class FlightFx {
     spawn.tint = EMBER;
     this.sparks.emit(Math.round(35 + 110 * s), spawn);
 
+    spawn.position.copy(impact.position).addScaledVector(normal, 1);
     spawn.velocity.copy(reflected).multiplyScalar(10 + 9 * s).addScaledVector(normal, 8);
-    spawn.inherit.copy(impact.velocity).multiplyScalar(0.3);
+    spawn.inherit.copy(impact.velocity).multiplyScalar(0.04);
     spawn.radius = 2;
     spawn.size = 0.22 + s * 0.28;
     spawn.life = 3.5 + s * 2.5;

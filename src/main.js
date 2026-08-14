@@ -56,6 +56,13 @@ window.addEventListener('error', onError);
 window.addEventListener('unhandledrejection', onRejection);
 
 const settings = new Settings();
+if (import.meta.env.DEV) {
+  const crashTier = new URLSearchParams(location.search).get('crashTier');
+  if (['phone', 'low', 'medium', 'high'].includes(crashTier)) {
+    settings.tierName = crashTier;
+    settings.autoDetected = true;
+  }
+}
 const engine = new Engine(canvas, settings);
 if (!settings.autoDetected) settings.setTier(guessTier(engine.renderer));
 
@@ -163,6 +170,146 @@ installPageLifecycle(() => {
 // driven iteration loop, the GPU/CPU terrain agreement check, and profiling.
 
 if (import.meta.env.DEV) {
+/**
+ * Deterministic, production-stripped terrain-impact seam for composited VFX QA.
+ *
+ * The hook only establishes initial conditions. Collision is still discovered
+ * by FlightModel.checkTerrainCollision() in Game's fixed-step loop, then routed
+ * through the real Game.onCrash(), chase camera, and Engine composer render.
+ */
+let crashDispatchCount = 0;
+let crashCollisionAt = null;
+const crashGateEnabled = new URLSearchParams(location.search).has('crashVfx');
+const gameUpdate = game.update.bind(game);
+const gameOnCrash = game.onCrash.bind(game);
+game.onCrash = (...args) => {
+  crashDispatchCount++;
+  crashCollisionAt = performance.now();
+  const result = gameOnCrash(...args);
+  // Freeze after the real fixed-step collision and crash dispatch. The normal
+  // frame still reaches Engine.render once, then visual QA can advance exact
+  // effect ages without browser-command latency moving the simulation ahead.
+  if (crashGateEnabled) game.update = () => {};
+  return result;
+};
+
+const crashVfxStatus = () => ({
+  crashed: game.flight.crashed,
+  dispatchCount: crashDispatchCount,
+  collisionAt: crashCollisionAt,
+  ageMs: crashCollisionAt == null ? null : Math.max(0, performance.now() - crashCollisionAt),
+  aircraftVisible: game.aircraft.model.visible,
+  exhaustVisible: game.aircraft.exhaust.visible,
+  blastVisible: game.fx.impactBlast.shell.visible || game.fx.impactBlast.ring.visible,
+  blastAge: game.fx.impactBlast._age,
+  effectAgeMs: game.flight.crashed ? game.fx.impactBlast._age * 1000 : null,
+  state: game.state,
+  tier: settings.tierName,
+  drawingBuffer: [engine.renderer.domElement.width, engine.renderer.domElement.height],
+  composerPasses: engine.composer.passes?.length ?? null,
+});
+
+window.__crashVfx = {
+  async trigger(options = {}) {
+    game.update = gameUpdate;
+    crashDispatchCount = 0;
+    crashCollisionAt = null;
+    game.launch();
+
+    const x = options.x ?? 21000;
+    const z = options.z ?? 6000;
+    const heading = options.heading ?? Math.PI * 0.62;
+    const speed = options.speed ?? 285;
+    const descent = options.descent ?? 165;
+    const agl = options.agl ?? 18;
+    const position = new THREE.Vector3(x, terrainHeight(x, z) + agl, z);
+    const flight = game.flight;
+    flight.reset(position, heading, speed);
+    flight.velocity.y = -descent;
+    flight._prevVelocity.copy(flight.velocity);
+    flight._updateDerived();
+    game.terrain.prime(flight.position);
+    game.chase.reset(flight);
+
+    const deadline = performance.now() + 2000;
+    while (!flight.crashed && performance.now() < deadline) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    if (!flight.crashed) throw new Error('Deterministic terrain impact did not collide within 2 s');
+    // The polling rAF runs after the normal game-loop rAF, so this frame has
+    // already travelled through the final composer before control returns.
+    return crashVfxStatus();
+  },
+
+  async waitFor(ageMs) {
+    if (crashCollisionAt == null) throw new Error('Call __crashVfx.trigger() first');
+    return this.stepTo(ageMs);
+  },
+
+  stepTo(ageMs) {
+    if (!game.flight.crashed) throw new Error('Call __crashVfx.trigger() first');
+    const target = Math.max(0, ageMs) / 1000;
+    const dt = Math.max(0, target - game.fx.impactBlast._age);
+    if (dt > 0) gameUpdate(dt);
+    engine.render(dt);
+    return crashVfxStatus();
+  },
+
+  status: crashVfxStatus,
+
+  async reset() {
+    game.update = gameUpdate;
+    game.launch();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    return crashVfxStatus();
+  },
+};
+
+if (crashGateEnabled) {
+  const crashStatusOutput = document.createElement('output');
+  crashStatusOutput.id = 'crash-vfx-status';
+  crashStatusOutput.hidden = true;
+  document.body.appendChild(crashStatusOutput);
+  const syncCrashStatus = () => {
+    crashStatusOutput.textContent = JSON.stringify(crashVfxStatus());
+    requestAnimationFrame(syncCrashStatus);
+  };
+  syncCrashStatus();
+
+  const crashTrigger = document.createElement('button');
+  crashTrigger.type = 'button';
+  crashTrigger.textContent = 'Trigger crash VFX';
+  crashTrigger.style.cssText =
+    'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:10000;' +
+    'padding:12px 18px;border:1px solid #fff8;background:#15191eee;color:#fff;' +
+    'font:600 14px system-ui;letter-spacing:.04em;cursor:pointer';
+  crashTrigger.addEventListener('click', () => {
+    crashTrigger.hidden = true;
+    void window.__crashVfx.trigger();
+  }, { once: true });
+  document.body.appendChild(crashTrigger);
+
+  for (const [index, age] of [0, 100, 300, 800, 1800].entries()) {
+    const step = document.createElement('button');
+    step.type = 'button';
+    step.textContent = `Crash frame ${age} ms`;
+    step.style.cssText =
+      `position:fixed;left:${index * 8}px;top:0;width:1px;height:1px;padding:0;border:0;` +
+      'opacity:0;z-index:10001';
+    step.addEventListener('click', () => window.__crashVfx.stepTo(age));
+    document.body.appendChild(step);
+  }
+
+  const crashReset = document.createElement('button');
+  crashReset.type = 'button';
+  crashReset.textContent = 'Reset crash VFX';
+  crashReset.style.cssText =
+    'position:fixed;left:48px;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;z-index:10001';
+  crashReset.addEventListener('click', () => void window.__crashVfx.reset());
+  document.body.appendChild(crashReset);
+
+}
+
 window.__verifyTerrain = (level = 3) => game.terrain.verifyAgainst(terrainHeight, level);
 
 /**

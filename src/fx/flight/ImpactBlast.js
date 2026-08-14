@@ -7,8 +7,9 @@ import {
 } from './impact-blast.glsl.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
-const RING_LIFE = 0.9;
-const SHELL_LIFE = 1.25;
+const RING_LIFE = 0.7;
+const SHELL_LIFE = 0.48;
+const EFFECT_LIFE = Math.max(RING_LIFE, SHELL_LIFE);
 const LIGHT_LIFE = 0.35;
 // Dimensionless decay constant for a fast ignition spike. Normalizing expm1
 // keeps the peak at one and the 350 ms boundary exactly at zero.
@@ -38,10 +39,10 @@ function createRingGeometry() {
     const sin = Math.sin(angle);
     const inner = i * 6;
     const outer = inner + 3;
-    positions[inner] = cos * 0.91;
-    positions[inner + 2] = sin * 0.91;
-    positions[outer] = cos * 1.09;
-    positions[outer + 2] = sin * 1.09;
+    positions[inner] = cos * 0.965;
+    positions[inner + 2] = sin * 0.965;
+    positions[outer] = cos * 1.035;
+    positions[outer + 2] = sin * 1.035;
     const uv = i * 4;
     uvs[uv] = i / maxSegments;
     uvs[uv + 1] = 0;
@@ -85,7 +86,7 @@ function material(vertexShader, fragmentShader, uniforms) {
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
-    toneMapped: false,
+    toneMapped: true,
   });
 }
 
@@ -95,7 +96,7 @@ export class ImpactBlast {
     this.group.name = 'fx:impact-blast';
 
     this.shell = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(1, 3),
+      new THREE.IcosahedronGeometry(1, 5),
       material(IMPACT_SHELL_VERTEX, IMPACT_SHELL_FRAGMENT, {
         uAge: { value: 0 },
         uStrength: { value: 1 },
@@ -124,12 +125,13 @@ export class ImpactBlast {
     this.light.castShadow = false;
 
     this.group.add(this.shell, this.ring, this.light);
-    this._age = SHELL_LIFE;
+    this._age = EFFECT_LIFE;
     this._strength = 1;
     this._peakLight = 0;
     this._disposed = false;
     this._impactAxis = new THREE.Vector3();
     this._impactNormal = new THREE.Vector3();
+    this._qualityScale = 1;
     this.setQuality({ name: 'high' });
   }
 
@@ -152,41 +154,44 @@ export class ImpactBlast {
     this.shell.material.uniforms.uStrength.value = this._strength;
     this.ring.material.uniforms.uAge.value = 0;
     this.ring.material.uniforms.uStrength.value = this._strength;
-    this.shell.scale.setScalar(2.2);
-    this.ring.scale.setScalar(2.5);
+    this.shell.scale.setScalar(this._qualityScale);
+    this.ring.scale.setScalar(1.4 * this._qualityScale);
     this.shell.visible = true;
     this.ring.visible = true;
     this.light.intensity = this._peakLight;
   }
 
   update(dt) {
-    if (this._disposed || !Number.isFinite(dt) || dt <= 0 || this._age >= SHELL_LIFE) return;
+    if (this._disposed || !Number.isFinite(dt) || dt <= 0 || this._age >= EFFECT_LIFE) return;
     this._age += dt;
 
     const shellAge = clamp01(this._age / SHELL_LIFE);
     this.shell.material.uniforms.uAge.value = shellAge;
-    this.shell.scale.setScalar(THREE.MathUtils.lerp(2.2, 19, Math.sqrt(shellAge)));
+    this.shell.scale.setScalar(
+      THREE.MathUtils.lerp(1, 5.5, Math.sqrt(shellAge)) * this._qualityScale,
+    );
 
     const ringAge = clamp01(this._age / RING_LIFE);
     this.ring.material.uniforms.uAge.value = ringAge;
-    const ringProgress = Math.pow(clamp01(this._age / 0.9), 0.55);
-    const radius = THREE.MathUtils.lerp(2.5, 28, ringProgress);
-    this.ring.scale.setScalar(radius);
+    const ringProgress = Math.pow(clamp01(this._age / RING_LIFE), 0.55);
+    const radius = THREE.MathUtils.lerp(1.4, 11, ringProgress);
+    this.ring.scale.setScalar(radius * this._qualityScale);
 
     const lightAge = clamp01(this._age / LIGHT_LIFE);
     this.light.intensity = this._peakLight * flashEnvelope(lightAge);
-    if (this._age >= RING_LIFE) this.ring.visible = false;
     if (this._age >= SHELL_LIFE) this.shell.visible = false;
+    if (this._age >= RING_LIFE) this.ring.visible = false;
   }
 
   setQuality(tier) {
     const name = RING_SEGMENTS[tier?.name] ? tier.name : 'high';
+    this._qualityScale = name === 'phone' ? 0.6 : 1;
     const { start, count } = this.ring.geometry.userData.qualityRanges[name];
     this.ring.geometry.setDrawRange(start, count);
   }
 
   reset() {
-    this._age = SHELL_LIFE;
+    this._age = EFFECT_LIFE;
     this.shell.visible = false;
     this.ring.visible = false;
     this.light.intensity = 0;
