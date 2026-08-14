@@ -101,6 +101,22 @@ Touch uses the same semantic controller. Horizontal drag means turn, vertical dr
 
 Gamepad left stick uses turn and climb intent. Triggers modify speed around auto-cruise. Center noise inside the dead zone produces no command.
 
+## Objective Navigation Hint
+
+Add a progressive visual guidance layer that reads as cockpit navigation equipment rather than a glowing game-world waypoint. It guides the player to the selected post while preserving the final task of visually acquiring and photographing the installation.
+
+The cue has three distance states:
+
+1. **Transit, beyond 8 km:** the heading tape displays a persistent target-bearing caret. A screen-edge chevron shows the shortest turn direction and relative angle, for example `RAVEN · LEFT 42° · 18.6 KM`. The chevron is clamped inside the HUD safe area and never overlaps the speed/altitude tapes or touch controls.
+2. **Search, 3–8 km:** a restrained projected search bracket appears around the approximate objective sector. It includes range trend (`CLOSING` or `OPENING`) and an altitude relationship cue. The bracket deliberately covers an area wider than the post so the player still performs visual reconnaissance.
+3. **Acquisition, inside 3 km with line of sight:** the bracket tightens into four corner marks around the post's aim point. It does not use a filled icon or bright beam. If terrain masks the post, the cue becomes dashed, remains at the last valid screen edge, and reads `RIDGE MASKED` rather than appearing through terrain as a precise target marker.
+
+When recon opens, transit and search cues fade. Acquisition corners remain briefly at low opacity until the post enters the recon frame, then disappear so the optical reticle and quality meter become the only guidance. Navigation UI is DOM-only and must never appear in a captured reconnaissance plate.
+
+The cue uses both shape and text, not color alone. Off-screen direction uses distinct left/right chevrons; closure uses `CLOSING`/`OPENING`; occlusion uses dashed geometry plus `RIDGE MASKED`. `prefers-reduced-motion` removes pulse and sweep animation while retaining all information.
+
+The selected target remains controlled by the existing mission identity and `Tab` cycling. Securing a photograph advances the cue to the next pending post without flashing or briefly pointing back to the completed post. When all posts are complete, the cue is replaced with the existing return-to-base message.
+
 ## Settings and Migration
 
 Persist these additions alongside existing quality, audio, and pitch settings:
@@ -124,6 +140,7 @@ The briefing renders controls for the selected mode and current input modality. 
 - `FlightFx` owns frustum-aware streak spawning and projected-size parameters.
 - The cloud weather model owns the revised opening composition; cloud rendering architecture and tier budgets remain unchanged.
 - `Settings`, `Screens`, and `TouchControls` expose and explain the selected control mode.
+- `Mission` remains authoritative for selected-target identity; `Game` computes bearing, relative angle, range trend, projection, and terrain visibility; `Hud` renders the safe-area-clamped navigation cue.
 
 ## Failure and Comfort Behavior
 
@@ -147,5 +164,9 @@ Automated tests will establish red cases before implementation and cover:
 - Radial touch dead zone, directionally uniform shaping, release stabilization, and modality-specific instructions.
 - Settings migration and exact preservation of Direct mode output.
 - Held-input cleanup on pause, blur, restart, and disposal.
+- Bearing-caret wraparound at 0/360 degrees, shortest-turn direction, range trend, and deterministic transit/search/acquisition distance transitions.
+- Safe-area clamping and non-overlap at 1920×1080 and 390×844, including touch controls and recon zoom controls.
+- Terrain-occluded posts never receive a precise through-ridge acquisition marker.
+- Target completion advances the cue exactly once, and no navigation cue is present in captured plates.
 
 Final acceptance requires focused tests, the complete repository suite, GLSL checks, production build, clean console logs, and fresh live captures at desktop high/low plus 390×844 phone. Numeric or source-only checks cannot substitute for visual approval of clouds, streaks, FOV, or peripheral blur.
