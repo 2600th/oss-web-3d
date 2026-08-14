@@ -427,6 +427,7 @@ export class TakramCloudRendererAdapter {
       this._constructEffect();
     } else {
       this.effect.qualityPreset = next.takram;
+      this.effect.haze = this.cloudProfile.haze;
       this.effect.setSize(this._width, this._height);
       this.effect.shadowPass.setSize(
         this.effect.shadow.mapSize.x,

@@ -434,6 +434,23 @@ test('quality changes immediately reapply fallback atmosphere lighting', () => {
   backend.dispose();
 });
 
+test('keeps Himalayan haze disabled across enabled Takram quality changes', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions(
+    { name: 'high' },
+    {
+      profileName: 'takram-himalayan',
+      profileContext: { terrainMin: 4700, terrainMax: 6300, cameraAltitude: 7235.246 },
+    },
+  ));
+
+  backend.setQuality({ name: 'medium' });
+
+  assert.equal(backend.effect.haze, false);
+  assert.equal(backend.getProfileReport().haze, false);
+
+  backend.dispose();
+});
+
 test('maps frame camera, depth and sun data without replacing the frame', () => {
   const backend = new TakramCloudRendererAdapter(createOptions({ name: 'phone' }));
   const camera = new PerspectiveCamera();
