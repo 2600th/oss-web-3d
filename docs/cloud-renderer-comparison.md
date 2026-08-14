@@ -4,7 +4,7 @@
 
 **REJECT/DEFER Takram as the shipping cloud renderer.** Keep the current renderer unchanged in production. The isolated Takram adapter and comparison harness remain useful research infrastructure, but the reference integration is technically faithful and visually unsuitable for a modern AAA production bar.
 
-The post-fix raw marcher is active and uses the intended Takram inputs. That corrects the earlier null-depth diagnostic, but it does not change the composited result: the reference scene loses recognizable cloud bodies behind terrain, and the Himalayan opening reads as a noisy continuous shelf with vertical curtains rather than convincing discrete volumes. Phone remains disabled, temporal validation is inconclusive, and fresh final full-suite verification is still pending.
+The post-fix raw marcher is active and uses the intended Takram inputs. That corrects the earlier null-depth diagnostic, but it does not change the composited result: the reference scene loses recognizable cloud bodies behind terrain, and the Himalayan opening reads as a noisy continuous shelf with vertical curtains rather than convincing discrete volumes. Phone remains disabled and temporal validation is inconclusive.
 
 ## Evaluated stack and integration
 
@@ -53,7 +53,7 @@ The fresh comparison-build chunks are isolated from the normal production entry 
 
 | Chunk | Raw | Gzip |
 |---|---:|---:|
-| Comparison entry | 211.57 kB | 62.65 kB |
+| Comparison entry | 212.59 kB | 62.88 kB |
 | Takram | 292.76 kB | 67.08 kB |
 | Postprocessing | 692.87 kB | 206.32 kB |
 
@@ -71,7 +71,7 @@ The fresh comparison-build chunks are isolated from the normal production entry 
 | No trail after two resolved frames | **UNVERIFIED** | Nearly full-frame masks leave no valid outside-cloud pixels for the temporal test. |
 | Zero warnings through context recovery and lifecycle | **PASS** | Verified live loss/restore has `consoleIssues=[]`, reset-before-render, and full resource recreation. |
 | Production build isolation | **PASS** | The normal production entry does not import the isolated comparison chunks. |
-| Full tests, GLSL checks, and builds | **PENDING** | Fresh final verification pending. |
+| Full tests, GLSL checks, and builds | **PASS** | Fresh final verification: 271/271 tests, GLSL check, production build, isolated comparison build, and diff check passed. |
 
 ## Scope of comparison evidence
 
