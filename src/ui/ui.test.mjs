@@ -9,6 +9,26 @@ const [hud, screens, css] = await Promise.all([
   readFile(new URL('styles.css', here), 'utf8'),
 ]);
 
+test('HUD owns the navigation cue lifecycle and navigation CSS stays unfilled and calm', () => {
+  assert.match(hud, /new NavigationCue\(this\.root, this\.headingStrip\)/);
+  assert.match(hud, /this\.navigationCue\.update\(\{[\s\S]*?\.\.\.s\.navigation/);
+  assert.match(hud, /targetCallsign:\s*s\.target\?\.callsign/);
+  assert.match(hud, /targetRange:\s*s\.targetRange/);
+  assert.match(hud, /this\.navigationCue\.dispose\(\)/);
+  assert.match(css, /\.nav-search-bracket[\s\S]*?background:\s*transparent/);
+  assert.match(css, /\.nav-acquisition-corner[\s\S]*?background:\s*transparent/);
+  assert.match(css, /\.navigation-cue\.turn-left \.nav-edge-left[\s\S]*?display:\s*block/);
+  assert.match(css, /\.navigation-cue\.turn-right \.nav-edge-right[\s\S]*?display:\s*block/);
+  assert.match(
+    css,
+    /@media \(max-width: 720px\), \(max-aspect-ratio: 3 \/ 4\)[\s\S]*?\.navigation-cue\s*\{[^}]*width:\s*112px;[^}]*height:\s*58px/,
+  );
+  assert.match(
+    css,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.navigation-cue[\s\S]*?transition:\s*none/,
+  );
+});
+
 globalThis.window = {
   matchMedia: () => ({ matches: false }),
 };

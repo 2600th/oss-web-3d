@@ -1,4 +1,5 @@
 import { CAPTURE_THRESHOLD, gradeFor, ZOOM_STEPS, apertureFor } from '../game/ReconCamera.js';
+import { NavigationCue } from './NavigationCue.js';
 
 /**
  * In-flight instrumentation and the photography overlay.
@@ -85,6 +86,7 @@ export class Hud {
     this._buildTarget();
     this._buildWarnings();
     el('div', 'reticle', this.plate);
+    this.navigationCue = new NavigationCue(this.root, this.headingStrip);
 
     this._buildRecon(root);
 
@@ -134,6 +136,7 @@ export class Hud {
     this._disposed = true;
     this._popShot = null;
     this._observer?.disconnect();
+    this.navigationCue.dispose();
     window.removeEventListener('resize', this._invalidate);
     window.removeEventListener('orientationchange', this._invalidate);
     this.root.remove();
@@ -198,6 +201,7 @@ export class Hud {
 
   _buildHeading() {
     const strip = el('div', 'heading-strip', this.plate);
+    this.headingStrip = strip;
     const inner = el('div', 'heading-inner', strip);
     this.headingInner = inner;
     this.headingTicks = [];
@@ -435,6 +439,11 @@ export class Hud {
     this._updateTape(this.altTape, s.altitude);
     const heading = this._updateHeading(s.heading);
     this._updateSettle(dt, s, heading);
+    this.navigationCue.update({
+      ...s.navigation,
+      targetCallsign: s.target?.callsign,
+      targetRange: s.targetRange,
+    });
 
     const scale = Math.max(0.001, s.throttle);
     if (this.throttleFill._s !== scale) {

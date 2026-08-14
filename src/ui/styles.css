@@ -769,6 +769,103 @@ body {
   background: var(--confirm);
 }
 
+/* Objective navigation stays line-only so it cannot hide terrain detail. */
+.navigation-safe-area {
+  position: absolute;
+  inset: 0;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  visibility: hidden;
+  pointer-events: none;
+}
+.navigation-cue {
+  position: absolute;
+  z-index: 6;
+  width: 150px;
+  height: 64px;
+  pointer-events: none;
+  color: var(--instrument);
+  transition: left 90ms linear, top 90ms linear, opacity 120ms ease;
+}
+.navigation-cue.hidden { opacity: 0; visibility: hidden; }
+.navigation-cue.dimmed { opacity: 0.34; }
+.nav-direction {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  font: 10px/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+.nav-edge-chevron {
+  display: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-54%);
+  font: 34px/1 var(--mono);
+}
+.nav-edge-left { left: 0; }
+.nav-edge-right { right: 0; }
+.navigation-cue.turn-left .nav-edge-left,
+.navigation-cue.turn-right .nav-edge-right { display: block; }
+.nav-search-bracket {
+  display: none;
+  position: absolute;
+  inset: 5px 12px;
+  border: 1px solid currentColor;
+  border-left-width: 5px;
+  border-right-width: 5px;
+  background: transparent;
+  opacity: 0.76;
+}
+.phase-search .nav-search-bracket { display: block; }
+.nav-acquisition {
+  display: none;
+  position: absolute;
+  inset: 3px 34px;
+}
+.phase-acquisition .nav-acquisition { display: block; }
+.nav-acquisition-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: currentColor;
+  border-style: solid;
+  border-width: 0;
+  background: transparent;
+}
+.nav-acquisition-corner.tl { left: 0; top: 0; border-left-width: 2px; border-top-width: 2px; }
+.nav-acquisition-corner.tr { right: 0; top: 0; border-right-width: 2px; border-top-width: 2px; }
+.nav-acquisition-corner.br { right: 0; bottom: 0; border-right-width: 2px; border-bottom-width: 2px; }
+.nav-acquisition-corner.bl { left: 0; bottom: 0; border-left-width: 2px; border-bottom-width: 2px; }
+.navigation-cue.dashed .nav-acquisition-corner,
+.navigation-cue.dashed .nav-search-bracket { border-style: dashed; }
+.target-bearing-caret {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--caution);
+  transition: transform 90ms linear;
+}
+.target-bearing-caret.hidden { display: none; }
+.nav-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 /* Reticle */
 .reticle {
   position: absolute;
@@ -1562,6 +1659,8 @@ input:focus-visible {
     animation: none;
   }
   .hud-plate { transform: none !important; }
+  .navigation-cue,
+  .target-bearing-caret { transition: none; }
   * { scroll-behavior: auto !important; }
 }
 
@@ -1656,6 +1755,7 @@ input:focus-visible {
 
   .heading-strip { top: max(16px, calc(env(safe-area-inset-top) + 8px)); width: 48vw; }
   .heading-readout { top: max(56px, calc(env(safe-area-inset-top) + 48px)); }
+  .navigation-cue { width: 112px; height: 58px; }
   .tape { width: 60px; height: 35vh; min-height: 190px; }
   .tape.left { left: max(5px, env(safe-area-inset-left)); }
   .tape.right { right: max(5px, env(safe-area-inset-right)); }
