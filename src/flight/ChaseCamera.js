@@ -25,6 +25,29 @@ const _tmp = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 
+const BASE_FOV = 58;
+const NORMAL_FOV_BOOST = 16;
+const REDUCED_MOTION_FOV_BOOST = 6;
+const REHEAT_FOV_BOOST = 1;
+const MAX_FOV_RATE = 18;
+
+/**
+ * Chase-lens target for the current true airspeed.
+ *
+ * The response begins below the sortie's normal cruise speed, so launch does
+ * not spend its first minute looking almost static. Keeping this calculation
+ * pure also gives comfort settings and camera cuts one authoritative target.
+ */
+export function speedFovTarget(speed, reheat = false, reducedMotion = false) {
+  const finiteSpeed = Number.isFinite(speed) ? speed : 0;
+  const speedT = THREE.MathUtils.clamp((finiteSpeed - 120) / 300, 0, 1);
+  const maximumBoost = reducedMotion ? REDUCED_MOTION_FOV_BOOST : NORMAL_FOV_BOOST;
+  const speedBoost = maximumBoost * Math.pow(speedT, 0.8);
+  const reheatBoost = reheat ? REHEAT_FOV_BOOST : 0;
+  const cap = reducedMotion ? BASE_FOV + REDUCED_MOTION_FOV_BOOST : 75;
+  return Math.min(cap, BASE_FOV + speedBoost + reheatBoost);
+}
+
 export class ChaseCamera {
   constructor(camera) {
     this.camera = camera;
@@ -33,8 +56,9 @@ export class ChaseCamera {
     this.height = 6.0;
     this.lookAhead = 62;
 
-    this.baseFov = 58;
-    this.maxFovBoost = 15;
+    this.baseFov = BASE_FOV;
+    this.maxFovBoost = NORMAL_FOV_BOOST;
+    this.reducedMotion = false;
 
     /** Damped camera-to-aircraft offset, in world space. */
     this.offset = new THREE.Vector3();
@@ -50,6 +74,10 @@ export class ChaseCamera {
     // first frame always counts as a repossession and snaps. See update().
     this._fovApplied = NaN;
     this._rollLag = 0;
+  }
+
+  setReducedMotion(enabled) {
+    this.reducedMotion = Boolean(enabled);
   }
 
   /**
@@ -176,10 +204,13 @@ export class ChaseCamera {
     // sliding a telephoto open over a second and a half on top of that reads as
     // a lens fault rather than as a transition.
     const repossessed = this.camera.fov !== this._fovApplied;
-    const targetFov =
-      this.baseFov + this.maxFovBoost * Math.pow(speedT, 1.4) + (flight.reheat ? 2.2 : 0);
+    const targetFov = speedFovTarget(speed, flight.reheat, this.reducedMotion);
     if (cut || repossessed) this._fov = targetFov;
-    else this._fov += (targetFov - this._fov) * (1 - Math.exp(-2.6 * dt));
+    else {
+      const desiredStep = (targetFov - this._fov) * (1 - Math.exp(-5 * dt));
+      const maxStep = MAX_FOV_RATE * Math.max(0, dt);
+      this._fov += THREE.MathUtils.clamp(desiredStep, -maxStep, maxStep);
+    }
     if (Math.abs(this.camera.fov - this._fov) > 0.01) {
       this.camera.fov = this._fov;
       this.camera.updateProjectionMatrix();
