@@ -8,6 +8,7 @@ globalThis.document ??= {};
 const GameModule = await import('../Game.js');
 const { Game } = GameModule;
 const { NavigationHintTracker, NAV_PHASE } = await import('../NavigationHint.js');
+const { CAPTURE_THRESHOLD } = await import('../ReconCamera.js');
 const { Engine } = await import('../../core/Engine.js');
 const { Settings } = await import('../../core/Settings.js');
 
@@ -312,6 +313,37 @@ test('HUD navigation reads the authoritative mission target once and advances di
   assert.equal(fixture.updates.at(-1).navigation.altitude, 'ABOVE');
 });
 
+test('a securing exposure advances navigation from A to B exactly once', () => {
+  const fixture = makeNavigationGame();
+  const [postA] = fixture.mission.posts;
+  const secured = { post: postA, score: CAPTURE_THRESHOLD, range: 900 };
+  const confirmations = [];
+  Object.assign(fixture.game, {
+    recon: {
+      zoomIndex: 0,
+      flash: 0,
+      capture: () => ({ url: 'shot', grade: 'A', dataUrl: 'blob:shot' }),
+      retainShot() {},
+      releaseShot() {},
+    },
+    audio: { shutter() {}, confirm: () => confirmations.push('secured') },
+  });
+  fixture.game.mission.photosTaken = 0;
+  fixture.game.hud.showPhoto = () => {};
+
+  fixture.game._updateHud(1 / 60);
+  fixture.game._takePhoto(secured);
+  fixture.game._updateHud(1 / 60);
+  fixture.game._takePhoto(secured);
+  fixture.game._updateHud(1 / 60);
+
+  assert.deepEqual(
+    fixture.updates.slice(-3).map((snapshot) => snapshot.navigation.targetId),
+    ['A', 'B', 'B'],
+  );
+  assert.deepEqual(confirmations, ['secured']);
+});
+
 test('Tab remains the target-selection authority consumed by the flight update', () => {
   const fixture = makeNavigationGame();
   let tabPending = true;
@@ -378,6 +410,71 @@ test('HUD navigation projects only front/on-screen objectives and masks terrain 
   assert.equal(behindFixture.updates.at(-1).navigation.projected, null);
 });
 
+test('navigation phase boundaries are exact and stable through visible-mask-visible acquisition', () => {
+  const tracker = new NavigationHintTracker();
+  const input = {
+    targetId: 'A', headingDeg: 0, targetBearingDeg: 15,
+    closingSpeed: 120, altitudeDeltaMetres: 0,
+    projected: { x: 0.2, y: -0.1 }, edgeNdc: { x: 1, y: -0.5 },
+    terrainVisibility: 1, reconActive: false, dt: 1 / 60,
+  };
+  assert.equal(tracker.update({ ...input, rangeMetres: 8000.01 }).phase, NAV_PHASE.TRANSIT);
+  assert.equal(tracker.update({ ...input, rangeMetres: 8000 }).phase, NAV_PHASE.SEARCH);
+  const visible = tracker.update({ ...input, rangeMetres: 3000 });
+  assert.equal(visible.phase, NAV_PHASE.ACQUISITION);
+  assert.deepEqual(visible.projected, input.projected);
+
+  const masked = tracker.update({
+    ...input,
+    rangeMetres: 2999.99,
+    projected: { x: -0.8, y: 0.75 },
+    edgeNdc: { x: -1, y: 0.4 },
+    terrainVisibility: 0,
+  });
+  assert.equal(masked.projected, null);
+  assert.deepEqual(masked.edgeNdc, input.edgeNdc, 'masking retains only the last clear edge anchor');
+
+  const clearAgain = tracker.update({
+    ...input,
+    rangeMetres: 2999,
+    projected: { x: -0.3, y: 0.25 },
+    edgeNdc: { x: -1, y: 0.4 },
+  });
+  assert.deepEqual(clearAgain.projected, { x: -0.3, y: 0.25 });
+  assert.equal(clearAgain.masked, false);
+});
+
+test('an in-front offscreen objective receives an edge anchor but no precise projection', () => {
+  const post = {
+    id: 'edge', captured: false,
+    position: new THREE.Vector3(6000, 0, -4000),
+    aimPoint: new THREE.Vector3(6000, 0, -4000),
+  };
+  const fixture = makeNavigationGame({ posts: [post] });
+  fixture.game._updateHud(1 / 60);
+  const navigation = fixture.updates.at(-1).navigation;
+  assert.equal(navigation.projected, null);
+  assert.ok(navigation.edgeNdc);
+  assert.ok(Math.abs(navigation.edgeNdc.x) === 1 || Math.abs(navigation.edgeNdc.y) === 1);
+});
+
+test('closing recon clears its acquisition handoff timer before the next opening', () => {
+  const tracker = new NavigationHintTracker();
+  const input = {
+    targetId: 'A', rangeMetres: 2000, headingDeg: 0, targetBearingDeg: 0,
+    closingSpeed: 0, altitudeDeltaMetres: 0, terrainVisibility: 1,
+    projected: { x: 0, y: 0 }, edgeNdc: { x: 0, y: -1 }, reconFramed: false,
+  };
+  assert.equal(tracker.update({ ...input, reconActive: true, dt: 0.64 }).reconPresentation, 'dimmed');
+  assert.equal(tracker.update({ ...input, reconActive: true, dt: 0.02 }).reconPresentation, 'hidden');
+  assert.equal(tracker.update({ ...input, reconActive: false, dt: 0.5 }).reconPresentation, 'normal');
+  assert.equal(
+    tracker.update({ ...input, reconActive: true, dt: 0.01 }).reconPresentation,
+    'dimmed',
+    'reopening recon starts a fresh handoff instead of reusing the stale timeout',
+  );
+});
+
 test('recon framing hides navigation and launch clears the prior trend history', () => {
   const fixture = makeNavigationGame({ reconActive: true });
   fixture.game.evaluation = { post: fixture.mission.posts[0], inFrame: true };
@@ -397,7 +494,11 @@ test('recon framing hides navigation and launch clears the prior trend history',
   fixture.game.mission.begin = () => {};
   fixture.game.hud.show = () => {};
   fixture.game.flight.reset = () => {};
+  let launchResets = 0;
+  const reset = fixture.game.navigationHint.reset.bind(fixture.game.navigationHint);
+  fixture.game.navigationHint.reset = () => { launchResets++; reset(); };
   fixture.game.launch();
+  assert.equal(launchResets, 1);
   fixture.game._updateHud(0.2);
   const restarted = fixture.updates.at(-1);
   assert.equal(restarted.navigation.trend, null);
@@ -470,10 +571,13 @@ test('mission restart releases every retained best plate before disposing the ol
   game.screens = { setTargets() {} };
   game.hud = { setObjectiveCount() {} };
   game.launch = () => {};
+  let navigationResets = 0;
+  game.navigationHint = { reset: () => navigationResets++ };
 
   game.restart();
   assert.deepEqual(released, photos);
   assert.equal(oldDisposed, true);
+  assert.equal(navigationResets, 1);
   game.mission.dispose();
 });
 
@@ -676,12 +780,15 @@ test('Game disposal is comprehensive and idempotent without disposing Engine', (
   game.audio = disposable('audio');
   game._skipHandlers = new Set([1]);
   game.input = { releaseTouch() {} };
+  let navigationResets = 0;
+  game.navigationHint = { reset: () => navigationResets++ };
   let cloudDetach = 0;
   game.engine = { scene: { environment: null }, setClouds: () => cloudDetach++ };
 
   game.dispose();
   game.dispose();
   assert.equal(cloudDetach, 1);
+  assert.equal(navigationResets, 1);
   for (const name of ['water', 'mission', 'recon', 'aircraft', 'fx', 'terrain', 'sky', 'environment', 'screens', 'hud', 'audio']) {
     assert.equal(counts.get(name), 1, name);
   }

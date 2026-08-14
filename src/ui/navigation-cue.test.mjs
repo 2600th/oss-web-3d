@@ -126,6 +126,7 @@ function buildCue(options = {}) {
   };
   const hud = new FakeElement('div', fakeDocument);
   const heading = new FakeElement('div', fakeDocument);
+  hud.appendChild(heading);
   heading.rect = { left: 80, top: 30, right: 310, bottom: 70, width: 230, height: 40 };
   const cue = new NavigationCue(hud, heading, {
     viewport: () => ({ width: 390, height: 844 }),
@@ -280,4 +281,58 @@ test('navigation cue queries current obstacle rectangles on every update', () =>
   first.rect = { left: 250, top: 80, right: 390, bottom: 650, width: 140, height: 570 };
   cue.update(transit);
   assert.notEqual(cue.root.style.top, firstTop);
+});
+
+test('visible, ridge-masked, and visible acquisition never leaks stale projected coordinates', () => {
+  const { cue } = buildCue();
+  cue.update({
+    ...transit,
+    phase: 'acquisition',
+    projected: { x: 0.65, y: -0.35 },
+    edgeNdc: { x: 1, y: -0.2 },
+  });
+  assert.match(cue.root.className, /anchor-sector/);
+  const visiblePosition = { left: cue.root.style.left, top: cue.root.style.top };
+
+  cue.update({
+    ...transit,
+    phase: 'acquisition',
+    projected: { x: 0.65, y: -0.35 },
+    edgeNdc: { x: -1, y: 0.25 },
+    masked: true,
+    label: 'RIDGE MASKED',
+  });
+  assert.match(cue.root.className, /edge-left/);
+  assert.doesNotMatch(cue.root.className, /anchor-sector/);
+  assert.notDeepEqual(
+    { left: cue.root.style.left, top: cue.root.style.top },
+    visiblePosition,
+    'masked placement must move to its safe edge instead of retaining the precise sector',
+  );
+
+  cue.update({
+    ...transit,
+    phase: 'acquisition',
+    projected: { x: -0.45, y: 0.2 },
+    edgeNdc: { x: -1, y: 0.25 },
+  });
+  assert.match(cue.root.className, /anchor-sector/);
+  assert.doesNotMatch(cue.root.className, /dashed/);
+});
+
+test('navigation DOM is HUD-owned and dispose removes the cue, caret, probe, and announcer', () => {
+  const { cue, hud } = buildCue();
+  cue.update(transit);
+
+  assert.equal(cue.safeAreaProbe.parentElement, hud);
+  assert.equal(cue.root.parentElement, hud);
+  assert.equal(cue.status.parentElement, hud);
+  assert.equal(cue.headingStrip.parentElement, hud);
+  assert.equal(cue.headingCaret.parentElement, cue.headingStrip);
+
+  cue.dispose();
+  assert.equal(cue.safeAreaProbe.removed, true);
+  assert.equal(cue.root.removed, true);
+  assert.equal(cue.headingCaret.removed, true);
+  assert.equal(cue.status.removed, true);
 });
