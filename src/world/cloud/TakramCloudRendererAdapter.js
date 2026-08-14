@@ -13,7 +13,9 @@ import {
   DataTexture,
   FloatType,
   HalfFloatType,
+  NearestFilter,
   RedFormat,
+  RepeatWrapping,
   RGFormat,
   RGBAFormat,
   UnsignedByteType,
@@ -32,16 +34,14 @@ export const TAKRAM_CLOUD_PROFILES = Object.freeze({
 
 const OPENING_CLOUD_LAYERS = Object.freeze([
   Object.freeze({
-    channel: 'r', altitude: 2_200, height: 700, densityScale: 0.11,
-    weatherExponent: 1.35, coverageFilterWidth: 0.42, shadow: true,
+    channel: 'r', altitude: 6_000, height: 1_250, densityScale: 0.08,
+    weatherExponent: 1.1, coverageFilterWidth: 0.58, shadow: true,
   }),
   Object.freeze({
-    channel: 'g', altitude: 3_300, height: 950, densityScale: 0.075,
-    weatherExponent: 1.5, coverageFilterWidth: 0.38, shadow: true,
+    channel: 'g', altitude: 0, height: 0, densityScale: 0, shadow: false,
   }),
   Object.freeze({
-    channel: 'b', altitude: 7_400, height: 450, densityScale: 0.0025,
-    shapeAmount: 0.35, shapeDetailAmount: 0, coverageFilterWidth: 0.3,
+    channel: 'b', altitude: 0, height: 0, densityScale: 0,
   }),
 ]);
 
@@ -75,6 +75,20 @@ function createFallbackAtmosphereTextures() {
     singleMieScatteringTexture: texture3D([24, 28, 32, 255]),
     higherOrderScatteringTexture: texture3D([16, 20, 28, 255]),
   });
+}
+
+function createFallbackStbnTexture() {
+  const texture = new Data3DTexture(new Uint8Array([128]), 1, 1, 1);
+  texture.format = RedFormat;
+  texture.type = UnsignedByteType;
+  texture.minFilter = NearestFilter;
+  texture.magFilter = NearestFilter;
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.wrapR = RepeatWrapping;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function compatibleAtmosphereTextures(environment) {
@@ -185,7 +199,7 @@ function describeProcedural(name, resource) {
   };
 }
 
-function describeStandaloneTexture(name, texture) {
+function describeStandaloneTexture(name, texture, kind = 'fallback-atmosphere-texture') {
   const width = texture.image?.width ?? 1;
   const height = texture.image?.height ?? 1;
   const layers = textureLayers(texture);
@@ -199,7 +213,7 @@ function describeStandaloneTexture(name, texture) {
   );
   return {
     name,
-    kind: 'fallback-atmosphere-texture',
+    kind,
     width,
     height,
     layers,
@@ -253,6 +267,8 @@ export class TakramCloudRendererAdapter {
     this.effect = null;
     this.generatedResources = [];
     this.fallbackAtmosphereTextures = null;
+    this.stbnTexture = null;
+    this.fallbackStbnTexture = null;
     this.historyGeneration = 0;
     this._disposed = false;
     this._width = 1;
@@ -284,14 +300,21 @@ export class TakramCloudRendererAdapter {
       { width: this._width, height: this._height },
       AtmosphereParameters.DEFAULT,
     );
+    effect.ellipsoid.getNorthUpEastFrame(
+      new Vector3(effect.ellipsoid.radii.x, 0, 0),
+      effect.worldToECEFMatrix,
+    );
     effect.skipRendering = false;
     effect.qualityPreset = this.profile.takram;
-    effect.coverage = 0.28;
-    effect.localWeatherRepeat.set(1.35, 1.1);
+    effect.coverage = 0.2;
+    // Takram expresses this as tile counts across one cube-sphere face, not a
+    // world-space scale. Values near one make the entire 46 km mission sample
+    // effectively one weather texel; package-scale repeats produce local banks.
+    effect.localWeatherRepeat.set(620, 540);
     effect.localWeatherOffset.set(0.18, 0.42);
     effect.localWeatherVelocity.set(0.00035, 0.00008);
     effect.cloudLayers.set(OPENING_CLOUD_LAYERS);
-    effect.sunDirection.copy(this.sunDirection);
+    effect.sunDirection.copy(this.sunDirection).transformDirection(effect.worldToECEFMatrix);
 
     const generatedResources = [
       new LocalWeather(),
@@ -305,6 +328,12 @@ export class TakramCloudRendererAdapter {
       effect.shapeDetailTexture,
       effect.turbulenceTexture,
     ] = generatedResources;
+
+    if (this.stbnTexture == null) {
+      this.stbnTexture = createFallbackStbnTexture();
+      this.fallbackStbnTexture = this.stbnTexture;
+    }
+    effect.stbnTexture = this.stbnTexture;
 
     this.fallbackAtmosphereTextures = createFallbackAtmosphereTextures();
     this._setEnvironment(this.environment, effect);
@@ -383,6 +412,20 @@ export class TakramCloudRendererAdapter {
     this.effect?.setDepthTexture(texture, BasicDepthPacking);
   }
 
+  setStbnTexture(texture) {
+    if (texture?.isData3DTexture !== true) {
+      throw new TypeError('Takram STBN texture must be a Data3DTexture');
+    }
+    const fallback = this.fallbackStbnTexture;
+    this.stbnTexture = texture;
+    if (this.effect != null) this.effect.stbnTexture = texture;
+    if (fallback != null && fallback !== texture) {
+      this.fallbackStbnTexture = null;
+      fallback.dispose();
+    }
+    this.resetHistory('sampling-texture-change');
+  }
+
   update(frame) {
     this.camera = frame.camera;
     this.scene = frame.scene;
@@ -395,7 +438,9 @@ export class TakramCloudRendererAdapter {
     if (this.effect == null) return;
 
     this.effect.mainCamera = frame.camera;
-    this.effect.sunDirection.copy(frame.sunDirection);
+    this.effect.sunDirection
+      .copy(frame.sunDirection)
+      .transformDirection(this.effect.worldToECEFMatrix);
     this._setEnvironment(frame.environment);
     const renderer = frame.renderer ?? this.renderer;
     const renderTargetState = captureRenderTargetState(renderer);
@@ -463,6 +508,7 @@ export class TakramCloudRendererAdapter {
         renderTargetCount: 0,
         proceduralTextureCount: 0,
         fallbackTextureCount: 0,
+        samplingTextureCount: 0,
         textureCount: 0,
         resources: [],
         totalBytes: 0,
@@ -477,7 +523,17 @@ export class TakramCloudRendererAdapter {
     const fallbackResources = Object.entries(this.fallbackAtmosphereTextures).map(
       ([name, texture]) => describeStandaloneTexture(`fallback-${name}`, texture),
     );
-    const resources = [...targetResources, ...generatedResources, ...fallbackResources];
+    const samplingResources = this.stbnTexture == null ? [] : [describeStandaloneTexture(
+      this.stbnTexture === this.fallbackStbnTexture ? 'stbn-fallback' : 'stbn-external',
+      this.stbnTexture,
+      'sampling-texture',
+    )];
+    const resources = [
+      ...targetResources,
+      ...generatedResources,
+      ...fallbackResources,
+      ...samplingResources,
+    ];
     return {
       backend: 'takram',
       enabled: true,
@@ -485,6 +541,7 @@ export class TakramCloudRendererAdapter {
       renderTargetCount: targetResources.length,
       proceduralTextureCount: generatedResources.length,
       fallbackTextureCount: fallbackResources.length,
+      samplingTextureCount: samplingResources.length,
       textureCount: resources.reduce((total, resource) => total + resource.attachments, 0),
       resources,
       totalBytes: resources.reduce((total, resource) => total + resource.bytes, 0),
@@ -507,6 +564,7 @@ export class TakramCloudRendererAdapter {
         resource.mesh?.geometry,
       ]),
       ...Object.values(this.fallbackAtmosphereTextures ?? {}),
+      this.fallbackStbnTexture,
     ].filter(Boolean);
     const disposed = new Set();
     for (const resource of ownedDisposables) {
@@ -516,6 +574,8 @@ export class TakramCloudRendererAdapter {
     }
     this.generatedResources = [];
     this.fallbackAtmosphereTextures = null;
+    if (this.stbnTexture === this.fallbackStbnTexture) this.stbnTexture = null;
+    this.fallbackStbnTexture = null;
     this.effect = null;
   }
 
@@ -523,5 +583,6 @@ export class TakramCloudRendererAdapter {
     if (this._disposed) return;
     this._disposed = true;
     this._disposeEffect();
+    this.stbnTexture = null;
   }
 }

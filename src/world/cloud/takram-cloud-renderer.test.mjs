@@ -6,12 +6,15 @@ import {
   Data3DTexture,
   DataTexture,
   PerspectiveCamera,
+  RedFormat,
   Scene,
   Texture,
   Vector2,
   Vector3,
 } from 'three';
 import { CloudsEffect } from '@takram/three-clouds';
+import { AtmosphereParameters } from '@takram/three-atmosphere';
+import { Geodetic } from '@takram/three-geospatial';
 import { assertCloudRendererBackend } from './CloudRendererContract.js';
 import { TakramCloudRendererAdapter } from './TakramCloudRendererAdapter.js';
 
@@ -70,7 +73,7 @@ test('constructs and preallocates the real vanilla Takram backend', () => {
   assert.strictEqual(backend.depthTexture, options.stableDepthTexture);
   assert.equal(backend.profile.name, 'high');
   assert.equal(backend.profile.enabled, true);
-  assert.equal(backend.activeLayerCount, 3);
+  assert.equal(backend.activeLayerCount, 1);
   assert.deepEqual(
     new Vector2(
       backend.effect.cloudsPass.historyRenderTarget.width,
@@ -130,6 +133,149 @@ test('keeps Takram depth sampling compiled when the stable depth texture changes
   backend.dispose();
 });
 
+test('maps the local Y-up world onto an unscaled ECEF tangent frame', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const { effect } = backend;
+  const matrix = effect.worldToECEFMatrix;
+  const originECEF = new Vector3().applyMatrix4(matrix);
+  const cloudAltitudeECEF = new Vector3(0, 7_500, 0).applyMatrix4(matrix);
+  const originHeight = new Geodetic().setFromECEF(
+    originECEF,
+    { ellipsoid: effect.ellipsoid },
+  ).height;
+  const cloudAltitude = new Geodetic().setFromECEF(
+    cloudAltitudeECEF,
+    { ellipsoid: effect.ellipsoid },
+  ).height;
+  const geodeticUp = effect.ellipsoid.getSurfaceNormal(originECEF);
+  const elements = matrix.elements;
+  const basis = [
+    new Vector3(elements[0], elements[1], elements[2]),
+    new Vector3(elements[4], elements[5], elements[6]),
+    new Vector3(elements[8], elements[9], elements[10]),
+  ];
+
+  assert.ok(Math.abs(originHeight) < 1e-6);
+  assert.ok(Math.abs(cloudAltitude - 7_500) < 1e-6);
+  assert.ok(Math.abs(basis[0].dot(geodeticUp)) < 1e-12);
+  assert.ok(Math.abs(basis[1].dot(geodeticUp) - 1) < 1e-12);
+  assert.ok(Math.abs(basis[2].dot(geodeticUp)) < 1e-12);
+  assert.equal(basis.every(axis => Math.abs(axis.length() - 1) < 1e-12), true);
+  assert.ok(Math.abs(basis[0].clone().cross(basis[1]).dot(basis[2]) - 1) < 1e-12);
+  assert.ok(effect.sunDirection.distanceTo(
+    backend.sunDirection.clone().transformDirection(matrix),
+  ) < 1e-12);
+
+  const coordinateMaterials = [
+    effect.cloudsPass.currentMaterial,
+    effect.cloudsPass.resolveMaterial,
+    effect.shadowPass.currentMaterial,
+    effect.shadowPass.resolveMaterial,
+  ].filter(material => material.uniforms.worldToECEFMatrix != null);
+  assert.equal(coordinateMaterials.length, 2);
+  assert.equal(
+    coordinateMaterials.every(
+      material => material.uniforms.worldToECEFMatrix.value === matrix,
+    ),
+    true,
+  );
+
+  backend.camera.position.set(20_500, 7_500, 5_200);
+  backend.camera.updateMatrixWorld(true);
+  effect.updateSharedUniforms(0);
+  const altitudeCorrection = effect.cloudsPass.currentMaterial.uniforms.altitudeCorrection.value;
+  assert.equal(altitudeCorrection.toArray().every(Number.isFinite), true);
+  assert.ok(altitudeCorrection.length() < 25_000);
+
+  backend.dispose();
+});
+
+test('opening weather spans enough procedural tiles to form local cloud masses', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const repeat = backend.effect.localWeatherRepeat;
+  const bottomRadius = AtmosphereParameters.DEFAULT.bottomRadius;
+  const comparisonRouteSpan = 46_000;
+  const minimumTileSpan = Math.min(repeat.x, repeat.y)
+    * comparisonRouteSpan / (2 * bottomRadius);
+
+  assert.ok(minimumTileSpan >= 1.5 && minimumTileSpan <= 5,
+    `weather field spans ${minimumTileSpan.toFixed(4)} tiles across the comparison route`);
+  assert.ok(backend.effect.coverage >= 0.18 && backend.effect.coverage <= 0.22);
+
+  backend.dispose();
+});
+
+test('authors one low cloud bank below the opening flight altitude', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const layers = [];
+  for (const layer of backend.effect.cloudLayers) {
+    if (layer.height > 0) layers.push(layer);
+  }
+
+  assert.equal(layers.length, 1);
+  assert.ok(Math.min(...layers.map(layer => layer.altitude)) >= 5_000);
+  assert.ok(Math.max(...layers.map(layer => layer.altitude + layer.height)) <= 7_250);
+  assert.equal(
+    layers.every(layer => layer.densityScale >= 0.06 && layer.densityScale <= 0.1),
+    true,
+  );
+  assert.equal(layers[0].height >= 1_200, true);
+  assert.equal(layers[0].altitude + layers[0].height < 7_500, true);
+  assert.equal(layers[0].shapeAmount, 1);
+  assert.equal(layers[0].shapeDetailAmount, 1);
+
+  backend.dispose();
+});
+
+test('supplies a valid sampling volume to both Takram ray marches', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const texture = backend.effect.stbnTexture;
+
+  assert.equal(texture?.isData3DTexture, true);
+  assert.ok(texture.image.width > 0);
+  assert.ok(texture.image.height > 0);
+  assert.ok(texture.image.depth > 0);
+  assert.strictEqual(
+    backend.effect.cloudsPass.currentMaterial.uniforms.stbnTexture.value,
+    texture,
+  );
+  assert.strictEqual(
+    backend.effect.shadowPass.currentMaterial.uniforms.stbnTexture.value,
+    texture,
+  );
+
+  const report = backend.getResourceReport();
+  assert.equal(report.samplingTextureCount, 1);
+  assert.equal(report.resources.find(resource => resource.name === 'stbn-fallback').bytes, 1);
+
+  backend.dispose();
+});
+
+test('replaces and disposes the fallback without taking ownership of official STBN', () => {
+  const backend = new TakramCloudRendererAdapter(createOptions());
+  const fallback = backend.effect.stbnTexture;
+  const official = new Data3DTexture(new Uint8Array(8), 2, 2, 2);
+  official.format = RedFormat;
+  let fallbackDisposals = 0;
+  let officialDisposals = 0;
+  fallback.addEventListener('dispose', () => { fallbackDisposals += 1; });
+  official.addEventListener('dispose', () => { officialDisposals += 1; });
+
+  backend.setStbnTexture(official);
+
+  assert.equal(fallbackDisposals, 1);
+  assert.strictEqual(backend.effect.stbnTexture, official);
+  assert.equal(
+    backend.getResourceReport().resources.find(resource => resource.name === 'stbn-external').bytes,
+    8,
+  );
+
+  backend.dispose();
+  assert.equal(fallbackDisposals, 1);
+  assert.equal(officialDisposals, 0);
+  official.dispose();
+});
+
 test('phone quality is an explicit disabled profile with no Takram targets', () => {
   const options = createOptions({ name: 'phone' });
   const backend = new TakramCloudRendererAdapter(options);
@@ -146,6 +292,7 @@ test('phone quality is an explicit disabled profile with no Takram targets', () 
     renderTargetCount: 0,
     proceduralTextureCount: 0,
     fallbackTextureCount: 0,
+    samplingTextureCount: 0,
     textureCount: 0,
     resources: [],
     totalBytes: 0,
@@ -319,6 +466,7 @@ test('disposes every owned target material geometry and texture exactly once', (
       resource.mesh.geometry,
     ]),
     ...Object.values(backend.fallbackAtmosphereTextures),
+    backend.fallbackStbnTexture,
   ].filter(Boolean);
   assert.equal(new Set(ownedResources).size, ownedResources.length);
   let liveCount = ownedResources.length;
