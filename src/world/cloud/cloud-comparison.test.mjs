@@ -692,6 +692,16 @@ test('startRun publishes and returns an ineligible result before warmup when clo
 test('startRun publishes a fresh ineligible result when a context-restore asset reload fails', async () => {
   const calls = { render: 0, benchmarkFrames: 0 };
   const staleResult = Object.freeze({ profile: 'stale-profile', sentinel: 'pre-context-result' });
+  const lifecycleResource = {
+    disposeCount: 0,
+    dispose() { this.disposeCount += 1; },
+  };
+  const originalLifecycleDispose = lifecycleResource.dispose;
+  const lifecycleAudit = new CloudLifecycleAuditor(() => [{
+    key: 'restore-fixture-resource', resource: lifecycleResource, signature: 'fixture',
+  }]);
+  lifecycleAudit.begin('context-restore');
+  lifecycleAudit.markReset('context-loss');
   let rejectContextRestore;
   const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
     disposed: false,
@@ -712,7 +722,7 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
     terrainDepthBypassed: false,
     historyResets: [],
     contextEvents: [],
-    lifecycleAudit: { reports: [] },
+    lifecycleAudit,
     scenario: {
       name: 'cloud-buffer', warmupFrames: 120, fixedDeltaSeconds: 1 / 60, minimumClearance: 0,
       events: [{ frame: 0, camera: {
@@ -780,6 +790,15 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
       reasons: ['official-cloud-assets-unavailable'],
     });
     assert.equal(result.artifacts[0].renderedFrames, 0);
+    assert.deepEqual(result.artifacts[0].lifecycleAudits, [{
+      reason: 'context-restore',
+      resetReason: 'context-loss',
+      state: 'ABORTED',
+      abortReason: 'official-cloud-assets-unavailable',
+      resetBeforeRender: false,
+      reconstructionCompleted: false,
+    }]);
+    assert.deepEqual(result.lifecycleAudits, result.artifacts[0].lifecycleAudits);
   } finally {
     globalThis.window = previousWindow;
   }
@@ -787,6 +806,13 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
   assert.equal(runtime.phase, 'ineligible');
   assert.equal(calls.render, 0);
   assert.equal(calls.benchmarkFrames, 0);
+  assert.strictEqual(lifecycleResource.dispose, originalLifecycleDispose);
+  assert.equal(lifecycleAudit.beforeRender(), null);
+  assert.doesNotThrow(() => lifecycleAudit.begin('retry'));
+  lifecycleAudit.abortMutation('retry-complete');
+  lifecycleAudit.dispose();
+  lifecycleAudit.dispose();
+  assert.strictEqual(lifecycleResource.dispose, originalLifecycleDispose);
 });
 
 test('comparison accounts for each harness-owned official cloud texture exactly once', () => {

@@ -463,3 +463,29 @@ test('lifecycle refuses to render a transition before reset or reconstruction co
   second.markReset('context-restore');
   assert.throws(() => second.beforeRender(), /context-restore transition rendered before reconstruction completed/);
 });
+
+test('lifecycle abort clears a failed transition and restores disposal observers', () => {
+  const target = disposableResource('target', '1280x720:rgba16f');
+  const originalDispose = target.dispose;
+  const audit = new CloudLifecycleAuditor(() => [descriptor('target', target)]);
+
+  audit.begin('context-restore');
+  audit.markReset('context-loss');
+  const report = audit.abortMutation('official-cloud-assets-unavailable');
+
+  assert.deepEqual(report, {
+    reason: 'context-restore',
+    resetReason: 'context-loss',
+    state: 'ABORTED',
+    abortReason: 'official-cloud-assets-unavailable',
+    resetBeforeRender: false,
+    reconstructionCompleted: false,
+  });
+  assert.strictEqual(target.dispose, originalDispose);
+  assert.equal(audit.beforeRender(), null);
+  assert.doesNotThrow(() => audit.begin('retry'));
+  audit.abortMutation('test-retry');
+  audit.dispose();
+  audit.dispose();
+  assert.strictEqual(target.dispose, originalDispose);
+});

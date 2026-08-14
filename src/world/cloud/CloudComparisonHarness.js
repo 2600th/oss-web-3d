@@ -1384,11 +1384,13 @@ export class CloudComparisonHarness {
         rawCloudCaptureEvidence: null,
         ineligibleBeforeWarmup: true,
         ineligibilityReason: reason,
+        lifecycleAudits: structuredClone(this.lifecycleAudit?.reports ?? []),
       }],
     }),
     ...ineligibleMetadata,
     cloudBuffer: rawMetrics,
     cloudBufferEvidence: null,
+    lifecycleAudits: structuredClone(this.lifecycleAudit?.reports ?? []),
     });
     this.phase = 'ineligible';
     if (typeof document !== 'undefined') publishComparisonResult(document, this.runResult);
@@ -1556,6 +1558,9 @@ export class CloudComparisonHarness {
             await restorePromise;
           } catch (error) {
             const assetEligibility = this._takramReferenceAssetEligibility();
+            this.lifecycleAudit?.abortMutation?.(
+              !assetEligibility.eligible ? assetEligibility.reason : 'context-restore-failed',
+            );
             if (error?.code === 'ineligible-reference' && !assetEligibility.eligible) {
               return this._publishIneligibleAssetResult(assetEligibility);
             }

@@ -370,6 +370,23 @@ export class CloudLifecycleAuditor {
     this.pending.after = lifecycleSnapshot(this.describeResources);
   }
 
+  abortMutation(abortReason = 'aborted') {
+    const transition = this.pending;
+    if (transition == null) return null;
+    this._restoreObservers(transition);
+    this.pending = null;
+    const report = {
+      reason: transition.reason,
+      resetReason: transition.resetReason,
+      state: 'ABORTED',
+      abortReason,
+      resetBeforeRender: false,
+      reconstructionCompleted: false,
+    };
+    this.reports.push(report);
+    return report;
+  }
+
   _restoreObservers(transition) {
     for (const [resource, observation] of transition.observations) {
       if (resource.dispose === observation.wrapper) resource.dispose = observation.original;
