@@ -827,6 +827,10 @@ export function applyContextEvent(runtime, action) {
   if (extension == null) {
     runtime.contextEvents.push({ frame: runtime.frame, action, supported: false });
   } else if (action === 'lose') {
+    // WEBGL_lose_context dispatches webglcontextlost asynchronously. The
+    // comparison frame immediately following this event must not render while
+    // the lifecycle mutation is pending.
+    runtime.contextLost = true;
     extension.loseContext();
     runtime.contextEvents.push({ frame: runtime.frame, action: 'lose', supported: true });
   } else {
@@ -1121,8 +1125,7 @@ export class CloudComparisonHarness {
       this.contextLost = true;
     };
     this._onContextRestored = () => {
-      this.contextLost = false;
-      this._contextRestorePromise = this._recreateAfterContextRestore();
+      this._beginContextRestore();
     };
     canvas.addEventListener('webglcontextlost', this._onContextLost);
     canvas.addEventListener('webglcontextrestored', this._onContextRestored);
@@ -1174,6 +1177,19 @@ export class CloudComparisonHarness {
       this.stbnMode = 'not-applicable-disabled';
       this.cloudAssetMode = 'not-applicable-disabled';
     }
+  }
+
+  _beginContextRestore() {
+    // Keep the comparison non-renderable until reconstruction has restored
+    // resources, reset temporal history, and completed its lifecycle audit.
+    // A rejected reconstruction deliberately leaves this true so the
+    // ineligible/aborted result cannot be followed by another render.
+    this.contextLost = true;
+    const restorePromise = this._recreateAfterContextRestore().then(() => {
+      this.contextLost = false;
+    });
+    this._contextRestorePromise = restorePromise;
+    return restorePromise;
   }
 
   async _recreateAfterContextRestore() {

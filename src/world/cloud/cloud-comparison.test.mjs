@@ -700,14 +700,12 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
   const lifecycleAudit = new CloudLifecycleAuditor(() => [{
     key: 'restore-fixture-resource', resource: lifecycleResource, signature: 'fixture',
   }]);
-  lifecycleAudit.begin('context-restore');
-  lifecycleAudit.markReset('context-loss');
-  let rejectContextRestore;
   const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
     disposed: false,
     running: false,
     phase: 'ready',
     frame: 0,
+    contextLost: false,
     runResult: staleResult,
     backendName: 'takram',
     initialQuality: 'high',
@@ -725,9 +723,12 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
     lifecycleAudit,
     scenario: {
       name: 'cloud-buffer', warmupFrames: 120, fixedDeltaSeconds: 1 / 60, minimumClearance: 0,
-      events: [{ frame: 0, camera: {
-        kind: 'world', position: [0, 6000, 0], target: [0, 0, 0], roll: 0, fov: 50,
-      } }],
+      events: [{
+        frame: 0,
+        context: 'lose',
+        resetHistory: 'context-loss',
+        camera: { kind: 'world', position: [0, 6000, 0], target: [0, 0, 0], roll: 0, fov: 50 },
+      }],
       captureKind: 'raw-cloud-buffer-diagnostic', inSceneMissionCapture: false,
     },
     environment: {
@@ -747,6 +748,7 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
       cloudProfile: null,
       setSize() {},
       setCloudTextures() {},
+      resetHistory() {},
     },
     engine: {
       maxPixelRatio: 1,
@@ -762,21 +764,34 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
     canvas: { width: 320, height: 180 },
     _prepareAtmosphere: async () => {},
     _prepareStbn: async () => {},
-    async _prepareCloudAssets() {
-      setTimeout(() => {
-        this.cloudAssets = null;
-        this.cloudAssetMode = 'unavailable';
-        const error = new Error('fixture context restore cloud asset load failed');
-        error.code = 'ineligible-reference';
-        rejectContextRestore(error);
-      }, 0);
+    _prepareCloudAssets: async () => {},
+    _onContextRestored() {
+      this._beginContextRestore();
+    },
+    async _recreateAfterContextRestore() {
+      const error = new Error('fixture context restore cloud asset load failed');
+      error.code = 'ineligible-reference';
+      throw error;
+    },
+    contextLossExtension: {
+      loseContext() {
+        setTimeout(() => {
+          runtime.cloudAssets = null;
+          runtime.cloudAssetMode = 'unavailable';
+          runtime._onContextRestored();
+          // The production loop observes this promise on its next animation
+          // frame. Mark it handled here so Node does not report the fixture's
+          // intentionally asynchronous rejection before that frame runs.
+          runtime._contextRestorePromise.catch(() => {});
+        }, 0);
+      },
+      restoreContext() {},
     },
   });
-  runtime._contextRestorePromise = new Promise((_resolve, reject) => {
-    rejectContextRestore = reject;
-  });
   const previousWindow = globalThis.window;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
   globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
+  globalThis.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
   try {
     const result = await runtime.startRun();
     assert.strictEqual(result, runtime.runResult);
@@ -801,8 +816,11 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
     assert.deepEqual(result.lifecycleAudits, result.artifacts[0].lifecycleAudits);
   } finally {
     globalThis.window = previousWindow;
+    globalThis.requestAnimationFrame = previousAnimationFrame;
   }
 
+  assert.equal(runtime.contextLost, true);
+  assert.deepEqual(runtime.contextEvents, [{ frame: 0, action: 'lose', supported: true }]);
   assert.equal(runtime.phase, 'ineligible');
   assert.equal(calls.render, 0);
   assert.equal(calls.benchmarkFrames, 0);
@@ -813,6 +831,20 @@ test('startRun publishes a fresh ineligible result when a context-restore asset 
   lifecycleAudit.dispose();
   lifecycleAudit.dispose();
   assert.strictEqual(lifecycleResource.dispose, originalLifecycleDispose);
+});
+
+test('context restore gate keeps rendering disabled until reconstruction resolves', async () => {
+  let completeRestore;
+  const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
+    contextLost: false,
+    _recreateAfterContextRestore: () => new Promise(resolve => { completeRestore = resolve; }),
+  });
+
+  const restore = runtime._beginContextRestore();
+  assert.equal(runtime.contextLost, true);
+  completeRestore();
+  await restore;
+  assert.equal(runtime.contextLost, false);
 });
 
 test('comparison accounts for each harness-owned official cloud texture exactly once', () => {
@@ -910,6 +942,7 @@ test('context restore reuses the extension captured before context loss', () => 
   const calls = [];
   const runtime = {
     frame: 150,
+    contextLost: false,
     contextEvents: [],
     contextLossExtension: {
       loseContext: () => calls.push('lose'),
@@ -917,8 +950,10 @@ test('context restore reuses the extension captured before context loss', () => 
     },
   };
   applyContextEvent(runtime, 'lose');
+  assert.equal(runtime.contextLost, true);
   runtime.frame = 154;
   applyContextEvent(runtime, 'restore');
+  assert.equal(runtime.contextLost, true);
   assert.deepEqual(calls, ['lose', 'restore']);
   assert.deepEqual(runtime.contextEvents, [
     { frame: 150, action: 'lose', supported: true },
