@@ -33,6 +33,28 @@ const EMBER = new THREE.Color(1.0, 0.72, 0.12);
 const SOOT = new THREE.Color(0.14, 0.16, 0.18);
 const METAL = new THREE.Color(0.34, 0.36, 0.37);
 
+const SPEED_STREAK_REFERENCE_HEIGHT = 720;
+const SPEED_STREAK_WIDTH_PX = 0.8;
+const SPEED_STREAK_LENGTH_PX = 8.5;
+const SPEED_STREAK_NEAR = 148;
+const SPEED_STREAK_FAR = 158;
+
+/** Project world-space streak dimensions through a vertical perspective FOV. */
+export function speedStreakMetrics({
+  worldWidth,
+  worldLength,
+  distance,
+  fov,
+  viewportHeight,
+}) {
+  const focalLengthPx = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5));
+  const pixelsPerWorldUnit = focalLengthPx / distance;
+  return {
+    widthPx: worldWidth * pixelsPerWorldUnit,
+    lengthPx: worldLength * pixelsPerWorldUnit,
+  };
+}
+
 /**
  * GPU-authored flight effects. The CPU only appends births to ring buffers;
  * age, drag, gravity, wind, turbulence, spreading and fading are evaluated in
@@ -93,6 +115,9 @@ export class FlightFx {
     this._direction = new THREE.Vector3();
     this._inherit = new THREE.Vector3();
     this._wing = new THREE.Vector3();
+    this._cameraForward = new THREE.Vector3();
+    this._cameraRight = new THREE.Vector3();
+    this._cameraUp = new THREE.Vector3();
     this._spawn = {
       position: this._position,
       velocity: this._velocity,
@@ -116,10 +141,11 @@ export class FlightFx {
     const streak = this.speedStreaks.uniforms;
     streak.uGravity.value.set(0, 0, 0);
     streak.uDrag.value = 0.08;
-    streak.uStretch.value = 0.008;
+    streak.uStretch.value = 0.04;
+    streak.uEndSize.value = 1;
     streak.uGlow.value = 0.24;
-    streak.uOpacity.value = 0.09;
-    streak.uDistFade.value.set(88, 112, 138, 178);
+    streak.uOpacity.value = 0.18;
+    streak.uDistFade.value.set(88, 100, 142, 160);
     this.speedStreaks.setGradient(ICE, WHITE, ICE, WHITE);
 
     for (const system of [this.condensation, this.spindrift]) {
@@ -196,34 +222,68 @@ export class FlightFx {
   update(dt, flight, cameraPos, camera = null) {
     this._time += dt;
     updateFrameUniforms(dt, this.environment, camera);
-    this._updateSpeed(dt, flight, cameraPos);
+    this._updateSpeed(dt, flight, cameraPos, camera);
     this._updateCondensation(dt, flight);
     this._updateSpindrift(dt, flight);
     for (const key of SYSTEM_KEYS) this[key].flush();
     for (const trail of this.trails) trail.flush();
   }
 
-  _updateSpeed(dt, flight, cameraPos) {
+  _updateSpeed(dt, flight, cameraPos, camera) {
     const intensity = THREE.MathUtils.clamp((flight.airspeed - 135) / 240, 0, 1);
     this.speedStreaks.mesh.visible = intensity > 0.015 && this.speedStreaks.active > 0;
     if (!this.speedStreaks.mesh.visible) return;
     this._speedRate.rate = this.speedStreaks.active * (0.08 + intensity * 0.18);
+    let owed = this._speedRate.tick(dt);
+    if (owed <= 0) return;
+
+    const viewForward = this._cameraForward;
+    const viewRight = this._cameraRight;
+    const viewUp = this._cameraUp;
+    if (camera) {
+      camera.getWorldDirection(viewForward);
+      viewRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      viewUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+    } else {
+      viewForward.copy(flight.forward).normalize();
+      viewRight.copy(flight.right).normalize();
+      viewUp.crossVectors(viewRight, viewForward).normalize();
+    }
+
+    const fov = camera?.fov ?? 67;
+    const aspect = camera?.aspect ?? (16 / 9);
+    const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(fov) * 0.5);
+    const speed = Math.max(flight.velocity.length(), 1);
+    const stretchRatio = SPEED_STREAK_LENGTH_PX / SPEED_STREAK_WIDTH_PX;
+    this.speedStreaks.uniforms.uStretch.value = (stretchRatio - 1) / speed;
+    this.speedStreaks.uniforms.uStretchWorld.value.copy(flight.velocity).multiplyScalar(-1);
+
     const spawn = this._spawn;
     spawn.inherit.set(0, 0, 0);
-    spawn.position.copy(cameraPos).addScaledVector(flight.forward, 115);
-    spawn.velocity.copy(flight.velocity).multiplyScalar(-0.08);
-    spawn.radius = 105;
-    spawn.speedVariance = 0.25;
-    spawn.spread = 0.06;
-    spawn.size = 0.03 + intensity * 0.02;
-    spawn.sizeVariance = 0.5;
-    spawn.life = 0.46;
-    spawn.lifeVariance = 0.28;
+    spawn.velocity.set(0, 0, 0);
+    spawn.radius = 0;
+    spawn.speedVariance = 0;
+    spawn.spread = 0;
+    spawn.sizeVariance = 0.02;
+    spawn.life = 0.58;
+    spawn.lifeVariance = 0.2;
     spawn.spin = 0;
     spawn.tint = ICE;
     spawn.time = frameUniforms.uTime.value;
-    this.speedStreaks.uniforms.uStretchWorld.value.copy(flight.velocity).multiplyScalar(-1);
-    this.speedStreaks.emit(this._speedRate.tick(dt), spawn);
+    while (owed-- > 0) {
+      const depth = THREE.MathUtils.lerp(SPEED_STREAK_NEAR, SPEED_STREAK_FAR, Math.random());
+      const halfHeight = depth * tanHalfFov;
+      const halfWidth = halfHeight * aspect;
+      const horizontal = (Math.random() * 2 - 1) * halfWidth * 0.5;
+      const vertical = (Math.random() * 2 - 1) * halfHeight * 0.5;
+      spawn.position.copy(cameraPos)
+        .addScaledVector(viewForward, depth)
+        .addScaledVector(viewRight, horizontal)
+        .addScaledVector(viewUp, vertical);
+      const worldPerPixel = 2 * depth * tanHalfFov / SPEED_STREAK_REFERENCE_HEIGHT;
+      spawn.size = SPEED_STREAK_WIDTH_PX * worldPerPixel;
+      this.speedStreaks.emit(1, spawn);
+    }
   }
 
   _updateCondensation(dt, flight) {
