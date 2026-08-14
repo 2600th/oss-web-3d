@@ -33,7 +33,6 @@ const EMBER = new THREE.Color(1.0, 0.72, 0.12);
 const SOOT = new THREE.Color(0.14, 0.16, 0.18);
 const METAL = new THREE.Color(0.34, 0.36, 0.37);
 
-const SPEED_STREAK_REFERENCE_HEIGHT = 720;
 const SPEED_STREAK_WIDTH_PX = 0.8;
 const SPEED_STREAK_LENGTH_PX = 8.5;
 const SPEED_STREAK_NEAR = 148;
@@ -68,7 +67,7 @@ export class FlightFx {
 
     this.speedStreaks = new ParticleSystem({
       name: 'speed-streaks', capacity: 700, shape: ParticleShape.STREAK,
-      additive: true, stretch: true, renderOrder: 14,
+      additive: true, stretch: true, depthTest: false, softDepth: false, renderOrder: 14,
     });
     this.condensation = new ParticleSystem({
       name: 'wing-condensation', capacity: 220, shape: ParticleShape.STREAK,
@@ -143,8 +142,14 @@ export class FlightFx {
     streak.uDrag.value = 0.08;
     streak.uStretch.value = 0.04;
     streak.uEndSize.value = 1;
-    streak.uGlow.value = 0.24;
-    streak.uOpacity.value = 0.18;
+    // Additive blending multiplies RGB by alpha, so the old 0.24 * 0.18
+    // combination contributed at most 0.043 linear light before the streak's
+    // sub-pixel shape coverage and lifetime/distance fades. That was
+    // effectively invisible after the cinematic grade. Keep alpha restrained
+    // but give the ice core enough radiance to survive the full pipeline.
+    streak.uGlow.value = 0.9;
+    streak.uOpacity.value = 0.32;
+    streak.uStreakCore.value = 1.25;
     streak.uDistFade.value.set(88, 100, 142, 160);
     this.speedStreaks.setGradient(ICE, WHITE, ICE, WHITE);
 
@@ -233,7 +238,7 @@ export class FlightFx {
     const intensity = THREE.MathUtils.clamp((flight.airspeed - 135) / 240, 0, 1);
     this.speedStreaks.mesh.visible = intensity > 0.015 && this.speedStreaks.active > 0;
     if (!this.speedStreaks.mesh.visible) return;
-    this._speedRate.rate = this.speedStreaks.active * (0.08 + intensity * 0.18);
+    this._speedRate.rate = this.speedStreaks.active * (0.10 + intensity * 0.22);
     let owed = this._speedRate.tick(dt);
     if (owed <= 0) return;
 
@@ -280,7 +285,12 @@ export class FlightFx {
         .addScaledVector(viewForward, depth)
         .addScaledVector(viewRight, horizontal)
         .addScaledVector(viewUp, vertical);
-      const worldPerPixel = 2 * depth * tanHalfFov / SPEED_STREAK_REFERENCE_HEIGHT;
+      // Author in physical pixels at the current drawing-buffer height. A
+      // fixed 720 px reference made the same streak 1.27x wider in the live
+      // 990x912 acceptance viewport (and larger still on high-DPI displays),
+      // violating the canopy-scratch cap despite the earlier 720p test.
+      const viewportHeight = Math.max(frameUniforms.uResolution.value.y, 1);
+      const worldPerPixel = 2 * depth * tanHalfFov / viewportHeight;
       spawn.size = SPEED_STREAK_WIDTH_PX * worldPerPixel;
       this.speedStreaks.emit(1, spawn);
     }

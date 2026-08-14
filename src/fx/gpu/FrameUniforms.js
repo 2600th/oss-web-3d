@@ -57,7 +57,7 @@ export function sharedUniforms(own) {
  */
 export function registerFxMaterial(material) {
   _materials.add(material);
-  if (frameUniforms.uSceneDepth.value) {
+  if (frameUniforms.uSceneDepth.value && material.userData.fxSoftDepth !== false) {
     material.defines.FX_SOFT_DEPTH = '';
     material.needsUpdate = true;
   }
@@ -82,7 +82,7 @@ export function setSceneDepth(texture, width, height) {
   if (width && height) frameUniforms.uResolution.value.set(width, height);
   if (had === !!texture) return;
   for (const m of _materials) {
-    if (texture) m.defines.FX_SOFT_DEPTH = '';
+    if (texture && m.userData.fxSoftDepth !== false) m.defines.FX_SOFT_DEPTH = '';
     else delete m.defines.FX_SOFT_DEPTH;
     m.needsUpdate = true;
   }

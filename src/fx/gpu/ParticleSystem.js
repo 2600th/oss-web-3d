@@ -63,6 +63,8 @@ export class ParticleSystem {
    * @param {boolean} [options.curl]     curl-noise turbulence rather than a cheap wobble
    * @param {boolean} [options.stretch]  orient the quad along screen-space velocity
    * @param {boolean} [options.wind]     advect with the environment wind
+   * @param {boolean} [options.depthTest] test against opaque scene depth
+   * @param {boolean} [options.softDepth] fade against the shared scene-depth texture
    * @param {number}  [options.renderOrder]
    */
   constructor({
@@ -74,6 +76,8 @@ export class ParticleSystem {
     curl = false,
     stretch = false,
     wind = false,
+    depthTest = true,
+    softDepth = true,
     renderOrder = 12,
   }) {
     if (!Number.isInteger(capacity) || capacity <= 0) {
@@ -132,7 +136,7 @@ export class ParticleSystem {
       defines,
       transparent: true,
       depthWrite: false,
-      depthTest: true,
+      depthTest,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       side: THREE.DoubleSide,
       uniforms: sharedUniforms({
@@ -152,6 +156,10 @@ export class ParticleSystem {
         uGlow: { value: 1 },
         uStretch: { value: 0.05 },
         uStretchWorld: { value: new THREE.Vector3() },
+        // Half-width falloff for STREAK shapes. 3.4 preserves the narrow
+        // spark/condensation silhouette; speed streaks override it because a
+        // one-pixel billboard has no MSAA coverage to rescue a sub-pixel core.
+        uStreakCore: { value: 3.4 },
         // (nearIn0, nearIn1, farOut0, farOut1) in metres of view distance.
         // Defaults are a deliberate no-op; edges must stay ordered or the
         // smoothsteps are undefined.
@@ -164,6 +172,7 @@ export class ParticleSystem {
       vertexShader: PARTICLE_VERTEX,
       fragmentShader: PARTICLE_FRAGMENT,
     });
+    this.material.userData.fxSoftDepth = Boolean(softDepth);
     registerFxMaterial(this.material);
 
     this.mesh = new THREE.Mesh(geometry, this.material);
@@ -578,6 +587,7 @@ const PARTICLE_FRAGMENT = /* glsl */ `
   uniform float uGlow;
   uniform float uFadeIn;
   uniform float uFadeOut;
+  uniform float uStreakCore;
   uniform vec4  uDistFade;
   uniform vec3  uColor0;
   uniform vec3  uColor1;
@@ -613,7 +623,7 @@ const PARTICLE_FRAGMENT = /* glsl */ `
       n += 0.5 * fxSnoise(vec3(c * 4.3, vSeed * 13.0 - uTime * 0.33));
       return (1.0 - smoothstep(0.06, 1.0, d + n * 0.30)) * 0.92;
     #elif SHAPE == 2
-      float core = 1.0 - smoothstep(0.0, 1.0, abs(c.x) * 3.4);
+      float core = 1.0 - smoothstep(0.0, 1.0, abs(c.x) * uStreakCore);
       float len = 1.0 - smoothstep(0.0, 1.0, abs(c.y));
       return core * len;
     #else

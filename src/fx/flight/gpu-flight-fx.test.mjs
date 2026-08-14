@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import * as FlightFxModule from '../FlightFx.js';
 import { ParticleSystem } from '../gpu/ParticleSystem.js';
 import { Ribbon } from '../gpu/Ribbon.js';
-import { frameUniforms } from '../gpu/FrameUniforms.js';
+import { frameUniforms, setSceneDepth } from '../gpu/FrameUniforms.js';
 import { TIERS } from '../../core/Settings.js';
 import { Aircraft } from '../../flight/Aircraft.js';
 
@@ -31,7 +31,7 @@ function smoothstep(edge0, edge1, value) {
   return t * t * (3 - 2 * t);
 }
 
-function inspectVisibleStreaks(fx, camera) {
+function inspectVisibleStreaks(fx, camera, viewportWidth = 990, viewportHeight = 912) {
   const system = fx.speedStreaks;
   const currentTime = frameUniforms.uTime.value;
   const stretchWorld = system.uniforms.uStretchWorld.value;
@@ -61,21 +61,45 @@ function inspectVisibleStreaks(fx, camera) {
     const grow = smoothstep(0, Math.max(system.uniforms.uSizeIn.value, 1e-3), t);
     const lifeScale = THREE.MathUtils.lerp(1, system.uniforms.uEndSize.value, t) * grow;
     const width = system.data.size[i] * lifeScale;
-    measured.push(speedStreakMetrics({
+    const metrics = speedStreakMetrics({
       worldWidth: width,
       worldLength: width * (1 + system.uniforms.uStretch.value * velocity.length()),
       distance,
       fov: camera.fov,
-      viewportHeight: 720,
-    }));
+      viewportHeight,
+    });
+    const lifeFade = smoothstep(0, Math.max(system.uniforms.uFadeIn.value, 1e-3), t)
+      * (1 - smoothstep(
+        THREE.MathUtils.clamp(system.uniforms.uFadeOut.value, 0, 0.98),
+        1,
+        t,
+      ));
+    const distanceFade = smoothstep(fade.x, fade.y, distance)
+      * (1 - smoothstep(fade.z, fade.w, distance));
+    metrics.coreContribution = system.uniforms.uOpacity.value
+      * system.uniforms.uGlow.value
+      * lifeFade
+      * distanceFade;
+    const stretchView = velocity.clone().transformDirection(camera.matrixWorldInverse);
+    const direction = new THREE.Vector2(stretchView.x + 1e-5, -(stretchView.y + 1e-5)).normalize();
+    metrics.screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
+    metrics.screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
+    metrics.direction = direction;
+    measured.push(metrics);
   }
   return measured;
 }
 
-function simulateMovingCameraStreaks(tierName, airspeed, duration) {
+function simulateMovingCameraStreaks(tierName, airspeed, duration, {
+  viewportWidth = 990,
+  viewportHeight = 912,
+  fov = 68,
+} = {}) {
   const fx = new FlightFx(environment());
   fx.setQuality(TIERS[tierName]);
-  const camera = new THREE.PerspectiveCamera(67, 16 / 9, 0.1, 1000);
+  const previousResolution = frameUniforms.uResolution.value.clone();
+  frameUniforms.uResolution.value.set(viewportWidth, viewportHeight);
+  const camera = new THREE.PerspectiveCamera(fov, viewportWidth / viewportHeight, 0.1, 1000);
   camera.position.set(0, 0, 0);
   camera.lookAt(0, 0, -1);
   camera.updateMatrixWorld(true);
@@ -107,21 +131,67 @@ function simulateMovingCameraStreaks(tierName, airspeed, duration) {
       flight.position.addScaledVector(flight.forward, airspeed * frameDt);
       camera.updateMatrixWorld(true);
       fx.update(frameDt, flight, camera.position, camera);
-      for (const metrics of inspectVisibleStreaks(fx, camera)) {
+      for (const metrics of inspectVisibleStreaks(fx, camera, viewportWidth, viewportHeight)) {
         maxWidthPx = Math.max(maxWidthPx, metrics.widthPx);
         maxLengthPx = Math.max(maxLengthPx, metrics.lengthPx);
       }
     }
-    const finalMetrics = inspectVisibleStreaks(fx, camera);
+    const finalMetrics = inspectVisibleStreaks(fx, camera, viewportWidth, viewportHeight);
     const readable = finalMetrics.filter((metrics) => (
       metrics.widthPx >= 0.75 && metrics.widthPx <= 1.5
       && metrics.lengthPx >= 6 && metrics.lengthPx <= 18
     )).length;
-    return { readable, maxWidthPx, maxLengthPx };
+    const luminous = finalMetrics.filter((metrics) => metrics.coreContribution >= 0.12).length;
+    const peakContribution = finalMetrics.reduce(
+      (maximum, metrics) => Math.max(maximum, metrics.coreContribution),
+      0,
+    );
+    const raster = rasterizeStreaks(
+      finalMetrics,
+      viewportWidth,
+      viewportHeight,
+      fx.speedStreaks.uniforms.uStreakCore?.value ?? 3.4,
+    );
+    return { readable, luminous, peakContribution, maxWidthPx, maxLengthPx, ...raster };
   } finally {
     Math.random = originalRandom;
+    frameUniforms.uResolution.value.copy(previousResolution);
     fx.dispose();
   }
+}
+
+/** Shader-equivalent sample at physical pixel centres (MSAA is disabled in Engine). */
+function rasterizeStreaks(metricsList, viewportWidth, viewportHeight, coreScale) {
+  let luminousPixels = 0;
+  let readableStreaks = 0;
+  for (const metrics of metricsList) {
+    const dir = metrics.direction;
+    const perp = new THREE.Vector2(-dir.y, dir.x);
+    const halfWidth = metrics.widthPx * 0.5;
+    const halfLength = metrics.lengthPx * 0.5;
+    const radius = Math.ceil(halfWidth + halfLength + 1);
+    let streakPixels = 0;
+    const minX = Math.max(0, Math.floor(metrics.screenX - radius));
+    const maxX = Math.min(viewportWidth - 1, Math.ceil(metrics.screenX + radius));
+    const minY = Math.max(0, Math.floor(metrics.screenY - radius));
+    const maxY = Math.min(viewportHeight - 1, Math.ceil(metrics.screenY + radius));
+    for (let py = minY; py <= maxY; py++) {
+      for (let px = minX; px <= maxX; px++) {
+        const dx = px + 0.5 - metrics.screenX;
+        const dy = py + 0.5 - metrics.screenY;
+        const cx = (dx * perp.x + dy * perp.y) / Math.max(halfWidth, 1e-6);
+        const cy = (dx * dir.x + dy * dir.y) / Math.max(halfLength, 1e-6);
+        if (Math.abs(cx) > 1 || Math.abs(cy) > 1) continue;
+        const core = 1 - smoothstep(0, 1, Math.abs(cx) * coreScale);
+        const lengthFade = 1 - smoothstep(0, 1, Math.abs(cy));
+        const contribution = metrics.coreContribution * core * lengthFade;
+        if (contribution >= 0.08) streakPixels++;
+      }
+    }
+    luminousPixels += streakPixels;
+    if (streakPixels >= 3) readableStreaks++;
+  }
+  return { luminousPixels, rasterReadableStreaks: readableStreaks };
 }
 
 test('speed streak dimensions remain readable at chase-camera distance', () => {
@@ -141,6 +211,84 @@ test('moving chase camera retains readable streak counts on desktop and phone', 
   const phone = simulateMovingCameraStreaks('phone', 260, 0.5);
   assert.ok(high.readable >= 12, `high retained ${high.readable}`);
   assert.ok(phone.readable >= 4, `phone retained ${phone.readable}`);
+});
+
+test('live acceptance viewport retains luminous streak cores after all shader fades', () => {
+  const high = simulateMovingCameraStreaks('high', 270, 0.5, {
+    viewportWidth: 990,
+    viewportHeight: 912,
+    fov: 68,
+  });
+  assert.ok(high.luminous >= 12, `only ${high.luminous} luminous cores; peak ${high.peakContribution}`);
+  assert.ok(high.peakContribution <= 0.45, `overpowering core contribution ${high.peakContribution}`);
+});
+
+test('live no-MSAA raster retains several multi-pixel streaks after shape coverage', () => {
+  const high = simulateMovingCameraStreaks('high', 270, 0.5, {
+    viewportWidth: 990,
+    viewportHeight: 912,
+    fov: 68,
+  });
+  assert.ok(
+    high.rasterReadableStreaks >= 12,
+    `only ${high.rasterReadableStreaks} raster-readable streaks across ${high.luminousPixels} pixels`,
+  );
+  assert.ok(high.luminousPixels >= 80, `only ${high.luminousPixels} luminous pixels`);
+  assert.ok(high.luminousPixels <= 260, `screen-scratching coverage ${high.luminousPixels}px`);
+});
+
+test('speed streak shape exposes a wider core without changing its outer dimensions', () => {
+  const fx = new FlightFx(environment());
+  assert.ok(fx.speedStreaks.uniforms.uStreakCore, 'speed streak material has no core-width control');
+  assert.ok(fx.speedStreaks.uniforms.uStreakCore.value <= 1.6);
+  assert.ok(fx.speedStreaks.uniforms.uStreakCore.value >= 1.1);
+  fx.dispose();
+});
+
+test('only camera-shell speed streaks bypass hardware and soft scene depth', () => {
+  const fx = new FlightFx(environment());
+  const fakeDepth = new THREE.DepthTexture(16, 16);
+  setSceneDepth(fakeDepth, 16, 16);
+  try {
+    assert.equal(fx.speedStreaks.material.depthTest, false);
+    assert.equal('FX_SOFT_DEPTH' in fx.speedStreaks.material.defines, false);
+    assert.equal(fx.speedStreaks.material.userData.fxSoftDepth, false);
+
+    for (const system of [fx.condensation, fx.spindrift, fx.smoke, fx.sparks, fx.debris]) {
+      assert.equal(system.material.depthTest, true, `${system.name} lost hardware depth`);
+      assert.equal('FX_SOFT_DEPTH' in system.material.defines, true, `${system.name} lost soft depth`);
+      assert.notEqual(system.material.userData.fxSoftDepth, false);
+    }
+  } finally {
+    setSceneDepth(null, 16, 16);
+    fakeDepth.dispose();
+    fx.dispose();
+  }
+});
+
+test('speed streak mesh reappears and emits after crossing the speed gate', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+  const camera = new THREE.PerspectiveCamera(68, 990 / 912, 0.1, 1000);
+  camera.lookAt(0, 0, -1);
+  camera.updateMatrixWorld(true);
+  const flight = {
+    airspeed: 135,
+    position: new THREE.Vector3(0, 0, -26),
+    velocity: new THREE.Vector3(0, 0, -270),
+    forward: new THREE.Vector3(0, 0, -1),
+    right: new THREE.Vector3(1, 0, 0),
+    altitude: 5000,
+    agl: 2000,
+    gLoad: 1,
+  };
+  fx.update(1 / 60, flight, camera.position, camera);
+  assert.equal(fx.speedStreaks.mesh.visible, false);
+  flight.airspeed = 270;
+  fx.update(0.1, flight, camera.position, camera);
+  assert.equal(fx.speedStreaks.mesh.visible, true);
+  assert.ok(fx.speedStreaks.cursor > 0, 'high-speed frame emitted no particles');
+  fx.dispose();
 });
 
 test('moving chase camera keeps live streak dimensions below canopy-scratch caps', () => {
