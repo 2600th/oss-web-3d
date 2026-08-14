@@ -1891,6 +1891,10 @@ input:focus-visible {
   opacity: 0.75;
 }
 
+#touch.assisted .throttle-zone { display: none; }
+#touch:not(.assisted) .boost-btn { display: none; }
+#touch.assisted.recon-open .boost-btn { display: none; }
+
 .touch-btn {
   position: absolute;
   pointer-events: auto;
@@ -1904,6 +1908,18 @@ input:focus-visible {
   padding: 0;
 }
 .touch-btn:active { background: rgba(184, 216, 196, 0.20); }
+.boost-btn {
+  right: max(14px, calc(env(safe-area-inset-right) + 14px));
+  bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  width: 96px;
+  height: 58px;
+  color: var(--ink, #05070a);
+  background: rgba(184, 216, 196, 0.82);
+  border-color: rgba(233, 238, 245, 0.82);
+}
+#touch.assisted .recon-btn {
+  right: max(126px, calc(env(safe-area-inset-right) + 126px));
+}
 .recon-btn {
   right: max(84px, calc(env(safe-area-inset-right) + 84px));
   bottom: max(96px, env(safe-area-inset-bottom));
@@ -1944,6 +1960,8 @@ input:focus-visible {
    both unreadable and un-pressable. */
 @media (pointer: coarse) {
   #hud { font-size: 0.74em; }
+
+  .stick-zone { height: min(38vh, 256px); }
 
   .tape {
     width: 56px;
@@ -1995,7 +2013,7 @@ input:focus-visible {
   .quality {
     left: max(16px, env(safe-area-inset-left));
     right: 92px;
-    bottom: max(220px, calc(env(safe-area-inset-bottom) + 220px));
+    bottom: max(272px, calc(env(safe-area-inset-bottom) + 272px));
   }
   .quality-legend { font-size: 8px; letter-spacing: 0.12em; }
   .recon-frame-no {

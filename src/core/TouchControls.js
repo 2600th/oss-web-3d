@@ -30,8 +30,11 @@ export class TouchControls {
   constructor(input, root) {
     this.input = input;
     this.enabled = false;
+    this.mode = 'assisted';
     this._listeners = [];
     this._disposed = false;
+    this._window = root.ownerDocument?.defaultView ?? globalThis.window ?? null;
+    this._onWindowBlur = this._handleWindowBlur.bind(this);
 
     this.layer = document.createElement('div');
     this.layer.id = 'touch';
@@ -46,6 +49,7 @@ export class TouchControls {
     this.throttleFill = el('i', '', this.throttleZone);
     el('span', 'throttle-label', this.throttleZone, 'THR');
 
+    this.boostButton = el('button', 'touch-btn boost-btn', this.layer, 'BOOST');
     this.reconButton = el('button', 'touch-btn recon-btn', this.layer, 'RECON');
     this.shutterButton = el('button', 'touch-btn shutter-btn', this.layer, 'SHOOT');
     this.zoomInButton = el('button', 'touch-btn zoom-btn zoom-in', this.layer, '+');
@@ -54,9 +58,43 @@ export class TouchControls {
     this._stickId = null;
     this._stickOrigin = { x: 0, y: 0 };
     this._throttleId = null;
+    this._boostId = null;
     this._radius = 70;
 
+    this._applyModePresentation();
     this._bind();
+  }
+
+  setMode(mode) {
+    if (this._disposed) return;
+    const next = mode === 'direct' ? 'direct' : 'assisted';
+    if (next !== this.mode) this._clearHeldInput();
+    this.mode = next;
+    this._applyModePresentation();
+  }
+
+  _applyModePresentation() {
+    const assisted = this.mode === 'assisted';
+    this.layer.classList.toggle('assisted', assisted);
+    this.throttleZone.setAttribute('aria-hidden', String(assisted));
+    this.boostButton.setAttribute('aria-hidden', String(!assisted));
+  }
+
+  _clearHeldInput() {
+    this._stickId = null;
+    this._throttleId = null;
+    this._boostId = null;
+    this.stickRing.style.opacity = '0';
+    this.stickNub.style.opacity = '0';
+    this.input.releaseTouch();
+    this.input.setTouchBoost(false);
+  }
+
+  _handleWindowBlur() {
+    this._clearHeldInput();
+    this.input.touchRecon = false;
+    this.reconButton.classList.toggle('active', false);
+    this.layer.classList.toggle('recon-open', false);
   }
 
   setEnabled(on) {
@@ -65,11 +103,7 @@ export class TouchControls {
     this.layer.classList.toggle('show', this.enabled);
     this.layer.setAttribute('aria-hidden', String(!this.enabled));
     if (!this.enabled) {
-      this._stickId = null;
-      this._throttleId = null;
-      this.stickRing.style.opacity = '0';
-      this.stickNub.style.opacity = '0';
-      this.input.releaseTouch();
+      this._clearHeldInput();
       this.input.touchRecon = false;
       this.reconButton.classList.toggle('active', false);
       this.layer.classList.toggle('recon-open', false);
@@ -83,6 +117,7 @@ export class TouchControls {
 
   _bind() {
     const stick = this.stickZone;
+    if (this._window) this._listen(this._window, 'blur', this._onWindowBlur);
     this._listen(stick, 'pointerdown', (e) => {
       if (!this.enabled) return;
       if (this._stickId !== null) return;
@@ -122,12 +157,7 @@ export class TouchControls {
     // mobile-web flight bug.
     this._listen(stick, 'lostpointercapture', end);
     this._listen(document, 'visibilitychange', () => {
-      if (document.hidden) {
-        this._stickId = null;
-        this.stickRing.style.opacity = '0';
-        this.stickNub.style.opacity = '0';
-        this.input.releaseTouch();
-      }
+      if (document.hidden) this._handleWindowBlur();
     });
 
     // ---- throttle -------------------------------------------------------
@@ -139,14 +169,14 @@ export class TouchControls {
       this.throttleFill.style.transform = `scaleY(${t})`;
     };
     this._listen(thr, 'pointerdown', (e) => {
-      if (!this.enabled) return;
+      if (!this.enabled || this.mode !== 'direct') return;
       this._throttleId = e.pointerId;
       thr.setPointerCapture(e.pointerId);
       applyThrottle(e);
       e.preventDefault();
     });
     this._listen(thr, 'pointermove', (e) => {
-      if (!this.enabled) return;
+      if (!this.enabled || this.mode !== 'direct') return;
       if (e.pointerId !== this._throttleId) return;
       applyThrottle(e);
       e.preventDefault();
@@ -160,6 +190,23 @@ export class TouchControls {
     this._listen(thr, 'pointercancel', thrEnd);
 
     // ---- buttons --------------------------------------------------------
+    const boostEnd = (e) => {
+      if (e.pointerId !== this._boostId) return;
+      this._boostId = null;
+      this.input.setTouchBoost(false);
+      e.preventDefault();
+    };
+    this._listen(this.boostButton, 'pointerdown', (e) => {
+      if (!this.enabled || this.mode !== 'assisted' || this._boostId !== null) return;
+      this._boostId = e.pointerId;
+      this.boostButton.setPointerCapture(e.pointerId);
+      this.input.setTouchBoost(true);
+      e.preventDefault();
+    });
+    this._listen(this.boostButton, 'pointerup', boostEnd);
+    this._listen(this.boostButton, 'pointercancel', boostEnd);
+    this._listen(this.boostButton, 'lostpointercapture', boostEnd);
+
     // Recon is held on the keyboard, so it is a toggle here: asking a player to
     // keep a thumb pinned while steering with the other and framing a shot is
     // one thumb too many.
@@ -213,6 +260,21 @@ export class TouchControls {
     // A small dead zone: a thumb resting on glass is never perfectly still, and
     // without one the aircraft rolls slowly whenever a finger is down.
     const dead = 0.12;
+    if (this.mode === 'assisted') {
+      const clampedLength = Math.hypot(dx, dy);
+      const rawMagnitude = clamp(clampedLength / this._radius, 0, 1);
+      const magnitude = rawMagnitude < dead
+        ? 0
+        : ((rawMagnitude - dead) / (1 - dead)) ** 1.35;
+      const directionScale = clampedLength > 0 ? magnitude / clampedLength : 0;
+      // Input converts negative pitch into positive semantic climb in the
+      // default up-to-climb mode, so dragging upward reads as "climb".
+      this.input.setTouchAxes(dy * directionScale, dx * directionScale);
+      return;
+    }
+
+    // Direct mode intentionally retains the original independently-shaped raw
+    // pitch/roll stick for players who chose the simulator-style controls.
     const norm = (v) => {
       const t = clamp(v / this._radius, -1, 1);
       const m = Math.abs(t);
