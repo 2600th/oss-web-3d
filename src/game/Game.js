@@ -6,6 +6,7 @@ import { Water } from '../world/Water.js';
 import { CloudVolume } from '../world/CloudVolume.js';
 import { terrainHeight, maxHeightAlong } from '../world/heightfield.js';
 import { FlightFx } from '../fx/FlightFx.js';
+import { computeMotionProfile } from '../fx/post/motionProfile.js';
 import { setFxResolution, setSceneDepth } from '../fx/gpu/FrameUniforms.js';
 import { Audio } from '../fx/Audio.js';
 import { FlightModel } from '../flight/FlightModel.js';
@@ -160,6 +161,28 @@ export class Game {
     this._cameraDelta = new THREE.Vector3();
     this._cameraRight = new THREE.Vector3();
     this._cameraUp = new THREE.Vector3();
+    this._motionInput = {
+      airspeed: 0,
+      angularX: 0,
+      angularY: 0,
+      dt: 0,
+      flying: false,
+      reconActive: false,
+      reducedMotion: false,
+    };
+    this._motionProfile = {
+      angularX: 0,
+      angularY: 0,
+      radialPixels: 0,
+      amount: 0,
+      edgeStart: 0.45,
+      combinedPixels: 0,
+    };
+    this._motionWasReconActive = false;
+    this._reducedMotion = false;
+    this._motionMediaQuery = null;
+    this._motionMediaListener = null;
+    this._installMotionPreference();
     this._cinematicLook = new THREE.Vector3();
     this._disposed = false;
   }
@@ -244,6 +267,8 @@ export class Game {
     this.screens.hideAll();
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
+    this.reconActive = false;
+    this._resetMotionBaseline();
     this.terrain.prime(this.flight.position);
     this.fx.reset();
     // Launch is always reached through a gesture (click or key), which is what
@@ -518,6 +543,10 @@ export class Game {
   }
 
   _takePhoto(evaluation) {
+    // Capture can happen on the same update that opens recon. The post stack
+    // has not reached its end-of-frame update yet, so explicitly clear the
+    // prior chase blur before ReconCamera renders the plate.
+    this._disableMotionBlur();
     const shot = this.recon.capture(this.engine, evaluation);
     this.mission.photosTaken++;
 
@@ -666,14 +695,29 @@ export class Game {
     this._cameraDelta.subVectors(this._cameraForwardNow, this._cameraForward);
     this._cameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
     this._cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    const motionX = THREE.MathUtils.clamp(this._cameraDelta.dot(this._cameraRight) * 130, -18, 18);
-    const motionY = THREE.MathUtils.clamp(this._cameraDelta.dot(this._cameraUp) * 130, -18, 18);
-    const angularMotion = Math.min(1, this._cameraDelta.length() * 16);
+    const leavingRecon = this._motionWasReconActive && !this.reconActive;
+    if (leavingRecon) {
+      // Recon and chase are a camera cut, not a high-speed pan. Adopt the new
+      // direction before measuring angular velocity on the release frame.
+      this._cameraForward.copy(this._cameraForwardNow);
+      this._cameraDelta.set(0, 0, 0);
+    }
+    const motionInput = this._motionInput ?? (this._motionInput = {});
+    motionInput.airspeed = this.flight.airspeed;
+    motionInput.angularX = this._cameraDelta.dot(this._cameraRight);
+    motionInput.angularY = this._cameraDelta.dot(this._cameraUp);
+    motionInput.dt = dt;
+    motionInput.flying = this.state === 'flying';
+    motionInput.reconActive = Boolean(this.reconActive);
+    motionInput.reducedMotion = Boolean(this._reducedMotion || this.chase?.reducedMotion);
+    const motionProfile = computeMotionProfile(
+      motionInput,
+      this._motionProfile ?? (this._motionProfile = {}),
+    );
     const speedMotion = this.state === 'flying'
       ? THREE.MathUtils.clamp((this.flight.airspeed - 160) / 360, 0, 1) * 0.18
       : 0;
-    const crashMotion = this._postCrashImpulse * 0.45;
-    this.engine.setMotionBlur(motionX, motionY, Math.min(0.6, angularMotion * 0.34 + speedMotion + crashMotion));
+    this.engine.setMotionBlur(motionProfile);
 
     const reheat = this.state === 'flying'
       ? THREE.MathUtils.clamp((this.flight.throttleSmoothed - 0.84) / 0.16, 0, 1)
@@ -687,11 +731,58 @@ export class Game {
     this._postCrashImpulse *= Math.exp(-dt * 2.3);
     if (this._postCrashImpulse < 0.001) this._postCrashImpulse = 0;
     this._cameraForward.copy(this._cameraForwardNow);
+    this._motionWasReconActive = Boolean(this.reconActive);
+  }
+
+  _disableMotionBlur() {
+    const profile = this._motionProfile ?? (this._motionProfile = {});
+    profile.angularX = 0;
+    profile.angularY = 0;
+    profile.radialPixels = 0;
+    profile.amount = 0;
+    profile.edgeStart = 0.45;
+    profile.combinedPixels = 0;
+    this.engine?.setMotionBlur?.(profile);
+  }
+
+  _resetMotionBaseline() {
+    const forward = this._cameraForward ?? (this._cameraForward = new THREE.Vector3());
+    this.engine?.camera?.getWorldDirection?.(forward);
+    this._motionWasReconActive = Boolean(this.reconActive);
+    this._disableMotionBlur();
+  }
+
+  _installMotionPreference() {
+    this._disposeMotionPreference();
+    const query = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
+    this._motionMediaQuery = query;
+    this._reducedMotion = Boolean(query?.matches);
+    this.chase?.setReducedMotion?.(this._reducedMotion);
+    if (!query) return;
+    this._motionMediaListener = (event) => {
+      this._reducedMotion = Boolean(event.matches);
+      this.chase?.setReducedMotion?.(this._reducedMotion);
+      if (this._reducedMotion) this._disableMotionBlur();
+    };
+    if (query.addEventListener) query.addEventListener('change', this._motionMediaListener);
+    else query.addListener?.(this._motionMediaListener);
+  }
+
+  _disposeMotionPreference() {
+    const query = this._motionMediaQuery;
+    const listener = this._motionMediaListener;
+    if (query && listener) {
+      if (query.removeEventListener) query.removeEventListener('change', listener);
+      else query.removeListener?.(listener);
+    }
+    this._motionMediaQuery = null;
+    this._motionMediaListener = null;
   }
 
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    this._disposeMotionPreference();
     this.navigationHint?.reset();
     this._disposeWaterRefraction();
     this.mission?.dispose?.();

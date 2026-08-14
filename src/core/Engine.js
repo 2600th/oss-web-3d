@@ -300,9 +300,10 @@ export class Engine {
     setPassEnabled(this.radiancePass, Boolean(this.clouds) || this.lensArtifacts.visibility > 0);
   }
 
-  setMotionBlur(x, y, amount = 1) {
-    this.motionEffect.setVelocity?.(x, y);
-    if ('amount' in this.motionEffect) this.motionEffect.amount = amount;
+  setMotionBlur(motion = {}) {
+    this.motionEffect.setMotion?.(motion);
+    const amount = motion.amount ?? 0;
+    if (!this.motionEffect.setMotion && 'amount' in this.motionEffect) this.motionEffect.amount = amount;
     const desktop = this.settings.tier.name === 'medium' || this.settings.tier.name === 'high';
     setPassEnabled(this.motionPass, desktop && (this.motionEffect.amount ?? amount) > 0);
   }
