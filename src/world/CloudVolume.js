@@ -424,6 +424,20 @@ function makeTemporalTarget(type = THREE.UnsignedByteType) {
   return target;
 }
 
+function textureBytesPerChannel(type) {
+  if (type === THREE.HalfFloatType) return 2;
+  if (type === THREE.UnsignedByteType) return 1;
+  throw new TypeError(`Unsupported cloud render-target texture type: ${type}`);
+}
+
+function renderTargetBytes(target) {
+  const samples = Math.max(1, target.samples || 1);
+  return target.textures.reduce((total, texture) => (
+    total + target.width * target.height * 4 *
+      textureBytesPerChannel(texture.type) * samples
+  ), 0);
+}
+
 export class CloudVolume extends Effect {
   constructor(environment, camera) {
     const effectUniforms = new Map([
@@ -551,6 +565,60 @@ export class CloudVolume extends Effect {
 
   getShadowContract() {
     return this.shadowContract;
+  }
+
+  resetHistory(_reason) {
+    this._historyValid = false;
+    this._historyFrames = 0;
+    this.uniforms.get('uCloudWarmup').value = 0;
+  }
+
+  getResourceReport() {
+    const historyTarget = this._temporalTargets[0];
+    const historyTexture = historyTarget.textures[0];
+    const shadowTexture = this._shadowTarget.texture;
+    const historyBytes = this._temporalTargets.reduce(
+      (total, target) => total + renderTargetBytes(target),
+      0,
+    );
+    const shadowBytes = renderTargetBytes(this._shadowTarget);
+    const resources = [
+      {
+        name: 'temporal-history',
+        width: historyTarget.width,
+        height: historyTarget.height,
+        channels: 4,
+        bytesPerChannel: textureBytesPerChannel(historyTexture.type),
+        layers: 1,
+        samples: Math.max(1, historyTarget.samples || 1),
+        attachments: historyTarget.textures.length,
+        history: this._temporalTargets.length,
+        bytes: historyBytes,
+      },
+      {
+        name: 'cloud-shadow',
+        width: this._shadowTarget.width,
+        height: this._shadowTarget.height,
+        channels: 4,
+        bytesPerChannel: textureBytesPerChannel(shadowTexture.type),
+        layers: 1,
+        samples: Math.max(1, this._shadowTarget.samples || 1),
+        attachments: this._shadowTarget.textures.length,
+        history: 1,
+        bytes: shadowBytes,
+      },
+    ];
+
+    return {
+      backend: 'current',
+      renderTargetCount: this._temporalTargets.length + 1,
+      textureCount: this._temporalTargets.reduce(
+        (total, target) => total + target.textures.length,
+        this._shadowTarget.textures.length,
+      ),
+      resources,
+      totalBytes: historyBytes + shadowBytes,
+    };
   }
 
   initialize(renderer) {

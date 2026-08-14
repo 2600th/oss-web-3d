@@ -405,4 +405,62 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
   clouds.dispose();
 }
 
+{
+  const clouds = new CloudVolume(environment(), camera());
+  clouds._historyValid = true;
+  clouds._historyFrames = 5;
+  clouds.uniforms.get('uCloudWarmup').value = 0.75;
+  const frameBeforeReset = clouds._frame;
+  const writeIndexBeforeReset = clouds._writeIndex;
+
+  clouds.resetHistory('camera-cut');
+
+  assert.equal(clouds._historyValid, false);
+  assert.equal(clouds._historyFrames, 0);
+  assert.equal(clouds.uniforms.get('uCloudWarmup').value, 0);
+  assert.equal(clouds._frame, frameBeforeReset, 'history reset must not alter checker scheduling');
+  assert.equal(clouds._writeIndex, writeIndexBeforeReset, 'history reset must not replace owned targets');
+  clouds.dispose();
+}
+
+{
+  const clouds = new CloudVolume(environment(), camera());
+  clouds.setSize(1920, 1080);
+  clouds.initialize(renderer({ halfFloat: true }));
+  clouds.setQuality({ name: 'high' });
+
+  const report = clouds.getResourceReport();
+  assert.equal(report.backend, 'current');
+  assert.equal(report.renderTargetCount, 3);
+  assert.equal(report.textureCount, 5);
+  assert.deepEqual(report.resources, [
+    {
+      name: 'temporal-history',
+      width: 768,
+      height: 432,
+      channels: 4,
+      bytesPerChannel: 2,
+      layers: 1,
+      samples: 1,
+      attachments: 2,
+      history: 2,
+      bytes: 10616832,
+    },
+    {
+      name: 'cloud-shadow',
+      width: 256,
+      height: 256,
+      channels: 4,
+      bytesPerChannel: 1,
+      layers: 1,
+      samples: 1,
+      attachments: 1,
+      history: 1,
+      bytes: 262144,
+    },
+  ]);
+  assert.equal(report.totalBytes, 10878976);
+  clouds.dispose();
+}
+
 console.log('cloud R6 projected-frustum and temporal contracts passed');
