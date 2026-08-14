@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 const navigationCueModule = await import('./NavigationCue.js').catch(() => ({}));
-const { NavigationCue, placeNavigationCue } = navigationCueModule;
+const { NavigationCue, edgeCandidates, placeNavigationCue } = navigationCueModule;
 
 function intersects(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
@@ -52,6 +52,30 @@ test('edge placement stays inside desktop safe insets and clears the flight tape
   assert.equal(intersects(placed.rect, tapeRect), false);
   assert.ok(gapBetween(placed.rect, tapeRect) >= fixture.gap);
   assert.equal(placed.edge, 'left');
+});
+
+test('transit edge candidates are lazy and reuse one scratch record', () => {
+  assert.equal(typeof edgeCandidates, 'function');
+  let reads = 0;
+  const edgeNdc = {
+    get x() { reads += 1; return 1; },
+    get y() { reads += 1; return 0; },
+  };
+  const candidates = edgeCandidates(
+    'right',
+    { left: 12, top: 47, right: 378, bottom: 810 },
+    { width: 112, height: 58 },
+    edgeNdc,
+  );
+
+  assert.equal(reads, 0, 'constructing the iterator must not eagerly scan the edge');
+  const first = candidates.next();
+  assert.equal(first.done, false);
+  assert.equal(reads, 2);
+  const second = candidates.next();
+  assert.equal(second.done, false);
+  assert.equal(second.value, first.value, 'candidate iteration should reuse a single scratch record');
+  candidates.return();
 });
 
 test('phone placement moves along the requested edge to clear touch controls by eight pixels', () => {

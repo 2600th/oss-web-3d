@@ -42,7 +42,7 @@ function clears(rect, obstacles, gap) {
   ));
 }
 
-function edgeCandidates(edge, bounds, cueSize, edgeNdc) {
+export function* edgeCandidates(edge, bounds, cueSize, edgeNdc) {
   const { left, top, right, bottom } = bounds;
   const maxLeft = right - cueSize.width;
   const maxTop = bottom - cueSize.height;
@@ -62,16 +62,21 @@ function edgeCandidates(edge, bounds, cueSize, edgeNdc) {
   const start = edge === 'left' || edge === 'right' ? top : left;
   const end = edge === 'left' || edge === 'right' ? maxTop : maxLeft;
   const ideal = edge === 'left' || edge === 'right' ? targetY : targetX;
-  const positions = [ideal];
+  const vertical = edge === 'left' || edge === 'right';
+  const candidate = { left: vertical ? fixed : ideal, top: vertical ? ideal : fixed };
+  yield candidate;
   for (let offset = 1; offset <= Math.ceil(end - start); offset += 1) {
-    if (ideal - offset >= start) positions.push(ideal - offset);
-    if (ideal + offset <= end) positions.push(ideal + offset);
+    if (ideal - offset >= start) {
+      if (vertical) candidate.top = ideal - offset;
+      else candidate.left = ideal - offset;
+      yield candidate;
+    }
+    if (ideal + offset <= end) {
+      if (vertical) candidate.top = ideal + offset;
+      else candidate.left = ideal + offset;
+      yield candidate;
+    }
   }
-  return positions.map((position) => (
-    edge === 'left' || edge === 'right'
-      ? { left: fixed, top: position }
-      : { left: position, top: fixed }
-  ));
 }
 
 function* projectedCandidates(bounds, cueSize, projectedNdc) {
