@@ -45,6 +45,7 @@ export class CloudBufferDebugEffect extends Effect {
     this.clouds = clouds;
     this.authoredHaze = clouds.haze;
     this.authoredSkipRendering = clouds.skipRendering;
+    this.freezeNextCloudUpdate = false;
     this.view = 'composite';
     this.setView(view);
   }
@@ -54,6 +55,7 @@ export class CloudBufferDebugEffect extends Effect {
       this.view = view;
       this.enabled = false;
       this.clouds.haze = this.authoredHaze;
+      this.clouds.skipRendering = this.authoredSkipRendering;
       return;
     }
     if (!CLOUD_BUFFER_DEBUG_VIEWS.includes(view)) {
@@ -70,11 +72,17 @@ export class CloudBufferDebugEffect extends Effect {
     if (!this.enabled) return;
     this.clouds.haze = false;
     this.clouds.skipRendering = true;
-    this.clouds.update(renderer, inputBuffer, deltaTime);
+    const freezeCloudUpdate = this.freezeNextCloudUpdate;
+    this.freezeNextCloudUpdate = false;
+    if (!freezeCloudUpdate) this.clouds.update(renderer, inputBuffer, deltaTime);
     // CloudsPass swaps resolve/history targets on every update. Bind the
     // accessor result, not a cached target, so this always samples the latest
     // resolved cloud buffer by identity.
     this.uniforms.get('uCloudBuffer').value = this.clouds.cloudsPass.outputBuffer;
+  }
+
+  renderFrozenBufferOnce() {
+    this.freezeNextCloudUpdate = true;
   }
 
   debugPixel(rgba, pixelIndex) {

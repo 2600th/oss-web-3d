@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Data3DTexture, DataUtils, HalfFloatType, RedFormat, Texture } from 'three';
+import { Data3DTexture, RedFormat, Texture } from 'three';
 import { DEFAULT_STBN_URL } from '@takram/three-geospatial';
 
 import {
   COMPARISON_SCENARIO_NAMES,
   CloudComparisonHarness,
   assessTakramReferenceAssetEligibility,
-  assessRawCloudDiagnosticEligibility,
   assessVisualEligibility,
   applyContextEvent,
   applyComparisonEvent,
@@ -19,15 +18,17 @@ import {
   loadOfficialStbnTexture,
   installDedicatedCloudPass,
   installConsoleIssueCapture,
-  measureCloudBufferPixels,
   parseComparisonQuery,
   publishComparisonResult,
   renderComparisonFrame,
   resetScenarioClock,
-  readCloudOutputBuffer,
   sampleScenarioCameraPose,
   shouldBypassTerrainDepth,
 } from './CloudComparisonHarness.js';
+import {
+  assessRawCloudDiagnosticEligibility,
+  measureCloudBufferPixels,
+} from './CloudBufferDiagnostics.js';
 import { CloudLifecycleAuditor } from './CloudBenchmark.js';
 import { getTakramCloudProfile, validateTakramProfileScenario } from './TakramCloudProfiles.js';
 import { findPostSites } from '../../game/Mission.js';
@@ -198,41 +199,6 @@ test('raw cloud buffer measurements use alpha from the source buffer and report 
   assert.equal(measured.maxHorizontalRun, 3);
   assert.equal(measured.finalCompositeContrast.status, 'MEASURED');
   assert.ok(measured.finalCompositeContrast.overlapRatio > 0);
-});
-
-test('raw cloud readback resolves the exact output buffer target and decodes half-float alpha values', () => {
-  const output = { name: 'resolved-history' };
-  const target = { width: 2, height: 1, texture: output };
-  const clouds = {
-    cloudsPass: {
-      outputBuffer: output,
-      historyRenderTarget: target,
-      resolveRenderTarget: { texture: { name: 'stale-resolve' } },
-    },
-  };
-  target.texture.type = HalfFloatType;
-  const renderer = {
-    readRenderTargetPixels(actualTarget, x, y, width, height, pixels) {
-      assert.strictEqual(actualTarget, target);
-      assert.equal(x, 0);
-      assert.equal(y, 0);
-      assert.equal(width, 2);
-      assert.equal(height, 1);
-      assert.ok(pixels instanceof Uint16Array);
-      pixels.set([
-        DataUtils.toHalfFloat(0.1), DataUtils.toHalfFloat(0.2),
-        DataUtils.toHalfFloat(0.3), DataUtils.toHalfFloat(0.4),
-        DataUtils.toHalfFloat(0.5), DataUtils.toHalfFloat(0.6),
-        DataUtils.toHalfFloat(0.7), DataUtils.toHalfFloat(0.8),
-      ]);
-    },
-  };
-
-  const readback = readCloudOutputBuffer(renderer, clouds);
-  assert.equal(readback.status, 'MEASURED');
-  assert.ok(readback.pixels instanceof Float32Array);
-  assert.ok(Math.abs(readback.pixels[3] - 0.4) < 0.001);
-  assert.ok(Math.abs(readback.pixels[7] - 0.8) < 0.001);
 });
 
 test('raw diagnostic eligibility rejects an empty alpha buffer, missing official assets, and unsafe layer separation', () => {
@@ -640,7 +606,7 @@ test('comparison makes an unavailable official cloud asset ineligible before war
   }), { eligible: true, reason: null });
 });
 
-test('startRun stops before warmup, render, and benchmark frame one when cloud assets fail', async () => {
+test('startRun publishes and returns an ineligible result before warmup when cloud assets fail', async () => {
   const calls = { assetLoader: 0, render: 0, benchmarkFrames: 0 };
   const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
     disposed: false,
@@ -655,10 +621,17 @@ test('startRun stops before warmup, render, and benchmark frame one when cloud a
     requiresEnabledTakram: true,
     cloudAssets: null,
     cloudAssetMode: 'loading-official',
+    profileName: 'takram-reference',
+    view: 'cloud-alpha',
+    profileContext: null,
+    terrainDepthBypassed: false,
     historyResets: [],
     contextEvents: [],
     lifecycleAudit: { reports: [] },
-    scenario: { warmupFrames: 120, events: [], fixedDeltaSeconds: 1 / 60 },
+    scenario: {
+      name: 'cloud-buffer', warmupFrames: 120, events: [], fixedDeltaSeconds: 1 / 60,
+      captureKind: 'raw-cloud-buffer-diagnostic', inSceneMissionCapture: false,
+    },
     environment: { uniforms: { uTime: { value: 0 }, uCloudTime: { value: 0 } } },
     benchmark: {
       minimumSamples: 1,
@@ -667,12 +640,13 @@ test('startRun stops before warmup, render, and benchmark frame one when cloud a
     },
     backend: {
       profile: { enabled: true },
+      cloudProfile: null,
       setSize() {},
       setCloudTextures() { throw new Error('cloud textures must not be installed after failure'); },
     },
     engine: {
       maxPixelRatio: 1,
-      camera: { updateProjectionMatrix() {} },
+      camera: { position: { y: 6000 }, updateProjectionMatrix() {} },
       renderer: {
         setPixelRatio() {},
         setSize() {},
@@ -681,6 +655,7 @@ test('startRun stops before warmup, render, and benchmark frame one when cloud a
       composer: { setSize() {} },
       render() { calls.render += 1; },
     },
+    canvas: { width: 320, height: 180 },
     _prepareStbn: async () => {},
     async _loadOfficialCloudAssets() {
       calls.assetLoader += 1;
@@ -692,11 +667,16 @@ test('startRun stops before warmup, render, and benchmark frame one when cloud a
   globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
   console.error = () => {};
   try {
-    await assert.rejects(
-      runtime.startRun(),
-      error => error?.code === 'ineligible-reference'
-        && error.message === 'Ineligible Takram reference: official-cloud-assets-unavailable',
-    );
+    const result = await runtime.startRun();
+    assert.strictEqual(result, runtime.runResult);
+    assert.equal(result.profile, 'takram-reference');
+    assert.equal(result.view, 'cloud-alpha');
+    assert.equal(result.cloudAssetMode, 'unavailable');
+    assert.deepEqual(result.eligibility, {
+      eligible: false,
+      reason: 'official-cloud-assets-unavailable',
+      reasons: ['official-cloud-assets-unavailable'],
+    });
   } finally {
     globalThis.window = previousWindow;
     console.error = previousConsoleError;

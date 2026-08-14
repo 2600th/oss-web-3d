@@ -50,7 +50,26 @@ test('raw cloud debug disables haze only while active and rebinds the resolved o
 
   effect.setView('composite');
   assert.equal(clouds.haze, true);
+  assert.equal(clouds.skipRendering, false);
   effect.dispose();
   assert.equal(clouds.haze, true);
   assert.equal(clouds.skipRendering, false);
+});
+
+test('raw cloud debug can present its already-resolved buffer without advancing CloudsEffect', () => {
+  const output = floatTexture([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]);
+  let updates = 0;
+  const clouds = {
+    haze: true,
+    skipRendering: false,
+    cloudsPass: { outputBuffer: output },
+    update() { updates += 1; },
+  };
+  const effect = new CloudBufferDebugEffect(clouds, 'cloud-alpha');
+
+  effect.renderFrozenBufferOnce();
+  effect.update({}, {}, 1 / 60);
+
+  assert.equal(updates, 0);
+  assert.strictEqual(effect.uniforms.get('uCloudBuffer').value, output);
 });

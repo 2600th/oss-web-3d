@@ -15,6 +15,12 @@ import { terrainHeight } from '../heightfield.js';
 import { CurrentCloudRendererAdapter } from './CurrentCloudRendererAdapter.js';
 import { CloudBufferDebugEffect, CLOUD_BUFFER_DEBUG_VIEWS } from './CloudBufferDebugEffect.js';
 import {
+  assessRawCloudDiagnosticEligibility,
+  measureCloudBufferPixels,
+  readCloudOutputBuffer,
+} from './CloudBufferDiagnostics.js';
+import { captureFrozenCloudCompositeEvidence } from './CloudBufferEvidenceCapture.js';
+import {
   CloudBenchmark,
   CloudLifecycleAuditor,
   combineOwnedResourceItems,
@@ -45,8 +51,6 @@ const TERRAIN_SEED = 'safed-sagar-heightfield-v1';
 const WARMUP_FRAMES = 120;
 const CAPTURE_FRAMES = 60;
 const FIXED_DT = 1 / 60;
-export const CLOUD_ALPHA_OCCUPANCY_THRESHOLD = 0.05;
-export const FINAL_COMPOSITE_CONTRAST_THRESHOLD = 0.04;
 
 function event(frame, values = {}) {
   return { frame, ...values };
@@ -264,6 +268,28 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+function unverifiedBenchmarkReport() {
+  return {
+    status: 'UNVERIFIED',
+    cpu: { sampleCount: 0, medianMs: null, p95Ms: null },
+    gpu: {
+      supported: false,
+      status: 'UNVERIFIED',
+      sampleCount: 0,
+      medianMs: null,
+      p95Ms: null,
+      disjointCount: 0,
+      droppedCount: 0,
+      pendingCount: 0,
+    },
+    fps: null,
+    fpsStatus: 'UNVERIFIED',
+    frameCadence: { status: 'UNVERIFIED', sampleCount: 0, medianMs: null, p95Ms: null },
+    capabilities: { timerQuery: false, webgl2: false },
+    observation: { visibilityStates: [], focusStates: [], rejectedFrames: 0 },
+  };
+}
+
 deepFreeze(SCENARIOS);
 
 export const COMPARISON_SCENARIO_NAMES = Object.freeze(Object.keys(SCENARIOS));
@@ -479,216 +505,6 @@ export function assessTakramReferenceAssetEligibility({
   return { eligible: true, reason: null };
 }
 
-export function assessRawCloudDiagnosticEligibility({
-  cloudAssetMode,
-  nearestLayerBoundaryDistance,
-  rawMetrics,
-}) {
-  const reasons = [];
-  if (cloudAssetMode !== 'official-pinned') reasons.push('official-cloud-assets-unavailable');
-  if (!(nearestLayerBoundaryDistance >= 500)) reasons.push('camera-near-zero-density-boundary');
-  if (rawMetrics?.status !== 'MEASURED') reasons.push('cloud-buffer-readback-unavailable');
-  else if (!(rawMetrics.alphaOccupancy > 0)) reasons.push('empty-cloud-buffer-alpha');
-  return {
-    eligible: reasons.length === 0,
-    reason: reasons[0] ?? null,
-    reasons,
-  };
-}
-
-function normalisedChannel(pixels, offset) {
-  const value = pixels[offset] ?? 0;
-  return pixels instanceof Float32Array || pixels instanceof Float64Array
-    ? THREE.MathUtils.clamp(value, 0, 1)
-    : value / 255;
-}
-
-function luminanceAt(pixels, offset) {
-  const red = normalisedChannel(pixels, offset);
-  const green = normalisedChannel(pixels, offset + 1);
-  const blue = normalisedChannel(pixels, offset + 2);
-  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
-}
-
-function compositeContrastMask(pixels, width, height, threshold) {
-  const mask = new Uint8Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = y * width + x;
-      const center = luminanceAt(pixels, index * 4);
-      let contrast = 0;
-      if (x + 1 < width) contrast = Math.max(
-        contrast,
-        Math.abs(center - luminanceAt(pixels, (index + 1) * 4)),
-      );
-      if (y + 1 < height) contrast = Math.max(
-        contrast,
-        Math.abs(center - luminanceAt(pixels, (index + width) * 4)),
-      );
-      if (x > 0) contrast = Math.max(
-        contrast,
-        Math.abs(center - luminanceAt(pixels, (index - 1) * 4)),
-      );
-      if (y > 0) contrast = Math.max(
-        contrast,
-        Math.abs(center - luminanceAt(pixels, (index - width) * 4)),
-      );
-      mask[index] = contrast >= threshold ? 1 : 0;
-    }
-  }
-  return mask;
-}
-
-function connectedComponentCount(mask, width, height) {
-  const visited = new Uint8Array(mask.length);
-  let count = 0;
-  for (let start = 0; start < mask.length; start += 1) {
-    if (mask[start] === 0 || visited[start] !== 0) continue;
-    count += 1;
-    const queue = [start];
-    visited[start] = 1;
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      const index = queue[cursor];
-      const x = index % width;
-      const y = Math.floor(index / width);
-      const neighbors = [
-        x > 0 ? index - 1 : -1,
-        x + 1 < width ? index + 1 : -1,
-        y > 0 ? index - width : -1,
-        y + 1 < height ? index + width : -1,
-      ];
-      for (const neighbor of neighbors) {
-        if (neighbor < 0 || mask[neighbor] === 0 || visited[neighbor] !== 0) continue;
-        visited[neighbor] = 1;
-        queue.push(neighbor);
-      }
-    }
-  }
-  return count;
-}
-
-/**
- * Measures raw alpha directly from CloudsPass.outputBuffer readback. The
- * final-composite contrast is a separate diagnostic overlay check; it never
- * creates or modifies the cloud occupancy mask.
- */
-export function measureCloudBufferPixels({
-  pixels,
-  width,
-  height,
-  alphaThreshold = CLOUD_ALPHA_OCCUPANCY_THRESHOLD,
-  finalCompositePixels = null,
-  finalCompositeWidth = null,
-  finalCompositeHeight = null,
-}) {
-  if (!(width > 0 && height > 0) || pixels == null || pixels.length !== width * height * 4) {
-    return { status: 'UNVERIFIED', reason: 'invalid-cloud-buffer-readback' };
-  }
-  const mask = new Uint8Array(width * height);
-  let occupied = 0;
-  let topHalfOccupied = 0;
-  let topHalfPixels = 0;
-  let maxHorizontalRun = 0;
-  for (let y = 0; y < height; y += 1) {
-    let run = 0;
-    for (let x = 0; x < width; x += 1) {
-      const index = y * width + x;
-      const occupiedHere = normalisedChannel(pixels, index * 4 + 3) >= alphaThreshold;
-      if (y >= Math.floor(height / 2)) topHalfPixels += 1;
-      if (occupiedHere) {
-        mask[index] = 1;
-        occupied += 1;
-        run += 1;
-        if (y >= Math.floor(height / 2)) topHalfOccupied += 1;
-      } else {
-        run = 0;
-      }
-      maxHorizontalRun = Math.max(maxHorizontalRun, run);
-    }
-  }
-  const finalCompatible = finalCompositePixels != null
-    && finalCompositeWidth === width
-    && finalCompositeHeight === height
-    && finalCompositePixels.length === width * height * 4;
-  let finalCompositeContrast = {
-    status: 'UNVERIFIED',
-    reason: 'final-composite-readback-unavailable',
-    threshold: FINAL_COMPOSITE_CONTRAST_THRESHOLD,
-    overlapPixels: null,
-    overlapRatio: null,
-  };
-  if (finalCompatible) {
-    const contrastMask = compositeContrastMask(
-      finalCompositePixels,
-      width,
-      height,
-      FINAL_COMPOSITE_CONTRAST_THRESHOLD,
-    );
-    const overlapPixels = mask.reduce((total, alpha, index) => (
-      total + (alpha !== 0 && contrastMask[index] !== 0 ? 1 : 0)
-    ), 0);
-    finalCompositeContrast = {
-      status: 'MEASURED',
-      reason: null,
-      threshold: FINAL_COMPOSITE_CONTRAST_THRESHOLD,
-      overlapPixels,
-      overlapRatio: occupied === 0 ? null : overlapPixels / occupied,
-    };
-  }
-  return deepFreeze({
-    status: 'MEASURED',
-    reason: null,
-    source: 'cloudsPass.outputBuffer',
-    width,
-    height,
-    alphaThreshold,
-    alphaOccupancy: occupied / mask.length,
-    topHalfAlphaOccupancy: topHalfPixels === 0 ? 0 : topHalfOccupied / topHalfPixels,
-    connectedComponents: connectedComponentCount(mask, width, height),
-    maxHorizontalRun,
-    finalCompositeContrast,
-  });
-}
-
-function cloudOutputRenderTarget(clouds) {
-  const pass = clouds?.cloudsPass;
-  const output = pass?.outputBuffer;
-  if (output == null) return null;
-  return [pass.historyRenderTarget, pass.resolveRenderTarget, pass.currentRenderTarget]
-    .find(target => target?.texture === output) ?? null;
-}
-
-export function readCloudOutputBuffer(renderer, clouds) {
-  const target = cloudOutputRenderTarget(clouds);
-  if (target == null || typeof renderer?.readRenderTargetPixels !== 'function') {
-    return { status: 'UNVERIFIED', reason: 'cloud-buffer-readback-unavailable' };
-  }
-  const width = target.width;
-  const height = target.height;
-  if (!(width > 0 && height > 0)) {
-    return { status: 'UNVERIFIED', reason: 'invalid-cloud-buffer-size' };
-  }
-  const textureType = target.texture.type;
-  const rawPixels = textureType === THREE.HalfFloatType
-    ? new Uint16Array(width * height * 4)
-    : textureType === THREE.FloatType
-      ? new Float32Array(width * height * 4)
-      : new Uint8Array(width * height * 4);
-  try {
-    renderer.readRenderTargetPixels(target, 0, 0, width, height, rawPixels);
-  } catch (error) {
-    return {
-      status: 'UNVERIFIED',
-      reason: 'cloud-buffer-readback-failed',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  const pixels = rawPixels instanceof Uint16Array
-    ? Float32Array.from(rawPixels, value => THREE.DataUtils.fromHalfFloat(value))
-    : rawPixels;
-  return { status: 'MEASURED', target, width, height, pixels };
-}
-
 export function createCloudDiagnosticMetadata({
   backend,
   profileName,
@@ -699,6 +515,7 @@ export function createCloudDiagnosticMetadata({
   profileContext,
   cloudAssetMode,
   rawMetrics,
+  captureEvidence = null,
   terrainDepthBypassed,
 }) {
   const nearestLayerBoundaryDistance = cloudProfile?.layers == null
@@ -714,6 +531,7 @@ export function createCloudDiagnosticMetadata({
       cloudAssetMode,
       nearestLayerBoundaryDistance,
       rawMetrics,
+      captureEvidence,
     })
     : profileValidation.eligible
       ? { eligible: true, reason: null, reasons: [] }
@@ -854,15 +672,6 @@ function configureDiagnosticDepth(runtime) {
   runtime.backend.setDepthTexture(
     bypassTerrainDepth ? null : runtime.engine.composer.stableDepthTexture,
   );
-}
-
-function setRuntimeComparisonView(runtime, view) {
-  if (runtime.view === view) return;
-  releaseDedicatedCloudPass(runtime.engine);
-  disposeComparisonEffects(runtime);
-  runtime.view = view;
-  installComparisonEffects(runtime);
-  configureDiagnosticDepth(runtime);
 }
 
 function resolvedPose(pose, objectiveAim) {
@@ -1496,28 +1305,142 @@ export class CloudComparisonHarness {
   }
 
   _assertTakramReferenceAssetsAvailable() {
-    const eligibility = assessTakramReferenceAssetEligibility({
-      backend: this.backendName,
-      requiresEnabledTakram: this.requiresEnabledTakram,
-      cloudAssetMode: this.cloudAssetMode,
-    });
+    const eligibility = this._takramReferenceAssetEligibility();
     if (eligibility.eligible) return;
     const error = new Error(`Ineligible Takram reference: ${eligibility.reason}`);
     error.code = 'ineligible-reference';
     throw error;
   }
 
-  _captureFinalCompositeForRawDiagnostic() {
-    if (this.view === COMPOSITE_VIEW) return captureFinalRgba8(this.engine.renderer);
-    const rawView = this.view;
-    try {
-      setRuntimeComparisonView(this, COMPOSITE_VIEW);
-      renderComparisonFrame(this, 0);
-      return captureFinalRgba8(this.engine.renderer);
-    } finally {
-      setRuntimeComparisonView(this, rawView);
-      renderComparisonFrame(this, 0);
+  _takramReferenceAssetEligibility() {
+    return assessTakramReferenceAssetEligibility({
+      backend: this.backendName,
+      requiresEnabledTakram: this.requiresEnabledTakram,
+      cloudAssetMode: this.cloudAssetMode,
+    });
+  }
+
+  _publishIneligibleAssetResult(assetEligibility) {
+    const reason = assetEligibility.reason ?? 'official-cloud-assets-unavailable';
+    const cameraGeodeticAltitude = this.profileContext?.cameraAltitude
+      ?? this.engine.camera.position.y;
+    const rawMetrics = { status: 'UNVERIFIED', reason };
+    const diagnosticMetadata = createCloudDiagnosticMetadata({
+      backend: this.backendName,
+      profileName: this.profileName,
+      view: this.view,
+      scenario: this.scenario,
+      cloudProfile: this.backend.cloudProfile ?? null,
+      cameraGeodeticAltitude,
+      profileContext: this.profileContext,
+      cloudAssetMode: this.cloudAssetMode,
+      rawMetrics,
+      terrainDepthBypassed: this.terrainDepthBypassed,
+    });
+    const ineligibleMetadata = {
+      ...diagnosticMetadata,
+      eligibility: {
+        eligible: false,
+        reason,
+        reasons: [reason],
+      },
+    };
+    this.runResult = deepFreeze({ ...createCloudComparisonResult({
+      backend: this.backendName,
+      versions: {
+        three: '0.185.1',
+        postprocessing: '6.39.4',
+        ...(this.backendName === 'takram' ? {
+          '@takram/three-clouds': '0.7.6',
+          '@takram/three-atmosphere': '0.19.1',
+          '@takram/three-geospatial': '0.9.1',
+          '@takram/three-geospatial-effects': '0.6.4',
+        } : {}),
+      },
+      scenario: this.scenario.name,
+      viewport: {
+        width: this.canvas.width,
+        height: this.canvas.height,
+        pixelRatio: this.engine.renderer.getPixelRatio?.() ?? null,
+      },
+      quality: this.quality,
+      benchmark: unverifiedBenchmarkReport(),
+      resources: { ...summarizeResourceReport({ resources: [] }), items: [] },
+      objective: { status: 'UNVERIFIED', reason: 'ineligible-before-warmup' },
+      temporal: { status: 'UNVERIFIED', reason: 'ineligible-before-warmup' },
+      consoleIssues: this.consoleIssues ?? [],
+      artifacts: [{
+        kind: 'run-metadata',
+        warmupFrames: this.scenario.warmupFrames,
+        renderedFrames: 0,
+        cloudAssetMode: this.cloudAssetMode,
+        profile: this.profileName,
+        view: this.view,
+        compositionMode: diagnosticMetadata.compositionMode,
+        terrainDepthMode: diagnosticMetadata.terrainDepthMode,
+        captureKind: diagnosticMetadata.captureKind,
+        inSceneMissionCapture: diagnosticMetadata.inSceneMissionCapture,
+        rawCloudBuffer: rawMetrics,
+        rawCloudCaptureEvidence: null,
+        ineligibleBeforeWarmup: true,
+        ineligibilityReason: reason,
+      }],
+    }),
+    ...ineligibleMetadata,
+    cloudBuffer: rawMetrics,
+    cloudBufferEvidence: null,
+    });
+    this.phase = 'ineligible';
+    if (typeof document !== 'undefined') publishComparisonResult(document, this.runResult);
+    return this.runResult;
+  }
+
+  _captureFrozenCloudCompositeEvidence(rawReadback) {
+    const clouds = this.backend.effect;
+    const rawDebug = this.cloudBufferDebugEffect;
+    if (clouds == null || rawDebug == null) {
+      return {
+        rawReadback,
+        finalComposite: null,
+        evidence: {
+          sameOutputBufferIdentity: false,
+          sameCloudFrame: false,
+          diagnosticCloudUpdates: null,
+          diagnosticRenders: 0,
+        },
+      };
     }
+    let composition = null;
+    return captureFrozenCloudCompositeEvidence({
+      rawReadback,
+      getCloudState: () => ({
+        outputBuffer: clouds.cloudsPass.outputBuffer,
+        cloudFrame: Number.isFinite(clouds.frame) ? clouds.frame : null,
+      }),
+      installCompositePass: () => {
+        releaseDedicatedCloudPass(this.engine);
+        composition = createTakramAtmosphereComposition({
+          camera: this.engine.camera,
+          scene: this.engine.scene,
+          clouds,
+          textures: { ...(this.atmosphereTextures ?? {}), stbnTexture: this.stbnTexture },
+          renderer: this.engine.renderer,
+        });
+        installDedicatedCloudPass(this.engine, composition.aerialPerspective, {
+          measure: render => render(),
+        });
+      },
+      renderComposite: () => renderComparisonFrame(this, 0),
+      captureComposite: () => captureFinalRgba8(this.engine.renderer),
+      restoreRawPass: () => {
+        releaseDedicatedCloudPass(this.engine);
+        composition?.dispose();
+        installDedicatedCloudPass(this.engine, rawDebug, this.benchmark);
+        rawDebug.renderFrozenBufferOnce();
+        renderComparisonFrame(this, 0);
+        return 1;
+      },
+    });
   }
 
   async _replayTemporalStop({ freshReset, noCloud = false }) {
@@ -1619,7 +1542,8 @@ export class CloudComparisonHarness {
       setRuntimeQuality(this, this.initialQuality);
       setRuntimeSize(this, window.innerWidth, window.innerHeight);
       await Promise.all([this._prepareAtmosphere(), this._prepareStbn(), this._prepareCloudAssets()]);
-      this._assertTakramReferenceAssetsAvailable();
+      const assetEligibility = this._takramReferenceAssetEligibility();
+      if (!assetEligibility.eligible) return this._publishIneligibleAssetResult(assetEligibility);
       this.phase = 'warming';
       for (this.frame = 0; this.frame < maximumFrames; this.frame += 1) {
         for (const item of this.scenario.events) {
@@ -1648,9 +1572,11 @@ export class CloudComparisonHarness {
       const rawReadback = this.view === COMPOSITE_VIEW
         ? null
         : readCloudOutputBuffer(this.engine.renderer, this.backend.effect);
-      const finalComposite = this.view === COMPOSITE_VIEW
+      const frozenEvidence = this.view === COMPOSITE_VIEW
         ? null
-        : this._captureFinalCompositeForRawDiagnostic();
+        : this._captureFrozenCloudCompositeEvidence(rawReadback);
+      const sameCloudState = frozenEvidence?.evidence.sameOutputBufferIdentity === true
+        && frozenEvidence?.evidence.sameCloudFrame === true;
       const rawMetrics = this.view === COMPOSITE_VIEW
         ? { status: 'NOT_APPLICABLE', reason: 'composite-view' }
         : rawReadback?.status === 'MEASURED'
@@ -1658,9 +1584,9 @@ export class CloudComparisonHarness {
             pixels: rawReadback.pixels,
             width: rawReadback.width,
             height: rawReadback.height,
-            finalCompositePixels: finalComposite?.pixels ?? null,
-            finalCompositeWidth: finalComposite?.width ?? null,
-            finalCompositeHeight: finalComposite?.height ?? null,
+            finalCompositePixels: sameCloudState ? frozenEvidence.finalComposite?.pixels ?? null : null,
+            finalCompositeWidth: sameCloudState ? frozenEvidence.finalComposite?.width ?? null : null,
+            finalCompositeHeight: sameCloudState ? frozenEvidence.finalComposite?.height ?? null : null,
           })
           : rawReadback;
       const readability = sampleObjectiveReadability(this);
@@ -1699,6 +1625,7 @@ export class CloudComparisonHarness {
         profileContext: this.profileContext,
         cloudAssetMode: this.cloudAssetMode,
         rawMetrics,
+        captureEvidence: frozenEvidence?.evidence ?? null,
         terrainDepthBypassed: this.terrainDepthBypassed,
       });
       this.runResult = deepFreeze({ ...createCloudComparisonResult({
@@ -1742,6 +1669,7 @@ export class CloudComparisonHarness {
           captureKind: diagnosticMetadata.captureKind,
           inSceneMissionCapture: diagnosticMetadata.inSceneMissionCapture,
           rawCloudBuffer: rawMetrics,
+          rawCloudCaptureEvidence: frozenEvidence?.evidence ?? null,
           cloudAssetSource: cloudAssetResources == null ? null : {
             payloadBytes: cloudAssetResources.payloadBytes,
             gpuBytes: cloudAssetResources.totalBytes,
@@ -1764,7 +1692,11 @@ export class CloudComparisonHarness {
             gpuOwnership: resourceItems.includes(stbnResource) ? 'comparison-harness' : 'backend',
           },
         }, ...temporalEvidence.artifacts],
-      }), ...diagnosticMetadata, cloudBuffer: rawMetrics });
+      }),
+      ...diagnosticMetadata,
+      cloudBuffer: rawMetrics,
+      cloudBufferEvidence: frozenEvidence?.evidence ?? null,
+      });
       this.phase = 'complete';
       publishComparisonResult(document, this.runResult);
       return this.runResult;
