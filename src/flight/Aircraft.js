@@ -74,6 +74,7 @@ export class Aircraft {
     this.group.add(this.model);
 
     this.loaded = false;
+    this._crashPresentation = false;
     this.length = REAL_LENGTH;
     this.wingspan = 7.15;
 
@@ -282,6 +283,7 @@ export class Aircraft {
   update(dt, flight) {
     this.group.position.copy(flight.position);
     this.group.quaternion.copy(flight.orientation);
+    if (this._crashPresentation) return;
 
     const t = flight.throttleSmoothed;
     const reheat = THREE.MathUtils.clamp((t - 0.84) / 0.16, 0, 1);
@@ -314,6 +316,12 @@ export class Aircraft {
       d.visible = reheat > 0.02;
     }
     this.nozzleGlow.material.opacity = (0.08 + heat * 0.28 + reheat * 0.20) * flicker;
+  }
+
+  setCrashPresentation(active) {
+    this._crashPresentation = Boolean(active);
+    this.model.visible = !this._crashPresentation;
+    this.exhaust.visible = !this._crashPresentation;
   }
 
   addTo(scene) {

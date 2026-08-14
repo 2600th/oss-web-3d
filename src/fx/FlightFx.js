@@ -8,6 +8,7 @@ import {
 } from './gpu/ParticleSystem.js';
 import { Ribbon } from './gpu/Ribbon.js';
 import { frameUniforms, updateFrameUniforms } from './gpu/FrameUniforms.js';
+import { ImpactBlast } from './flight/ImpactBlast.js';
 
 const SYSTEM_KEYS = Object.freeze([
   'speedStreaks',
@@ -79,11 +80,11 @@ export class FlightFx {
     });
     this.explosion = new ParticleSystem({
       name: 'impact-fireball', capacity: 96, shape: ParticleShape.SOFT,
-      additive: true, curl: true, renderOrder: 15,
+      additive: true, curl: true, softFade: 4, renderOrder: 15,
     });
     this.smoke = new ParticleSystem({
       name: 'impact-smoke', capacity: 256, shape: ParticleShape.SMOKE,
-      additive: false, lit: true, curl: true, wind: true, renderOrder: 13,
+      additive: false, lit: true, curl: true, wind: true, softFade: 10, renderOrder: 13,
     });
     this.sparks = new ParticleSystem({
       name: 'impact-sparks', capacity: 240, shape: ParticleShape.STREAK,
@@ -93,6 +94,7 @@ export class FlightFx {
       name: 'impact-debris', capacity: 64, shape: ParticleShape.CHIP,
       additive: false, lit: true, stretch: true, renderOrder: 14,
     });
+    this.impactBlast = new ImpactBlast();
 
     this.trails = [0, 1].map((side) => new Ribbon({
       name: side ? 'right-contrail' : 'left-contrail', capacity: 256, life: 28,
@@ -100,6 +102,7 @@ export class FlightFx {
 
     for (const key of SYSTEM_KEYS) this.group.add(this[key].mesh);
     for (const trail of this.trails) this.group.add(trail.mesh);
+    this.group.add(this.impactBlast.group);
     this._configureMaterials();
 
     this._speedRate = new RateEmitter();
@@ -114,6 +117,9 @@ export class FlightFx {
     this._direction = new THREE.Vector3();
     this._inherit = new THREE.Vector3();
     this._wing = new THREE.Vector3();
+    this._impactNormal = new THREE.Vector3();
+    this._reflected = new THREE.Vector3();
+    this._tangent = new THREE.Vector3();
     this._cameraForward = new THREE.Vector3();
     this._cameraRight = new THREE.Vector3();
     this._cameraUp = new THREE.Vector3();
@@ -211,6 +217,7 @@ export class FlightFx {
     this.smoke.setActive(budget.smoke);
     this.sparks.setActive(budget.sparks);
     this.debris.setActive(budget.debris);
+    this.impactBlast.setQuality(tier);
     for (const trail of this.trails) trail.setActive(tier?.contrails ? budget.trail : 0);
     this._tier = name;
   }
@@ -224,12 +231,17 @@ export class FlightFx {
     this._trailDistance.reset();
   }
 
+  resetImpact() {
+    this.impactBlast.reset();
+  }
+
   update(dt, flight, cameraPos, camera = null) {
     this._time += dt;
     updateFrameUniforms(dt, this.environment, camera);
     this._updateSpeed(dt, flight, cameraPos, camera);
     this._updateCondensation(dt, flight);
     this._updateSpindrift(dt, flight);
+    this.impactBlast.update(dt);
     for (const key of SYSTEM_KEYS) this[key].flush();
     for (const trail of this.trails) trail.flush();
   }
@@ -375,26 +387,57 @@ export class FlightFx {
     }
   }
 
-  crash(flight, strength = 1) {
-    const s = THREE.MathUtils.clamp(strength, 0.2, 1);
+  crash(impact) {
+    const s = THREE.MathUtils.clamp(impact.strength, 0.2, 1);
+    this.impactBlast.trigger(impact);
+
+    const normal = this._impactNormal.copy(impact.normal);
+    if (normal.lengthSq() < 1e-8) normal.set(0, 1, 0);
+    else normal.normalize();
+    const reflected = this._reflected.copy(impact.velocity).reflect(normal);
+    if (reflected.lengthSq() < 1e-8) reflected.copy(normal);
+    else reflected.normalize();
+    const tangent = this._tangent.copy(impact.velocity)
+      .addScaledVector(normal, -impact.velocity.dot(normal));
+    if (tangent.lengthSq() < 1e-8) tangent.set(1, 0, 0).cross(normal).normalize();
+    else tangent.normalize();
+
     const spawn = this._spawn;
-    spawn.position.copy(flight.position);
-    spawn.inherit.copy(flight.velocity).multiplyScalar(0.18);
+    spawn.position.copy(impact.position);
+    spawn.inherit.copy(impact.velocity).multiplyScalar(0.18);
     spawn.time = frameUniforms.uTime.value;
 
-    spawn.velocity.set(0, 8, 0);
+    // The short core reads as ignition, while the second emission supplies the
+    // slower orange fuel lobes without allocating another particle material.
+    spawn.velocity.copy(normal).multiplyScalar(9 + 5 * s);
+    spawn.radius = 1.2;
+    spawn.speedVariance = 0.35;
+    spawn.spread = 0.45;
+    spawn.size = 3.2 + 2.2 * s;
+    spawn.sizeVariance = 0.25;
+    spawn.life = 0.11;
+    spawn.lifeVariance = 0.18;
+    spawn.spin = 1;
+    spawn.tint = WHITE;
+    const coreCount = Math.min(this.explosion.active, Math.round(6 + 10 * s));
+    this.explosion.emit(coreCount, spawn);
+
+    spawn.velocity.copy(reflected).multiplyScalar(12 + 10 * s).addScaledVector(normal, 5);
     spawn.radius = 2.4;
-    spawn.speedVariance = 0.8;
-    spawn.spread = 1;
+    spawn.speedVariance = 0.65;
+    spawn.spread = 0.75;
     spawn.size = 4 + 4 * s;
     spawn.sizeVariance = 0.45;
     spawn.life = 0.7 + s * 0.55;
     spawn.lifeVariance = 0.3;
-    spawn.spin = 1;
     spawn.tint = EMBER;
-    this.explosion.emit(Math.round(18 + 46 * s), spawn);
+    const lobeCount = Math.min(
+      Math.max(0, this.explosion.active - coreCount),
+      Math.round(12 + 36 * s),
+    );
+    this.explosion.emit(lobeCount, spawn);
 
-    spawn.velocity.set(0, 12 + 8 * s, 0);
+    spawn.velocity.copy(tangent).multiplyScalar(5 + 4 * s).addScaledVector(normal, 12 + 8 * s);
     spawn.radius = 3.5;
     spawn.size = 4.5 + 3 * s;
     spawn.life = 6 + 5 * s;
@@ -402,7 +445,7 @@ export class FlightFx {
     spawn.tint = SOOT;
     this.smoke.emit(Math.round(22 + 58 * s), spawn);
 
-    spawn.velocity.set(0, 20, 0);
+    spawn.velocity.copy(reflected).multiplyScalar(22 + 16 * s).addScaledVector(normal, 18);
     spawn.radius = 1.5;
     spawn.size = 0.11 + s * 0.12;
     spawn.life = 1.2 + s;
@@ -410,7 +453,8 @@ export class FlightFx {
     spawn.tint = EMBER;
     this.sparks.emit(Math.round(35 + 110 * s), spawn);
 
-    spawn.velocity.copy(flight.velocity).multiplyScalar(0.3);
+    spawn.velocity.copy(reflected).multiplyScalar(10 + 9 * s).addScaledVector(normal, 8);
+    spawn.inherit.copy(impact.velocity).multiplyScalar(0.3);
     spawn.radius = 2;
     spawn.size = 0.22 + s * 0.28;
     spawn.life = 3.5 + s * 2.5;
@@ -424,6 +468,7 @@ export class FlightFx {
     this._disposed = true;
     for (const key of SYSTEM_KEYS) this[key].dispose();
     for (const trail of this.trails) trail.dispose();
+    this.impactBlast.dispose();
     this.group.clear();
   }
 }

@@ -346,19 +346,94 @@ test('quality changes apply strict draw budgets and compile out phone contrails'
   fx.dispose();
 });
 
-test('crash creates bounded smoke, spark and debris bursts', () => {
+test('crash stages an impact blast with owned depth fades and directional particles', () => {
   const fx = new FlightFx(environment());
   fx.setQuality(TIERS.high);
-  const flight = {
+  const impact = {
     position: new THREE.Vector3(2, 5000, 3),
     velocity: new THREE.Vector3(120, -30, 10),
+    normal: new THREE.Vector3(0.2, 0.96, -0.1).normalize(),
+    speed: 124,
+    strength: 0.8,
   };
-  fx.crash(flight, 0.8);
+
+  const emissions = new Map();
+  for (const system of [fx.explosion, fx.smoke, fx.sparks, fx.debris]) {
+    const emit = system.emit.bind(system);
+    system.emit = (count, spawn) => {
+      emissions.set(system, {
+        count,
+        velocity: spawn.velocity?.clone(),
+        direction: spawn.direction?.clone(),
+        inherit: spawn.inherit?.clone(),
+      });
+      emit(count, spawn);
+    };
+  }
+
+  fx.crash(impact);
+  assert.ok(fx.impactBlast.shell.visible);
+  assert.ok(fx.impactBlast.light.intensity > 0);
+  assert.ok(fx.explosion.cursor > 0);
   assert.ok(fx.smoke.cursor > 0);
   assert.ok(fx.sparks.cursor > 0);
   assert.ok(fx.debris.cursor > 0);
+  assert.equal(fx.explosion.uniforms.uSoftFade.value, 4);
+  assert.equal(fx.smoke.uniforms.uSoftFade.value, 10);
+  assert.equal(frameUniforms.uSoftFade.value, 40);
+  assert.ok(emissions.get(fx.debris).inherit.dot(impact.velocity) > 0);
+  assert.ok(emissions.get(fx.sparks).velocity.dot(impact.normal) > 0);
   assert.ok(fx.smoke.cursor <= fx.smoke.active);
+
+  fx.resetImpact();
+  assert.equal(fx.impactBlast.shell.visible, false);
+  assert.equal(fx.impactBlast.light.intensity, 0);
   fx.dispose();
+});
+
+test('staged crash fire stays within the active phone particle budget', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.phone);
+  let emitted = 0;
+  const emit = fx.explosion.emit.bind(fx.explosion);
+  fx.explosion.emit = (count, spawn) => {
+    emitted += count;
+    emit(count, spawn);
+  };
+
+  fx.crash({
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(100, -80, 0),
+    normal: new THREE.Vector3(0, 1, 0),
+    speed: 128,
+    strength: 1,
+  });
+
+  assert.ok(emitted <= fx.explosion.active);
+  fx.dispose();
+});
+
+test('aircraft crash presentation hides the jet and exhaust until reset', () => {
+  const aircraft = new Aircraft(environment());
+  const flight = {
+    position: new THREE.Vector3(7, 4800, -3),
+    orientation: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.4),
+    throttleSmoothed: 1,
+  };
+
+  aircraft.setCrashPresentation(true);
+  assert.equal(aircraft.model.visible, false);
+  assert.equal(aircraft.exhaust.visible, false);
+  aircraft.update(1 / 60, flight);
+  assert.ok(aircraft.group.position.equals(flight.position));
+  assert.ok(aircraft.group.quaternion.equals(flight.orientation));
+  assert.equal(aircraft.model.visible, false);
+  assert.equal(aircraft.exhaust.visible, false);
+
+  aircraft.setCrashPresentation(false);
+  assert.equal(aircraft.model.visible, true);
+  assert.equal(aircraft.exhaust.visible, true);
+  aircraft.dispose();
 });
 
 test('afterburner uses bounded shader surfaces, never camera-intersecting cones', () => {

@@ -117,6 +117,13 @@ export class Game {
     engine.scene.environment = this.envMap;
 
     this.flight = new FlightModel();
+    this._impactEvent = {
+      position: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      normal: new THREE.Vector3(0, 1, 0),
+      speed: 0,
+      strength: 0,
+    };
     this.assist = new AssistController();
     this._controlMode = settings.controlMode === 'direct' ? 'direct' : 'assisted';
     this._assistOptions = {
@@ -297,6 +304,8 @@ export class Game {
     this._resetMotionBaseline();
     this.terrain.prime(this.flight.position);
     this.fx.reset();
+    this.fx.resetImpact?.();
+    this.aircraft?.setCrashPresentation?.(false);
     // Launch is always reached through a gesture (click or key), which is what
     // browsers require to create an AudioContext. Starting audio here rather
     // than relying on a prior keypress fixes a mouse-only launch, where the
@@ -684,7 +693,14 @@ export class Game {
     this.crashTimer = 0;
     this.mission.fail('terrain');
     const strength = Math.min(1, this.flight.impactSpeed / 320);
-    this.fx.crash(this.flight, strength);
+    const impact = this._impactEvent;
+    impact.position.copy(this.flight.impactPoint);
+    impact.velocity.copy(this.flight.impactVelocity);
+    impact.normal.copy(this.flight.impactNormal);
+    impact.speed = this.flight.impactSpeed;
+    impact.strength = strength;
+    this.fx.crash(impact);
+    this.aircraft.setCrashPresentation(true);
     this._postCrashImpulse = Math.max(this._postCrashImpulse, 0.5 + strength * 0.5);
     this.audio.impact(strength);
   }
@@ -834,7 +850,8 @@ export class Game {
     const reheat = this.state === 'flying'
       ? THREE.MathUtils.clamp((this.flight.throttleSmoothed - 0.84) / 0.16, 0, 1)
       : 0;
-    this.engine.setHeatDistortion(Math.min(0.72, reheat * 0.38 + this._postCrashImpulse * 0.34));
+    const crashHeat = this._postCrashImpulse * 0.34 * (this._reducedMotion ? 0.2 : 1);
+    this.engine.setHeatDistortion(Math.min(0.72, reheat * 0.38 + crashHeat));
     this.engine.setLensArtifacts(
       0.055 + sunVisibility * 0.12,
       0.055 + sunVisibility * 0.075 + speedMotion * 0.08,

@@ -65,6 +65,7 @@ export class ParticleSystem {
    * @param {boolean} [options.wind]     advect with the environment wind
    * @param {boolean} [options.depthTest] test against opaque scene depth
    * @param {boolean} [options.softDepth] fade against the shared scene-depth texture
+   * @param {number}  [options.softFade]  world-space soft-depth fade distance
    * @param {number}  [options.renderOrder]
    */
   constructor({
@@ -78,6 +79,7 @@ export class ParticleSystem {
     wind = false,
     depthTest = true,
     softDepth = true,
+    softFade = 40,
     renderOrder = 12,
   }) {
     if (!Number.isInteger(capacity) || capacity <= 0) {
@@ -140,6 +142,9 @@ export class ParticleSystem {
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       side: THREE.DoubleSide,
       uniforms: sharedUniforms({
+        // Per-material on purpose: impact fire and smoke need distinct terrain
+        // contact fades without mutating the shared frame-uniform default.
+        uSoftFade: { value: softFade },
         uGravity: { value: new THREE.Vector3(0, -9.80665, 0) },
         uDrag: { value: 0.6 },
         uTurbulence: { value: 0 },

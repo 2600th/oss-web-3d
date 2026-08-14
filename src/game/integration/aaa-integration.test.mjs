@@ -686,18 +686,124 @@ test('mission restart releases every retained best plate before disposing the ol
   game.mission.dispose();
 });
 
-test('crash dispatches GPU burst and post impulse exactly once per event', () => {
+test('crash copies the preserved impact into one stable event and hides the aircraft', () => {
   const game = Object.create(Game.prototype);
-  game.flight = { impactSpeed: 160, position: new THREE.Vector3(), velocity: new THREE.Vector3() };
+  game.flight = {
+    impactPoint: new THREE.Vector3(4, 5100, -9),
+    impactVelocity: new THREE.Vector3(120, -80, 20),
+    impactNormal: new THREE.Vector3(0.1, 0.98, -0.16).normalize(),
+    impactSpeed: 160,
+  };
+  game._impactEvent = {
+    position: new THREE.Vector3(),
+    velocity: new THREE.Vector3(),
+    normal: new THREE.Vector3(),
+    speed: 0,
+    strength: 0,
+  };
   game.mission = { fail: () => {} };
   game.audio = { impact: () => {} };
-  let bursts = 0;
-  game.fx = { crash: (flight, strength) => { bursts++; assert.equal(flight, game.flight); assert.equal(strength, 0.5); } };
+  const presentations = [];
+  game.aircraft = { setCrashPresentation: (active) => presentations.push(active) };
+  const dispatched = [];
+  game.fx = { crash: (impact) => dispatched.push(impact) };
   game._postCrashImpulse = 0;
 
   game.onCrash();
-  assert.equal(bursts, 1);
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0], game._impactEvent);
+  assert.notEqual(dispatched[0].position, game.flight.impactPoint);
+  assert.notEqual(dispatched[0].velocity, game.flight.impactVelocity);
+  assert.notEqual(dispatched[0].normal, game.flight.impactNormal);
+  assert.ok(dispatched[0].position.equals(new THREE.Vector3(4, 5100, -9)));
+  assert.ok(dispatched[0].velocity.equals(new THREE.Vector3(120, -80, 20)));
+  assert.ok(dispatched[0].normal.equals(game.flight.impactNormal));
+  assert.equal(dispatched[0].speed, 160);
+  assert.equal(dispatched[0].strength, 0.5);
+  assert.deepEqual(presentations, [true]);
   assert.ok(game._postCrashImpulse >= 0.5);
+});
+
+test('launch restores the aircraft and clears the impact presentation', () => {
+  const fixture = makeControlGame('direct');
+  const lifecycle = [];
+  Object.assign(fixture.game, {
+    navigationHint: { reset() {} },
+    screens: { hideAll() {} },
+    flight: { reset() {}, position: new THREE.Vector3() },
+    chase: { baseFov: 58, reset() {} },
+    terrain: { prime() {} },
+    fx: { reset() {}, resetImpact: () => lifecycle.push('impact-reset') },
+    aircraft: { setCrashPresentation: (active) => lifecycle.push(`aircraft:${active}`) },
+    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    mission: { begin() {} },
+    hud: { show() {} },
+    engine: { camera: { fov: 58, updateProjectionMatrix() {} } },
+    _startPosition: () => new THREE.Vector3(),
+    _resetMotionBaseline() {},
+  });
+
+  fixture.game.launch();
+  assert.deepEqual(lifecycle, ['impact-reset', 'aircraft:false']);
+});
+
+test('reduced motion keeps impact dispatch but attenuates only crash heat and zeroes blur', () => {
+  const run = (reducedMotion) => {
+    const game = Object.create(Game.prototype);
+    const camera = new THREE.PerspectiveCamera(58, 16 / 9, 4, 750000);
+    camera.updateMatrixWorld();
+    const calls = { impacts: 0, heat: [], motion: [] };
+    Object.assign(game, {
+      flight: {
+        impactPoint: new THREE.Vector3(),
+        impactVelocity: new THREE.Vector3(0, -200, 10),
+        impactNormal: new THREE.Vector3(0, 1, 0),
+        impactSpeed: 200,
+        airspeed: 0,
+        throttleSmoothed: 0,
+      },
+      _impactEvent: {
+        position: new THREE.Vector3(), velocity: new THREE.Vector3(), normal: new THREE.Vector3(),
+        speed: 0, strength: 0,
+      },
+      mission: { fail() {} },
+      aircraft: { setCrashPresentation() {} },
+      fx: { crash: () => calls.impacts++ },
+      audio: { impact() {} },
+      _postCrashImpulse: 0,
+      _reducedMotion: reducedMotion,
+      state: 'flying',
+      reconActive: false,
+      environment: { sunDir: new THREE.Vector3(0, 0.7, -0.7).normalize() },
+      engine: {
+        camera,
+        setSunScreenPosition() {},
+        setMotionBlur: (profile) => calls.motion.push({ ...profile }),
+        setHeatDistortion: (value) => calls.heat.push(value),
+        setLensArtifacts() {},
+      },
+      _sunWorld: new THREE.Vector3(),
+      _sunNdc: new THREE.Vector3(),
+      _cameraForward: new THREE.Vector3(0, 0, -1),
+      _cameraForwardNow: new THREE.Vector3(),
+      _cameraDelta: new THREE.Vector3(),
+      _cameraRight: new THREE.Vector3(),
+      _cameraUp: new THREE.Vector3(),
+      _motionWasReconActive: false,
+    });
+    game.onCrash();
+    game._updatePostEffects(1 / 60);
+    return calls;
+  };
+
+  const normal = run(false);
+  const reduced = run(true);
+  assert.equal(normal.impacts, 1);
+  assert.equal(reduced.impacts, 1);
+  assert.ok(normal.heat[0] > 0);
+  assert.ok(reduced.heat[0] <= normal.heat[0] * 0.2 + 1e-12);
+  assert.equal(reduced.motion[0].amount, 0);
+  assert.equal(reduced.motion[0].combinedPixels, 0);
 });
 
 test('quality switch requests a terrain rebuild only when grid resolution changes', () => {
