@@ -11,6 +11,35 @@ const { NavigationHintTracker, NAV_PHASE } = await import('../NavigationHint.js'
 const { CAPTURE_THRESHOLD } = await import('../ReconCamera.js');
 const { Engine } = await import('../../core/Engine.js');
 const { Settings } = await import('../../core/Settings.js');
+const { Input } = await import('../../core/Input.js');
+
+class InputTarget {
+  constructor() {
+    this.listeners = new Map();
+    this.document = {
+      addEventListener() {},
+      removeEventListener() {},
+    };
+  }
+
+  addEventListener(type, fn) { this.listeners.set(type, fn); }
+  removeEventListener(type, fn) {
+    if (this.listeners.get(type) === fn) this.listeners.delete(type);
+  }
+}
+
+function withNavigator(getGamepads, run) {
+  const oldNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { getGamepads },
+  });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: oldNavigator });
+  }
+}
 
 function makeNavigationGame({
   posts = [
@@ -223,6 +252,55 @@ test('Assisted recon toggles once per Space edge while Direct preserves held rec
   direct.input.reconHeld = false;
   direct.game._updateReconMode();
   assert.equal(direct.game.reconActive, false);
+});
+
+test('Assisted gamepad RB toggles recon once per rising edge while Direct remains held', () => {
+  const pad = {
+    connected: true,
+    axes: [0, 0, 0],
+    buttons: Array.from({ length: 6 }, () => ({ value: 0 })),
+  };
+  withNavigator(() => [pad], () => {
+    const input = new Input(new InputTarget());
+    const assisted = makeControlGame('assisted');
+    assisted.game.input = input;
+
+    pad.buttons[5].value = 1;
+    input.update(1 / 60);
+    assisted.game._updateReconMode();
+    assert.equal(input.modality, 'gamepad');
+    assert.equal(assisted.game.reconActive, true, 'first RB press opens recon');
+
+    input.update(1 / 60);
+    assisted.game._updateReconMode();
+    assert.equal(assisted.game.reconActive, true, 'held RB does not toggle recon again');
+
+    pad.buttons[5].value = 0;
+    input.update(1 / 60);
+    assisted.game._updateReconMode();
+    assert.equal(assisted.game.reconActive, true, 'RB release leaves Assisted recon latched open');
+
+    pad.buttons[5].value = 1;
+    input.update(1 / 60);
+    assisted.game._updateReconMode();
+    assert.equal(assisted.game.reconActive, false, 'a fresh RB press closes recon');
+    input.dispose();
+
+    const directInput = new Input(new InputTarget());
+    const direct = makeControlGame('direct');
+    direct.game.input = directInput;
+    directInput.update(1 / 60);
+    direct.game._updateReconMode();
+    assert.equal(direct.game.reconActive, true, 'Direct recon follows held RB');
+    directInput.update(1 / 60);
+    direct.game._updateReconMode();
+    assert.equal(direct.game.reconActive, true, 'Direct recon stays active while RB remains held');
+    pad.buttons[5].value = 0;
+    directInput.update(1 / 60);
+    direct.game._updateReconMode();
+    assert.equal(direct.game.reconActive, false, 'Direct recon closes on RB release');
+    directInput.dispose();
+  });
 });
 
 test('Assisted touch recon follows each tap edge instead of the legacy held latch', () => {
