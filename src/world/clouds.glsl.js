@@ -30,12 +30,19 @@ export const OPENING_CLOUD_CORRIDOR = Object.freeze({
   x: 21000,
   z: 6000,
   heading: Math.PI * 0.62,
-  clearDistance: 12000,
-  fadeDistance: 16500,
-  halfWidth: 3200,
-  widthSlope: 0.42,
-  edgeFade: 2400,
+  clearDistance: 11500,
+  fadeDistance: 15500,
+  halfWidth: 3000,
+  widthSlope: 0.8,
+  edgeFade: 400,
 });
+
+const OPENING_CLOUD_BANK_REVEAL_DISTANCE = 8000;
+
+export function openingCloudCorridorWidth(along) {
+  return OPENING_CLOUD_CORRIDOR.halfWidth +
+    Math.max(along - OPENING_CLOUD_BANK_REVEAL_DISTANCE, 0) * OPENING_CLOUD_CORRIDOR.widthSlope;
+}
 
 const mixCpu = (a, b, t) => a + (b - a) * t;
 const smoothCpu = (a, b, value) => {
@@ -78,7 +85,7 @@ function openingCorridorFactorCpu(x, z) {
   const lateral = Math.abs(dx * rightX + dz * rightZ);
   const forwardWindow = smoothCpu(-2600, -400, along) *
     (1 - smoothCpu(corridor.clearDistance, corridor.fadeDistance, along));
-  const width = corridor.halfWidth + Math.max(along, 0) * corridor.widthSlope;
+  const width = openingCloudCorridorWidth(along);
   const across = 1 - smoothCpu(width, width + corridor.edgeFade, lateral);
   return 1 - forwardWindow * across;
 }
@@ -136,7 +143,8 @@ float openingCorridorFactor(vec2 xz) {
   float forwardWindow = smoothstep(-2600.0, -400.0, along) *
     (1.0 - smoothstep(${OPENING_CLOUD_CORRIDOR.clearDistance.toFixed(1)}, ${OPENING_CLOUD_CORRIDOR.fadeDistance.toFixed(1)}, along));
   float width = ${OPENING_CLOUD_CORRIDOR.halfWidth.toFixed(1)} +
-    max(along, 0.0) * ${OPENING_CLOUD_CORRIDOR.widthSlope.toFixed(3)};
+    max(along - ${OPENING_CLOUD_BANK_REVEAL_DISTANCE.toFixed(1)}, 0.0) *
+      ${OPENING_CLOUD_CORRIDOR.widthSlope.toFixed(3)};
   float across = 1.0 - smoothstep(width, width + ${OPENING_CLOUD_CORRIDOR.edgeFade.toFixed(1)}, lateral);
   return 1.0 - forwardWindow * across;
 }

@@ -11,6 +11,43 @@ import * as cloudModel from '../clouds.glsl.js';
 
 const { CLOUD_CONSTANTS } = cloudModel;
 
+function sampleOpeningFrustum(start, heading, rayCount, nearDistance, farDistance) {
+  const forward = new THREE.Vector2(-Math.sin(heading), -Math.cos(heading));
+  const right = new THREE.Vector2(-forward.y, forward.x);
+  const rays = [];
+  const rayAngles = [];
+  for (let rayIndex = 0; rayIndex < rayCount; rayIndex++) {
+    const angleDegrees = -30 + (60 * rayIndex) / (rayCount - 1);
+    const angle = THREE.MathUtils.degToRad(angleDegrees);
+    const dx = forward.x * Math.cos(angle) + right.x * Math.sin(angle);
+    const dz = forward.y * Math.cos(angle) + right.y * Math.sin(angle);
+    const columns = [];
+    for (let distance = nearDistance; distance <= farDistance; distance += 500) {
+      columns.push(cloudModel.evaluateCloudColumn(start.x + dx * distance, start.z + dz * distance));
+    }
+    rays.push(columns);
+    rayAngles.push(angleDegrees);
+  }
+
+  const cloudy = rays.map((ray) => ray.some((column) => column.shaped > 0.20));
+  let longestRun = 0;
+  let currentRun = 0;
+  for (const isCloudy of cloudy) {
+    currentRun = isCloudy ? currentRun + 1 : 0;
+    longestRun = Math.max(longestRun, currentRun);
+  }
+
+  const centerIndex = Math.floor(rayCount / 2);
+  return {
+    center: rays[centerIndex],
+    centerWindow: rays.filter((_, index) => Math.abs(rayAngles[index]) <= 10).flat(),
+    left: rays.slice(0, centerIndex).flat(),
+    right: rays.slice(centerIndex + 1).flat(),
+    projectedRayCoverage: cloudy.filter(Boolean).length / rayCount,
+    longestRun: longestRun / rayCount,
+  };
+}
+
 assert.equal(typeof cloudRenderer.cloudJitterKey, 'function', 'cloud jitter needs a numeric stability contract');
 assert.equal(typeof cloudRenderer.cloudTemporalBlend, 'function', 'temporal accumulation needs a numeric confidence contract');
 assert.equal(
@@ -49,6 +86,25 @@ assert.equal(
 );
 
 {
+  const start = { x: 21000, z: 6000 };
+  const centerOpening = sampleOpeningFrustum(start, Math.PI * 0.62, 31, 2500, 3000);
+  assert.ok(centerOpening.centerWindow.every((c) => c.shaped < 0.05));
+
+  const samples = sampleOpeningFrustum(start, Math.PI * 0.62, 31, 3000, 8000);
+  assert.ok(samples.center.every((c) => c.shaped < 0.05));
+  assert.ok(samples.left.some((c) => c.shaped > 0.20));
+  assert.ok(samples.right.some((c) => c.shaped > 0.20));
+  assert.ok(samples.projectedRayCoverage >= 0.15 && samples.projectedRayCoverage <= 0.35);
+  assert.ok(samples.longestRun <= 0.35);
+}
+
+assert.equal(
+  typeof cloudModel.openingCloudCorridorWidth,
+  'function',
+  'off-axis classification must consume the production delayed-width boundary',
+);
+
+{
   const columns = [];
   for (let z = -20000; z <= 20000; z += 2000) {
     for (let x = -20000; x <= 20000; x += 2000) {
@@ -68,7 +124,7 @@ assert.equal(
     const dz = column.z - corridor.z;
     const along = dx * forward.x + dz * forward.y;
     const lateral = Math.abs(dx * right.x + dz * right.y);
-    const width = corridor.halfWidth + Math.max(along, 0) * corridor.widthSlope;
+    const width = cloudModel.openingCloudCorridorWidth(along);
     return along < -2600 || along > corridor.fadeDistance || lateral > width + corridor.edgeFade;
   });
   const offAxisCloudy = offAxis.filter((column) => column.shaped > 0.05);
