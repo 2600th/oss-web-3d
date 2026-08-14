@@ -56,22 +56,34 @@ test('lens artifacts support allocation-free positional updates', () => {
   assert.equal(engine.radiancePass.enabled, true);
 });
 
-test('settings option setters clamp, persist, and retain boolean pitch', () => {
+test('settings option setters clamp, persist, and retain assisted-control choices', () => {
   const settings = Object.create(Settings.prototype);
   settings.masterVolume = 0.8;
   settings.musicVolume = 0.75;
-  settings.invertPitch = false;
+  settings.controlMode = 'assisted';
+  settings.controlSensitivity = 'normal';
+  settings.autoThrottle = true;
+  settings.verticalMode = 'upToClimb';
+  settings.assistedNoticeSeen = false;
   let saves = 0;
   settings.save = () => saves++;
 
   settings.setMasterVolume(4);
   settings.setMusicVolume(-2);
-  settings.setInvertPitch(true);
+  settings.setControlMode('direct');
+  settings.setControlSensitivity('high');
+  settings.setAutoThrottle(false);
+  settings.setVerticalMode('upToDive');
+  settings.setAssistedNoticeSeen(true);
 
   assert.equal(settings.masterVolume, 1);
   assert.equal(settings.musicVolume, 0);
-  assert.equal(settings.invertPitch, true);
-  assert.equal(saves, 3);
+  assert.equal(settings.controlMode, 'direct');
+  assert.equal(settings.controlSensitivity, 'high');
+  assert.equal(settings.autoThrottle, false);
+  assert.equal(settings.verticalMode, 'upToDive');
+  assert.equal(settings.assistedNoticeSeen, true);
+  assert.equal(saves, 7);
 });
 
 test('recon capture receives Engine so the final post chain is used', () => {

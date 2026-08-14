@@ -80,14 +80,22 @@ export const TIERS = {
   },
 };
 
-const KEY = 'safed-sagar.settings.v1';
+const LEGACY_KEY = 'safed-sagar.settings.v1';
+const KEY = 'safed-sagar.settings.v2';
+const CONTROL_MODES = new Set(['assisted', 'direct']);
+const CONTROL_SENSITIVITIES = new Set(['low', 'normal', 'high']);
+const VERTICAL_MODES = new Set(['upToClimb', 'upToDive']);
 
 export class Settings {
   constructor() {
     this.tierName = 'high';
-    this.invertPitch = false;
     this.masterVolume = 0.8;
     this.musicVolume = 0.75;
+    this.controlMode = 'assisted';
+    this.controlSensitivity = 'normal';
+    this.autoThrottle = true;
+    this.verticalMode = 'upToClimb';
+    this.assistedNoticeSeen = false;
     this.load();
   }
 
@@ -113,22 +121,68 @@ export class Settings {
     this.save();
   }
 
+  setControlMode(value) {
+    if (!CONTROL_MODES.has(value)) return;
+    this.controlMode = value;
+    this.save();
+  }
+
+  setControlSensitivity(value) {
+    if (!CONTROL_SENSITIVITIES.has(value)) return;
+    this.controlSensitivity = value;
+    this.save();
+  }
+
+  setAutoThrottle(value) {
+    if (typeof value !== 'boolean') return;
+    this.autoThrottle = value;
+    this.save();
+  }
+
+  setVerticalMode(value) {
+    if (!VERTICAL_MODES.has(value)) return;
+    this.verticalMode = value;
+    this.save();
+  }
+
+  setAssistedNoticeSeen(value) {
+    if (typeof value !== 'boolean') return;
+    this.assistedNoticeSeen = value;
+    this.save();
+  }
+
+  get invertPitch() {
+    return this.verticalMode === 'upToDive';
+  }
+
   setInvertPitch(value) {
     if (typeof value !== 'boolean') return;
-    this.invertPitch = value;
-    this.save();
+    this.setVerticalMode(value ? 'upToDive' : 'upToClimb');
   }
 
   load() {
     try {
-      const raw = localStorage.getItem(KEY);
+      const current = localStorage.getItem(KEY);
+      const raw = current ?? localStorage.getItem(LEGACY_KEY);
       if (!raw) return;
       const data = JSON.parse(raw);
       if (TIERS[data.tierName]) this.tierName = data.tierName;
-      if (typeof data.invertPitch === 'boolean') this.invertPitch = data.invertPitch;
       if (typeof data.masterVolume === 'number') this.masterVolume = data.masterVolume;
       if (typeof data.musicVolume === 'number') this.musicVolume = data.musicVolume;
+      if (CONTROL_MODES.has(data.controlMode)) this.controlMode = data.controlMode;
+      if (CONTROL_SENSITIVITIES.has(data.controlSensitivity)) {
+        this.controlSensitivity = data.controlSensitivity;
+      }
+      if (typeof data.autoThrottle === 'boolean') this.autoThrottle = data.autoThrottle;
+      if (VERTICAL_MODES.has(data.verticalMode)) this.verticalMode = data.verticalMode;
+      if (typeof data.assistedNoticeSeen === 'boolean') {
+        this.assistedNoticeSeen = data.assistedNoticeSeen;
+      }
+      if (current === null && typeof data.invertPitch === 'boolean') {
+        this.verticalMode = data.invertPitch ? 'upToDive' : 'upToClimb';
+      }
       this.autoDetected = true;
+      if (current === null) this.save();
     } catch {
       /* storage unavailable — defaults are fine */
     }
@@ -140,9 +194,13 @@ export class Settings {
         KEY,
         JSON.stringify({
           tierName: this.tierName,
-          invertPitch: this.invertPitch,
           masterVolume: this.masterVolume,
           musicVolume: this.musicVolume,
+          controlMode: this.controlMode,
+          controlSensitivity: this.controlSensitivity,
+          autoThrottle: this.autoThrottle,
+          verticalMode: this.verticalMode,
+          assistedNoticeSeen: this.assistedNoticeSeen,
         }),
       );
     } catch {
