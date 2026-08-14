@@ -25,6 +25,22 @@ function missionWithPosts() {
   assert.equal(mission.target.id, 'C');
 }
 
+{
+  const mission = missionWithPosts();
+  mission.targetIndex = 0;
+  assert.equal(mission.target.id, 'A');
+  mission.posts[0].captured = true;
+  assert.equal(mission.target.id, 'B', 'capturing the selected post must advance directly to the next pending target');
+  mission.cycleTarget(1);
+  assert.equal(mission.target.id, 'C', 'manual target cycling remains the authority for the next pending objective');
+}
+
+{
+  const mission = missionWithPosts();
+  for (const post of mission.posts) post.captured = true;
+  assert.equal(mission.target, null, 'an all-complete mission must expose no navigation target');
+}
+
 for (const [x, z] of [[21000, 6000], [-180000, 220000], [420000, -390000], [0, 0]]) {
   const sites = missionModule.findPostSites(new THREE.Vector3(x, 0, z), 6);
   assert.equal(sites.length, 6, `mission at ${x},${z} must retain every requested objective`);

@@ -13,6 +13,8 @@ import { Aircraft } from '../flight/Aircraft.js';
 import { ChaseCamera } from '../flight/ChaseCamera.js';
 import { Mission } from './Mission.js';
 import { ReconCamera, CAPTURE_THRESHOLD } from './ReconCamera.js';
+import { NavigationHintTracker } from './NavigationHint.js';
+import { terrainVisibility } from './TerrainVisibility.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
 
@@ -115,6 +117,12 @@ export class Game {
     this.flight = new FlightModel();
     this.chase = new ChaseCamera(engine.camera);
     this.recon = new ReconCamera(engine.camera);
+    this.navigationHint = new NavigationHintTracker();
+    this._navigationAimWorld = new THREE.Vector3();
+    this._navigationCameraSpace = new THREE.Vector3();
+    this._navigationNdc = new THREE.Vector3();
+    this._navigationToTarget = new THREE.Vector3();
+    this._navigationEdgeNdc = new THREE.Vector2();
     this.aircraft = new Aircraft(this.environment);
     this.aircraft.addTo(engine.scene);
 
@@ -232,6 +240,7 @@ export class Game {
   }
 
   launch() {
+    this.navigationHint?.reset();
     this.screens.hideAll();
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
@@ -258,6 +267,7 @@ export class Game {
   }
 
   restart() {
+    this.navigationHint?.reset();
     for (const post of this.mission.posts) {
       if (!post.photo) continue;
       this.recon.releaseShot(post.photo);
@@ -682,6 +692,7 @@ export class Game {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    this.navigationHint?.reset();
     this._disposeWaterRefraction();
     this.mission?.dispose?.();
     this.recon?.dispose?.();
@@ -719,6 +730,57 @@ export class Game {
     const euler = _euler.setFromQuaternion(flight.orientation, 'YXZ');
     const heading = (-euler.y * 180) / Math.PI;
 
+    let navigation;
+    if (!target) {
+      navigation = this.navigationHint.update({ complete: true });
+    } else {
+      const camera = this.engine.camera;
+      const aimPoint = this._navigationAimWorld.copy(target.aimPoint);
+      const cameraSpace = this._navigationCameraSpace
+        .copy(aimPoint)
+        .applyMatrix4(camera.matrixWorldInverse);
+      const projectedNdc = this._navigationNdc.copy(aimPoint).project(camera);
+      const inFront = cameraSpace.z < 0;
+      const onScreen = inFront
+        && projectedNdc.z >= -1 && projectedNdc.z <= 1
+        && Math.abs(projectedNdc.x) <= 1 && Math.abs(projectedNdc.y) <= 1;
+
+      let edgeNdc = null;
+      if (inFront) {
+        const edgeScale = Math.max(Math.abs(projectedNdc.x), Math.abs(projectedNdc.y));
+        if (edgeScale > 1e-6) {
+          this._navigationEdgeNdc.set(projectedNdc.x / edgeScale, projectedNdc.y / edgeScale);
+        } else {
+          this._navigationEdgeNdc.set(0, -1);
+        }
+        edgeNdc = this._navigationEdgeNdc;
+      }
+
+      const toTarget = this._navigationToTarget.subVectors(aimPoint, flight.position);
+      const targetDistance = toTarget.length();
+      const closingSpeed = targetDistance > 1e-6
+        ? flight.velocity.dot(toTarget) / targetDistance
+        : 0;
+      const visibility = range <= 3000
+        ? terrainVisibility(camera.position, aimPoint)
+        : 1;
+
+      navigation = this.navigationHint.update({
+        targetId: target.id,
+        rangeMetres: range,
+        headingDeg: heading,
+        targetBearingDeg: bearing,
+        closingSpeed,
+        altitudeDeltaMetres: aimPoint.y - flight.position.y,
+        projected: onScreen ? projectedNdc : null,
+        edgeNdc,
+        terrainVisibility: visibility,
+        reconActive: this.reconActive,
+        reconFramed: Boolean(this.evaluation?.post === target && this.evaluation.inFrame),
+        dt,
+      });
+    }
+
     this.hud.update(dt, {
       speedKmh: flight.airspeed * 3.6,
       altitude: flight.altitude,
@@ -737,6 +799,7 @@ export class Game {
       zoomIndex: this.recon.zoomIndex,
       evaluation: this.evaluation,
       shutterFlash: this.recon.flash,
+      navigation,
     });
   }
 }

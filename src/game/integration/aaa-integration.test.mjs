@@ -7,8 +7,82 @@ globalThis.document ??= {};
 
 const GameModule = await import('../Game.js');
 const { Game } = GameModule;
+const { NavigationHintTracker, NAV_PHASE } = await import('../NavigationHint.js');
 const { Engine } = await import('../../core/Engine.js');
 const { Settings } = await import('../../core/Settings.js');
+
+function makeNavigationGame({
+  posts = [
+    {
+      id: 'A', captured: false,
+      position: new THREE.Vector3(0, 0, -1000),
+      aimPoint: new THREE.Vector3(0, 0, -1000),
+    },
+    {
+      id: 'B', captured: false,
+      position: new THREE.Vector3(800, 200, -1200),
+      aimPoint: new THREE.Vector3(800, 200, -1200),
+    },
+  ],
+  flightPosition = new THREE.Vector3(0, 0, 0),
+  velocity = new THREE.Vector3(0, 0, -120),
+  reconActive = false,
+  evaluation = null,
+} = {}) {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 1, 10000);
+  camera.position.copy(flightPosition);
+  camera.lookAt(flightPosition.x, flightPosition.y, flightPosition.z - 1);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+
+  let targetReads = 0;
+  const mission = {
+    posts,
+    targetIndex: 0,
+    get target() {
+      targetReads++;
+      return this.posts.find((post) => !post.captured) ?? null;
+    },
+    get captured() { return this.posts.filter((post) => post.captured).length; },
+    get complete() { return this.posts.length > 0 && this.captured === this.posts.length; },
+    bearingTo(post, from) {
+      const dx = post.position.x - from.x;
+      const dz = post.position.z - from.z;
+      const bearing = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+      return { bearing, range: from.distanceTo(post.position) };
+    },
+    cycleTarget() {
+      const first = this.posts.shift();
+      this.posts.push(first);
+    },
+  };
+
+  const updates = [];
+  const game = Object.create(Game.prototype);
+  Object.assign(game, {
+    engine: { camera },
+    flight: {
+      position: flightPosition.clone(),
+      velocity: velocity.clone(),
+      orientation: new THREE.Quaternion(),
+      airspeed: velocity.length(), altitude: flightPosition.y,
+      throttleSmoothed: 0.7, reheat: false, stalling: false, gLoad: 1,
+    },
+    mission,
+    reconActive,
+    evaluation,
+    recon: { zoomIndex: 0, flash: 0 },
+    terrainWarning: false,
+    navigationHint: new NavigationHintTracker(),
+    _navigationAimWorld: new THREE.Vector3(),
+    _navigationCameraSpace: new THREE.Vector3(),
+    _navigationNdc: new THREE.Vector3(),
+    _navigationToTarget: new THREE.Vector3(),
+    _navigationEdgeNdc: new THREE.Vector2(),
+    hud: { update: (dt, snapshot) => updates.push(snapshot) },
+  });
+  return { game, mission, updates, get targetReads() { return targetReads; } };
+}
 
 test('water refraction dimensions are bounded and disabled on low tiers', () => {
   assert.equal(typeof GameModule.waterRefractionSize, 'function');
@@ -86,15 +160,131 @@ test('settings option setters clamp, persist, and retain assisted-control choice
   assert.equal(saves, 7);
 });
 
+test('HUD navigation reads the authoritative mission target once and advances directly after capture', () => {
+  const fixture = makeNavigationGame();
+  fixture.game._updateHud(1 / 60);
+  assert.equal(fixture.targetReads, 1);
+  assert.equal(fixture.updates.at(-1).navigation.targetId, 'A');
+
+  fixture.mission.posts[0].captured = true;
+  fixture.game._updateHud(1 / 60);
+  assert.equal(fixture.targetReads, 2, 'each HUD update must read mission.target exactly once');
+  assert.equal(fixture.updates.at(-1).navigation.targetId, 'B');
+  assert.equal(fixture.updates.at(-1).navigation.trend, 'CLOSING');
+  assert.equal(fixture.updates.at(-1).navigation.altitude, 'ABOVE');
+});
+
+test('Tab remains the target-selection authority consumed by the flight update', () => {
+  const fixture = makeNavigationGame();
+  let tabPending = true;
+  Object.assign(fixture.game, {
+    input: {
+      reconHeld: false,
+      consumePress(code) {
+        if (code !== 'Tab' || !tabPending) return false;
+        tabPending = false;
+        return true;
+      },
+    },
+    accumulator: 0,
+    aircraft: { update() {} },
+    chase: { update() {} },
+    terrain: { update() {} },
+    fx: { update() {} },
+    audio: { update() {} },
+    settings: { tier: { terrainBudget: 1 } },
+  });
+  fixture.game.mission.update = () => {};
+
+  fixture.game._updateFlight(0);
+
+  assert.equal(fixture.updates.at(-1).navigation.targetId, 'B');
+});
+
+test('HUD navigation projects only front/on-screen objectives and masks terrain only inside 3 km', () => {
+  const near = {
+    id: 'near', captured: false,
+    position: new THREE.Vector3(0, -10000, -2000),
+    aimPoint: new THREE.Vector3(0, -10000, -2000),
+  };
+  const nearFixture = makeNavigationGame({
+    posts: [near],
+    flightPosition: new THREE.Vector3(0, -10000, 0),
+    velocity: new THREE.Vector3(0, 0, -100),
+  });
+  nearFixture.game._updateHud(1 / 60);
+  const masked = nearFixture.updates.at(-1);
+  assert.equal(masked.navigation.projected, null);
+  assert.equal(masked.navigation.masked, true);
+
+  const far = {
+    id: 'far', captured: false,
+    position: new THREE.Vector3(0, -10000, -4000),
+    aimPoint: new THREE.Vector3(0, -10000, -4000),
+  };
+  const farFixture = makeNavigationGame({
+    posts: [far],
+    flightPosition: new THREE.Vector3(0, -10000, 0),
+  });
+  farFixture.game._updateHud(1 / 60);
+  assert.deepEqual(farFixture.updates.at(-1).navigation.projected, { x: 0, y: 0 });
+  assert.equal(farFixture.updates.at(-1).navigation.masked, false);
+
+  const behind = {
+    id: 'behind', captured: false,
+    position: new THREE.Vector3(0, 0, 1000),
+    aimPoint: new THREE.Vector3(0, 0, 1000),
+  };
+  const behindFixture = makeNavigationGame({ posts: [behind] });
+  behindFixture.game._updateHud(1 / 60);
+  assert.equal(behindFixture.updates.at(-1).navigation.projected, null);
+});
+
+test('recon framing hides navigation and launch clears the prior trend history', () => {
+  const fixture = makeNavigationGame({ reconActive: true });
+  fixture.game.evaluation = { post: fixture.mission.posts[0], inFrame: true };
+  fixture.game._updateHud(0.2);
+  const framed = fixture.updates.at(-1);
+  assert.equal(framed.navigation.reconPresentation, 'hidden');
+
+  fixture.game.flight.velocity.set(0, 0, 0);
+  Object.assign(fixture.game, {
+    screens: { hideAll() {} },
+    chase: { baseFov: 58, reset() {} },
+    terrain: { prime() {} },
+    fx: { reset() {} },
+    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    input: { touchRecon: false, releaseTouch() {} },
+  });
+  fixture.game.mission.begin = () => {};
+  fixture.game.hud.show = () => {};
+  fixture.game.flight.reset = () => {};
+  fixture.game.launch();
+  fixture.game._updateHud(0.2);
+  const restarted = fixture.updates.at(-1);
+  assert.equal(restarted.navigation.trend, null);
+});
+
+test('all-complete missions emit the canonical complete navigation snapshot', () => {
+  const posts = [{
+    id: 'A', captured: true,
+    position: new THREE.Vector3(0, 0, -1000),
+    aimPoint: new THREE.Vector3(0, 0, -1000),
+  }];
+  const fixture = makeNavigationGame({ posts });
+  fixture.game._updateHud(1 / 60);
+  assert.equal(fixture.updates.at(-1).navigation.phase, NAV_PHASE.COMPLETE);
+  assert.equal(fixture.updates.at(-1).navigation.targetId, null);
+});
+
 test('recon capture receives Engine so the final post chain is used', () => {
   const game = Object.create(Game.prototype);
   const post = { bestScore: 0, captured: false };
   const evaluation = { post, score: 0.2 };
   game.engine = { renderer: {}, scene: {} };
-  let source;
-  let capturedEvaluation;
+  let captureArgs;
   game.recon = {
-    capture: (value, ev) => (source = value, capturedEvaluation = ev, { url: 'shot' }),
+    capture: (...args) => (captureArgs = args, { url: 'shot' }),
     retainShot() {},
   };
   game.mission = { photosTaken: 0 };
@@ -102,8 +292,7 @@ test('recon capture receives Engine so the final post chain is used', () => {
   game.audio = { shutter() {}, confirm() {} };
 
   game._takePhoto(evaluation);
-  assert.equal(source, game.engine);
-  assert.equal(capturedEvaluation, evaluation);
+  assert.deepEqual(captureArgs, [game.engine, evaluation], 'navigation data must remain HUD-only and never enter recon capture');
 });
 
 test('replacing a best photo releases the prior plate and retains the new pending shot', () => {
