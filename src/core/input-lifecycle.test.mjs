@@ -344,4 +344,15 @@ withNavigator(() => [], () => {
   assert.equal(flight.velocity.length(), 0, 'impact must stop the simulated aircraft');
 }
 
+{
+  const input = new Input(new Target());
+  input.setTouchBoost(true);
+  input.setTouchAxes(-0.7, 0.5);
+  input.releaseAll();
+  assert.deepEqual(input.intent, NEUTRAL_INTENT, 'Game lifecycle cleanup may centrally release all semantic controls');
+  assert.equal(input.touchBoost, false);
+  assert.equal(input.touchActive, false);
+  input.dispose();
+}
+
 console.log('input, chase and flight lifecycle contracts passed');

@@ -160,6 +160,144 @@ test('settings option setters clamp, persist, and retain assisted-control choice
   assert.equal(saves, 7);
 });
 
+function makeControlGame(mode = 'assisted') {
+  const resets = { input: 0, assist: 0 };
+  const intent = { turn: 0.5, climb: -0.25, speed: 0, boost: false, brake: 0, throttle: 0.72 };
+  const input = {
+    intent,
+    reconHeld: false,
+    releaseAll() { resets.input++; },
+    consumePress() { return false; },
+  };
+  const output = { pitch: 0.1, roll: 0.2, yaw: 0.05, throttle: 0.82, brake: 0 };
+  const calls = [];
+  const assist = {
+    update(...args) { calls.push(args); return output; },
+    reset() { resets.assist++; },
+  };
+  const game = Object.create(Game.prototype);
+  Object.assign(game, {
+    settings: { controlMode: mode, controlSensitivity: 'normal', autoThrottle: true },
+    input,
+    flight: { marker: 'flight' },
+    assist,
+    reconActive: false,
+    accumulator: 0.03,
+    _controlMode: mode,
+    _assistOptions: { sensitivity: 'normal', autoThrottle: true, reconActive: false },
+    _neutralFlightControl: { pitch: 0, roll: 0, yaw: 0, throttle: 0.8, brake: 0 },
+  });
+  return { game, input, intent, output, calls, resets };
+}
+
+test('Direct passes the exact input object while Assisted reuses one controller and options object', () => {
+  const direct = makeControlGame('direct');
+  assert.equal(direct.game._flightControlForStep(1 / 120), direct.input);
+  assert.equal(direct.calls.length, 0);
+
+  const assisted = makeControlGame('assisted');
+  const first = assisted.game._flightControlForStep(1 / 120);
+  const options = assisted.calls[0][3];
+  const second = assisted.game._flightControlForStep(1 / 120);
+  assert.equal(first, assisted.output);
+  assert.equal(second, assisted.output, 'fixed substeps must reuse the controller output');
+  assert.equal(assisted.calls[0][1], assisted.intent);
+  assert.equal(assisted.calls[0][2], assisted.game.flight);
+  assert.equal(assisted.calls[1][3], options, 'fixed substeps must reuse the options object');
+});
+
+test('Assisted recon toggles once per Space edge while Direct preserves held recon', () => {
+  const assisted = makeControlGame('assisted');
+  let pending = true;
+  assisted.input.consumePress = (code) => code === 'Space' && pending && (pending = false, true);
+  assisted.game._updateReconMode();
+  assert.equal(assisted.game.reconActive, true);
+  assisted.game._updateReconMode();
+  assert.equal(assisted.game.reconActive, true, 'a held key must not toggle a second time');
+
+  const direct = makeControlGame('direct');
+  direct.input.reconHeld = true;
+  direct.game._updateReconMode();
+  assert.equal(direct.game.reconActive, true);
+  direct.input.reconHeld = false;
+  direct.game._updateReconMode();
+  assert.equal(direct.game.reconActive, false);
+});
+
+test('Assisted touch recon follows each tap edge instead of the legacy held latch', () => {
+  const fixture = makeControlGame('assisted');
+  fixture.input.modality = 'touch';
+  fixture.input.touchRecon = false;
+  fixture.game._touchReconWas = false;
+
+  fixture.input.touchRecon = true;
+  fixture.input.consumePress = (code) => code === 'Space';
+  fixture.game._updateReconMode();
+  assert.equal(fixture.game.reconActive, true, 'first touch tap opens recon exactly once despite also producing Space');
+
+  fixture.input.touchRecon = false;
+  fixture.input.consumePress = () => false;
+  fixture.game._updateReconMode();
+  assert.equal(fixture.game.reconActive, false, 'second touch tap must close recon without requiring a third tap');
+});
+
+test('mode switches clean held state, reset accumulation, and synchronize touch mode', () => {
+  const fixture = makeControlGame('assisted');
+  const modes = [];
+  fixture.game.touchControls = { setMode: (mode) => modes.push(mode) };
+  fixture.game.settings.controlMode = 'direct';
+  fixture.game._syncControlMode();
+  assert.deepEqual(fixture.resets, { input: 1, assist: 1 });
+  assert.equal(fixture.game.accumulator, 0);
+  assert.equal(fixture.game.reconActive, false);
+  assert.deepEqual(modes, ['direct']);
+});
+
+test('malformed assisted output falls back to one finite neutral control object', () => {
+  const fixture = makeControlGame('assisted');
+  fixture.game.assist.update = () => ({ pitch: NaN, roll: Infinity, yaw: 0, throttle: 1, brake: 0 });
+  const first = fixture.game._flightControlForStep(1 / 120);
+  const second = fixture.game._flightControlForStep(1 / 120);
+  assert.equal(first, fixture.game._neutralFlightControl);
+  assert.equal(second, first);
+  assert.deepEqual(first, { pitch: 0, roll: 0, yaw: 0, throttle: 0.8, brake: 0 });
+});
+
+test('control lifecycle cleanup covers pause, launch hook, blur, and disposal', () => {
+  const fixture = makeControlGame('assisted');
+  fixture.game.state = 'flying';
+  fixture.game.hud = { show() {} };
+  fixture.game.screens = { show() {}, pauseLayer: {} };
+  fixture.game.pause();
+  assert.deepEqual(fixture.resets, { input: 1, assist: 1 });
+
+  class EventTargetStub {
+    constructor() { this.listeners = new Map(); }
+    addEventListener(type, fn) { this.listeners.set(type, fn); }
+    removeEventListener(type, fn) { if (this.listeners.get(type) === fn) this.listeners.delete(type); }
+    fire(type) { this.listeners.get(type)?.(); }
+  }
+  const target = new EventTargetStub();
+  const visibility = new EventTargetStub();
+  visibility.hidden = false;
+  fixture.game._installControlLifecycle(target, visibility);
+  target.fire('blur');
+  assert.deepEqual(fixture.resets, { input: 2, assist: 2 });
+  visibility.hidden = true;
+  visibility.fire('visibilitychange');
+  assert.deepEqual(fixture.resets, { input: 3, assist: 3 });
+  fixture.game._disposeControlLifecycle();
+  assert.equal(target.listeners.size, 0);
+  assert.equal(visibility.listeners.size, 0);
+});
+
+test('touch controls receive the current flight mode when attached', () => {
+  const fixture = makeControlGame('assisted');
+  const modes = [];
+  fixture.game.setTouchControls({ setMode: (mode) => modes.push(mode) });
+  assert.deepEqual(modes, ['assisted']);
+});
+
 test('HUD navigation reads the authoritative mission target once and advances directly after capture', () => {
   const fixture = makeNavigationGame();
   fixture.game._updateHud(1 / 60);

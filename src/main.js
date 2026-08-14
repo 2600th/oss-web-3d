@@ -70,6 +70,7 @@ const input = new Input();
 const game = new Game(engine, settings, input);
 
 const touch = new TouchControls(input, document.getElementById('ui'));
+game.setTouchControls(touch);
 touch.setEnabled(isTouchDevice());
 // Touch counts as the gesture that unlocks audio, which iOS requires and which
 // the keyboard path would otherwise never receive on a phone.

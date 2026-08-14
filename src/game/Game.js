@@ -10,6 +10,7 @@ import { computeMotionProfile } from '../fx/post/motionProfile.js';
 import { setFxResolution, setSceneDepth } from '../fx/gpu/FrameUniforms.js';
 import { Audio } from '../fx/Audio.js';
 import { FlightModel } from '../flight/FlightModel.js';
+import { AssistController } from '../flight/AssistController.js';
 import { Aircraft } from '../flight/Aircraft.js';
 import { ChaseCamera } from '../flight/ChaseCamera.js';
 import { Mission } from './Mission.js';
@@ -116,6 +117,16 @@ export class Game {
     engine.scene.environment = this.envMap;
 
     this.flight = new FlightModel();
+    this.assist = new AssistController();
+    this._controlMode = settings.controlMode === 'direct' ? 'direct' : 'assisted';
+    this._assistOptions = {
+      sensitivity: settings.controlSensitivity,
+      autoThrottle: settings.autoThrottle,
+      reconActive: false,
+    };
+    this._neutralFlightControl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.8, brake: 0 };
+    this._touchReconWas = false;
+    this.touchControls = null;
     this.chase = new ChaseCamera(engine.camera);
     this.recon = new ReconCamera(engine.camera);
     this.navigationHint = new NavigationHintTracker();
@@ -183,6 +194,7 @@ export class Game {
     this._motionMediaQuery = null;
     this._motionMediaListener = null;
     this._installMotionPreference();
+    this._installControlLifecycle();
     this._cinematicLook = new THREE.Vector3();
     this._disposed = false;
   }
@@ -264,6 +276,7 @@ export class Game {
 
   launch() {
     this.navigationHint?.reset();
+    this._resetFlightControls();
     this.screens.hideAll();
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
@@ -280,10 +293,6 @@ export class Game {
     this.audio.resume();
     this.audio.resetEngine();
     this.audio.music?.play('sortie');
-    // A latched recon toggle must not survive into a new sortie, or the camera
-    // is already up before the player has touched anything.
-    this.input.touchRecon = false;
-    this.input.releaseTouch();
     this.mission.begin();
     this.hud.show(true);
     this.state = 'flying';
@@ -307,6 +316,7 @@ export class Game {
 
   pause() {
     if (this.state !== 'flying') return;
+    this._resetFlightControls();
     this.state = 'paused';
     this.hud.show(false);
     this.screens.show(this.screens.pauseLayer);
@@ -332,6 +342,82 @@ export class Game {
     if (tier === 'low' || tier === 'phone') this._disposeWaterRefraction();
     this.fx.setQuality(this.settings.tier);
     this.screens.setQuality(tier);
+  }
+
+  /** Attach touch UI after Game construction without coupling boot order. */
+  setTouchControls(touchControls) {
+    this.touchControls = touchControls ?? null;
+    this.touchControls?.setMode?.(this._controlMode);
+  }
+
+  /** Apply a settings mode change once, clearing every held cross-mode input. */
+  _syncControlMode() {
+    const nextMode = this.settings.controlMode === 'direct' ? 'direct' : 'assisted';
+    if (nextMode === this._controlMode) return;
+    this._controlMode = nextMode;
+    this._resetFlightControls();
+    this.touchControls?.setMode?.(nextMode);
+  }
+
+  _resetFlightControls() {
+    if (this.input?.releaseAll) this.input.releaseAll();
+    else this.input?.releaseTouch?.();
+    this.assist?.reset?.();
+    this.accumulator = 0;
+    this.reconActive = false;
+    this._touchReconWas = false;
+  }
+
+  _installControlLifecycle(target = globalThis.window, visibilityTarget = globalThis.document) {
+    this._disposeControlLifecycle();
+    this._onControlBlur = () => this._resetFlightControls();
+    this._onControlVisibility = () => {
+      if (visibilityTarget?.hidden) this._resetFlightControls();
+    };
+    if (target?.addEventListener) {
+      this._controlLifecycleTarget = target;
+      target.addEventListener('blur', this._onControlBlur);
+    }
+    if (visibilityTarget?.addEventListener) {
+      this._controlVisibilityTarget = visibilityTarget;
+      visibilityTarget.addEventListener('visibilitychange', this._onControlVisibility);
+    }
+  }
+
+  _disposeControlLifecycle() {
+    if (this._controlLifecycleTarget && this._onControlBlur) {
+      this._controlLifecycleTarget.removeEventListener?.('blur', this._onControlBlur);
+    }
+    if (this._controlVisibilityTarget && this._onControlVisibility) {
+      this._controlVisibilityTarget.removeEventListener?.('visibilitychange', this._onControlVisibility);
+    }
+    this._controlLifecycleTarget = null;
+    this._controlVisibilityTarget = null;
+    this._onControlBlur = null;
+    this._onControlVisibility = null;
+  }
+
+  _updateReconMode() {
+    if (this._controlMode === 'assisted') {
+      const touchRecon = Boolean(this.input.touchRecon);
+      const touchEdge = this.input.modality === 'touch' && touchRecon !== Boolean(this._touchReconWas);
+      const pressed = this.input.consumePress('Space');
+      if (pressed || touchEdge) this.reconActive = !this.reconActive;
+      this._touchReconWas = touchRecon;
+    } else {
+      this.reconActive = Boolean(this.input.reconHeld);
+      this._touchReconWas = Boolean(this.input.touchRecon);
+    }
+  }
+
+  _flightControlForStep(step) {
+    if (this._controlMode === 'direct') return this.input;
+    const options = this._assistOptions;
+    options.sensitivity = this.settings.controlSensitivity;
+    options.autoThrottle = this.settings.autoThrottle;
+    options.reconActive = this.reconActive;
+    const control = this.assist.update(step, this.input.intent, this.flight, options);
+    return isFiniteFlightControl(control) ? control : this._neutralFlightControl;
   }
 
   _rebuildTerrain(resolution, previousResolution = this.terrainResolution) {
@@ -379,7 +465,8 @@ export class Game {
 
   update(dt) {
     const input = this.input;
-    input.update(dt, this.settings.invertPitch);
+    input.update(dt, this.settings.verticalMode);
+    this._syncControlMode();
 
     // Browsers require a gesture before audio can start, so the first key press
     // of the session is what brings the engine up.
@@ -441,7 +528,7 @@ export class Game {
       if (input.consumePress('Tab')) this.mission.cycleTarget(1);
       if (input.consumePress('KeyF')) this.recon.zoomIn();
       if (input.consumePress('KeyV')) this.recon.zoomOut();
-      this.reconActive = input.reconHeld;
+      this._updateReconMode();
     } else {
       this.reconActive = false;
     }
@@ -449,7 +536,7 @@ export class Game {
     this.accumulator += dt;
     let steps = 0;
     while (this.accumulator >= PHYSICS_STEP && steps < MAX_STEPS) {
-      flight.update(PHYSICS_STEP, input);
+      flight.update(PHYSICS_STEP, this._flightControlForStep(PHYSICS_STEP));
       if (!flight.crashed && flight.checkTerrainCollision(PHYSICS_STEP)) {
         this.onCrash();
       }
@@ -783,6 +870,8 @@ export class Game {
     if (this._disposed) return;
     this._disposed = true;
     this._disposeMotionPreference();
+    this._disposeControlLifecycle();
+    this._resetFlightControls();
     this.navigationHint?.reset();
     this._disposeWaterRefraction();
     this.mission?.dispose?.();
@@ -802,7 +891,6 @@ export class Game {
     this.hud?.dispose?.();
     this.audio?.dispose?.();
     this._skipHandlers?.clear?.();
-    this.input?.releaseTouch?.();
   }
 
   _updateHud(dt) {
@@ -893,6 +981,13 @@ export class Game {
       navigation,
     });
   }
+}
+
+function isFiniteFlightControl(control) {
+  return control !== null && typeof control === 'object' &&
+    Number.isFinite(control.pitch) && Number.isFinite(control.roll) &&
+    Number.isFinite(control.yaw) && Number.isFinite(control.throttle) &&
+    Number.isFinite(control.brake);
 }
 
 const _euler = new THREE.Euler();
