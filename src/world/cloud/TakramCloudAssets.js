@@ -67,9 +67,16 @@ async function defaultLoadBytes(url) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function loadPngTexture(textureLoader, url, entry) {
+function loadPngTexture(textureLoader, bytes, entry, objectUrl) {
   return new Promise((resolve, reject) => {
+    const url = objectUrl.createObjectURL(new Blob([bytes], { type: 'image/png' }));
     let placeholder = null;
+    let revoked = false;
+    const revokeObjectUrl = () => {
+      if (revoked) return;
+      revoked = true;
+      objectUrl.revokeObjectURL(url);
+    };
     const disposePlaceholder = texture => {
       texture?.dispose?.();
       if (placeholder != null && placeholder !== texture) placeholder.dispose?.();
@@ -79,19 +86,23 @@ function loadPngTexture(textureLoader, url, entry) {
         const image = texture?.image;
         if (image?.width !== entry.width || image?.height !== entry.height) {
           disposePlaceholder(texture);
+          revokeObjectUrl();
           reject(new IneligibleTakramReferenceError(
             `Takram cloud asset ${entry.file} image dimensions mismatch: expected ${entry.width}x${entry.height}, got ${image?.width ?? 0}x${image?.height ?? 0}`,
           ));
           return;
         }
         if (placeholder != null && placeholder !== texture) placeholder.dispose?.();
+        revokeObjectUrl();
         resolve(texture);
       }, undefined, error => {
         placeholder?.dispose?.();
+        revokeObjectUrl();
         reject(asIneligibleReferenceError(error));
       });
     } catch (error) {
       placeholder?.dispose?.();
+      revokeObjectUrl();
       reject(asIneligibleReferenceError(error));
     }
   });
@@ -150,6 +161,7 @@ export async function validateTakramCloudAssetBytes(name, bytes) {
 export async function loadOfficialTakramCloudAssets({
   loadBytes = defaultLoadBytes,
   textureLoader = new TextureLoader(),
+  objectUrl = URL,
   baseUrl = ASSET_BASE_URL,
 } = {}) {
   const loaded = new Map();
@@ -163,8 +175,9 @@ export async function loadOfficialTakramCloudAssets({
 
     const localWeatherTexture = configureRepeatedTexture(await loadPngTexture(
       textureLoader,
-      `${baseUrl}${TAKRAM_CLOUD_ASSET_MANIFEST.localWeather.file}`,
+      loaded.get('localWeather'),
       TAKRAM_CLOUD_ASSET_MANIFEST.localWeather,
+      objectUrl,
     ));
     textures.push(localWeatherTexture);
     const shapeTexture = createVolume(
@@ -179,8 +192,9 @@ export async function loadOfficialTakramCloudAssets({
     textures.push(shapeDetailTexture);
     const turbulenceTexture = configureRepeatedTexture(await loadPngTexture(
       textureLoader,
-      `${baseUrl}${TAKRAM_CLOUD_ASSET_MANIFEST.turbulence.file}`,
+      loaded.get('turbulence'),
       TAKRAM_CLOUD_ASSET_MANIFEST.turbulence,
+      objectUrl,
     ));
     textures.push(turbulenceTexture);
     return {

@@ -1022,7 +1022,7 @@ export class CloudComparisonHarness {
     if (!this.requiresEnabledTakram) return;
     if (this.cloudAssets == null) {
       try {
-        this.cloudAssets = await loadOfficialTakramCloudAssets();
+        this.cloudAssets = await this._loadOfficialCloudAssets();
         this.cloudAssetMode = this.cloudAssets.mode;
       } catch (error) {
         this.cloudAssetError = error instanceof Error ? error.message : String(error);
@@ -1032,6 +1032,10 @@ export class CloudComparisonHarness {
       }
     }
     this.backend.setCloudTextures(this.cloudAssets);
+  }
+
+  async _loadOfficialCloudAssets() {
+    return loadOfficialTakramCloudAssets();
   }
 
   _assertTakramReferenceAssetsAvailable() {

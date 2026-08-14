@@ -64,7 +64,8 @@ THE SOFTWARE.
 The copied `local_weather.png`, `shape.bin`, `shape_detail.bin`, and
 `turbulence.png` files are from `@takram/three-clouds@0.7.6`:
 https://github.com/takram-design-engineering/three-geospatial
-Release tag: `@takram/three-clouds@0.7.6`.
+Release tag: `clouds@0.7.6`.
+Annotated commit: `2edc360409d64e4bc0559e2f29170bcb15db495f`.
 
 The MIT License (MIT)
 

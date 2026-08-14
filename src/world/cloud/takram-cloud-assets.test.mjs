@@ -11,6 +11,7 @@ import {
 } from './TakramCloudAssets.js';
 
 const PACKAGE_ASSET_ROOT = new URL('../../../node_modules/@takram/three-clouds/assets/', import.meta.url);
+const PUBLIC_ASSET_ROOT = new URL('../../../public/cloud-comparison/takram/', import.meta.url);
 
 const EXPECTED_MANIFEST = {
   localWeather: {
@@ -37,6 +38,15 @@ const EXPECTED_MANIFEST = {
 
 test('asset manifest pins the exact Takram 0.7.6 cloud files', () => {
   assert.deepEqual(TAKRAM_CLOUD_ASSET_MANIFEST, EXPECTED_MANIFEST);
+});
+
+test('committed comparison assets exactly match the pinned Takram package fixtures', async () => {
+  for (const [name, entry] of Object.entries(EXPECTED_MANIFEST)) {
+    const packageBytes = new Uint8Array(await readFile(new URL(entry.file, PACKAGE_ASSET_ROOT)));
+    const publicBytes = new Uint8Array(await readFile(new URL(entry.file, PUBLIC_ASSET_ROOT)));
+    assert.deepEqual(publicBytes, packageBytes, `${entry.file} differs from @takram/three-clouds@0.7.6`);
+    await validateTakramCloudAssetBytes(name, publicBytes);
+  }
 });
 
 test('validator accepts pinned package bytes and rejects corruption', async () => {
@@ -78,18 +88,41 @@ test('validator identifies missing, wrong-sized, and wrong-hash files as ineligi
   );
 });
 
-test('loader validates bytes before using the supplied TextureLoader for pinned PNGs', async () => {
+test('loader decodes each PNG from the exact validated Blob payload and revokes its object URL', async () => {
   const source = new Map();
   for (const entry of Object.values(EXPECTED_MANIFEST)) {
     source.set(entry.file, new Uint8Array(await readFile(new URL(entry.file, PACKAGE_ASSET_ROOT))));
   }
-  const requests = [];
+  const blobs = new Map();
+  const createdUrls = [];
+  const revokedUrls = [];
+  const decodedPayloads = [];
+  const objectUrl = {
+    createObjectURL(blob) {
+      const url = `blob:validated-takram-${createdUrls.length}`;
+      blobs.set(url, blob);
+      createdUrls.push(url);
+      return url;
+    },
+    revokeObjectURL(url) {
+      revokedUrls.push(url);
+    },
+  };
   const textureLoader = {
-    load(url, onLoad) {
-      requests.push(url);
-      const entry = Object.values(EXPECTED_MANIFEST).find(item => url.endsWith(item.file));
+    load(url, onLoad, _onProgress, onError) {
+      const blob = blobs.get(url);
+      if (blob == null) {
+        queueMicrotask(() => onError(new Error('a second network URL supplied different PNG bytes')));
+        return new Texture();
+      }
+      const entry = Object.values(EXPECTED_MANIFEST).find(item => item.bytes === blob.size);
       const texture = new Texture({ width: entry.width, height: entry.height });
-      queueMicrotask(() => onLoad(texture));
+      void blob.arrayBuffer()
+        .then(buffer => {
+          decodedPayloads.push(new Uint8Array(buffer));
+          onLoad(texture);
+        })
+        .catch(onError);
       return texture;
     },
   };
@@ -97,13 +130,48 @@ test('loader validates bytes before using the supplied TextureLoader for pinned 
   const assets = await loadOfficialTakramCloudAssets({
     loadBytes: async url => source.get(url.split('/').at(-1)).slice(),
     textureLoader,
+    objectUrl,
   });
 
-  assert.deepEqual(requests, [
-    '/cloud-comparison/takram/local_weather.png',
-    '/cloud-comparison/takram/turbulence.png',
-  ]);
+  assert.deepEqual(decodedPayloads, [source.get('local_weather.png'), source.get('turbulence.png')]);
+  assert.deepEqual(revokedUrls, createdUrls);
   disposeTakramCloudAssets(assets);
+});
+
+test('loader revokes a validated Blob URL when TextureLoader decoding fails', async () => {
+  const source = new Map();
+  for (const entry of Object.values(EXPECTED_MANIFEST)) {
+    source.set(entry.file, new Uint8Array(await readFile(new URL(entry.file, PACKAGE_ASSET_ROOT))));
+  }
+  const createdUrls = [];
+  const revokedUrls = [];
+  const objectUrl = {
+    createObjectURL() {
+      const url = `blob:validated-takram-${createdUrls.length}`;
+      createdUrls.push(url);
+      return url;
+    },
+    revokeObjectURL(url) {
+      revokedUrls.push(url);
+    },
+  };
+
+  await assert.rejects(
+    loadOfficialTakramCloudAssets({
+      loadBytes: async url => source.get(url.split('/').at(-1)).slice(),
+      objectUrl,
+      textureLoader: {
+        load(_url, _onLoad, _onProgress, onError) {
+          const placeholder = new Texture();
+          queueMicrotask(() => onError(new Error('decoder rejected validated payload')));
+          return placeholder;
+        },
+      },
+    }),
+    /decoder rejected validated payload/,
+  );
+  assert.equal(createdUrls.length, 1);
+  assert.deepEqual(revokedUrls, createdUrls);
 });
 
 test('loader configures official textures and disposal releases each exactly once', async () => {
@@ -114,9 +182,14 @@ test('loader configures official textures and disposal releases each exactly onc
   const decodedPngs = [];
   const assets = await loadOfficialTakramCloudAssets({
     loadBytes: async url => source.get(url.split('/').at(-1)).slice(),
+    objectUrl: {
+      createObjectURL(blob) { return `blob:fixture-${blob.size}`; },
+      revokeObjectURL() {},
+    },
     textureLoader: {
       load(url, onLoad) {
-        const entry = Object.values(EXPECTED_MANIFEST).find(item => url.endsWith(item.file));
+        const entry = Object.values(EXPECTED_MANIFEST)
+          .find(item => url === `blob:fixture-${item.bytes}`);
         const texture = new Texture({ width: entry.width, height: entry.height });
         decodedPngs.push(texture);
         queueMicrotask(() => onLoad(texture));
@@ -148,23 +221,34 @@ test('loader configures official textures and disposal releases each exactly onc
   assert.equal([...disposeCounts.values()].every(count => count === 1), true);
 });
 
-test('loader makes invalid official assets ineligible before decoding', async () => {
+test('loader does not invoke the TextureLoader until every official asset validates', async () => {
   const source = new Map();
   for (const entry of Object.values(EXPECTED_MANIFEST)) {
     source.set(entry.file, new Uint8Array(await readFile(new URL(entry.file, PACKAGE_ASSET_ROOT))));
   }
   source.get('shape.bin')[0] ^= 0xff;
-  let decodeCalls = 0;
+  let objectUrlCalls = 0;
+  let textureLoaderCalls = 0;
 
   await assert.rejects(
     loadOfficialTakramCloudAssets({
       loadBytes: async url => source.get(url.split('/').at(-1)).slice(),
-      decodePng: async () => {
-        decodeCalls += 1;
-        return new Texture();
+      objectUrl: {
+        createObjectURL() {
+          objectUrlCalls += 1;
+          return 'blob:must-not-decode';
+        },
+        revokeObjectURL() {},
+      },
+      textureLoader: {
+        load() {
+          textureLoaderCalls += 1;
+          return new Texture();
+        },
       },
     }),
     /Takram cloud asset shape SHA-256 mismatch/,
   );
-  assert.equal(decodeCalls, 0);
+  assert.equal(objectUrlCalls, 0);
+  assert.equal(textureLoaderCalls, 0);
 });

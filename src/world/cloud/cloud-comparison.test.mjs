@@ -5,6 +5,7 @@ import { DEFAULT_STBN_URL } from '@takram/three-geospatial';
 
 import {
   COMPARISON_SCENARIO_NAMES,
+  CloudComparisonHarness,
   assessTakramReferenceAssetEligibility,
   assessVisualEligibility,
   applyContextEvent,
@@ -404,6 +405,75 @@ test('comparison makes an unavailable official cloud asset ineligible before war
     requiresEnabledTakram: true,
     cloudAssetMode: 'official-pinned',
   }), { eligible: true, reason: null });
+});
+
+test('startRun stops before warmup, render, and benchmark frame one when cloud assets fail', async () => {
+  const calls = { assetLoader: 0, render: 0, benchmarkFrames: 0 };
+  const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
+    disposed: false,
+    running: false,
+    phase: 'ready',
+    frame: 0,
+    runResult: null,
+    backendName: 'takram',
+    initialQuality: 'high',
+    quality: 'high',
+    settings: { tier: {} },
+    requiresEnabledTakram: true,
+    cloudAssets: null,
+    cloudAssetMode: 'loading-official',
+    historyResets: [],
+    contextEvents: [],
+    lifecycleAudit: { reports: [] },
+    scenario: { warmupFrames: 120, events: [], fixedDeltaSeconds: 1 / 60 },
+    environment: { uniforms: { uTime: { value: 0 }, uCloudTime: { value: 0 } } },
+    benchmark: {
+      minimumSamples: 1,
+      reset() {},
+      recordFrameInterval() { calls.benchmarkFrames += 1; },
+    },
+    backend: {
+      profile: { enabled: true },
+      setSize() {},
+      setCloudTextures() { throw new Error('cloud textures must not be installed after failure'); },
+    },
+    engine: {
+      maxPixelRatio: 1,
+      camera: { updateProjectionMatrix() {} },
+      renderer: {
+        setPixelRatio() {},
+        setSize() {},
+        getDrawingBufferSize(vector) { return vector.set(320, 180); },
+      },
+      composer: { setSize() {} },
+      render() { calls.render += 1; },
+    },
+    _prepareStbn: async () => {},
+    async _loadOfficialCloudAssets() {
+      calls.assetLoader += 1;
+      throw new Error('fixture cloud asset load failed');
+    },
+  });
+  const previousWindow = globalThis.window;
+  const previousConsoleError = console.error;
+  globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
+  console.error = () => {};
+  try {
+    await assert.rejects(
+      runtime.startRun(),
+      error => error?.code === 'ineligible-reference'
+        && error.message === 'Ineligible Takram reference: official-cloud-assets-unavailable',
+    );
+  } finally {
+    globalThis.window = previousWindow;
+    console.error = previousConsoleError;
+  }
+
+  assert.equal(calls.assetLoader, 1);
+  assert.equal(runtime.phase, 'ineligible');
+  assert.equal(runtime.cloudAssetMode, 'unavailable');
+  assert.equal(calls.render, 0);
+  assert.equal(calls.benchmarkFrames, 0);
 });
 
 test('comparison accounts for each harness-owned official cloud texture exactly once', () => {
