@@ -4,8 +4,9 @@ THIRD-PARTY SOFTWARE NOTICES
 LinearAbiltyCastingThreeJS
 --------------------------
 
-Portions of the GPU particle, ribbon, frame-uniform, and shader utility code
-are adapted from LinearAbiltyCastingThreeJS:
+Portions of the GPU particle, ribbon, frame-uniform, shader utility, impact
+shell displacement/dissolve, and shockwave radius profile code are adapted
+from LinearAbiltyCastingThreeJS:
 https://github.com/achrefelouafi/LinearAbiltyCastingThreeJS
 
 MIT License
