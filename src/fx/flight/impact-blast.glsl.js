@@ -38,8 +38,7 @@ export const IMPACT_SHELL_FRAGMENT = /* glsl */ `
     float fresnel = pow(1.0 - abs(dot(normalize(vObjectNormal), vec3(0.0, 0.0, 1.0))), 1.7);
     float dissolveThreshold = smoothstep(0.28, 1.0, uAge);
     float dissolve = smoothstep(dissolveThreshold - 0.16, dissolveThreshold + 0.10, vShellNoise);
-    float birth = smoothstep(0.0, 0.045, uAge);
-    float alpha = (0.28 + fresnel * 0.72) * dissolve * birth * (1.0 - smoothstep(0.70, 1.0, uAge));
+    float alpha = (0.28 + fresnel * 0.72) * dissolve * (1.0 - smoothstep(0.70, 1.0, uAge));
     if (alpha < 0.004) discard;
 
     vec3 whiteCore = vec3(1.85, 1.42, 0.82);

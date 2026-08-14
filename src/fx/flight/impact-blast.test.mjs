@@ -27,14 +27,20 @@ test('precreates a hidden shell, terrain ring, and fixed no-shadow impact light'
   blast.dispose();
 });
 
-test('changes ring detail with drawRange while retaining the prewarmed geometry', () => {
+test('changes every tier ring detail with drawRange while retaining the prewarmed geometry', () => {
   const blast = new ImpactBlast();
   const geometry = blast.ring.geometry;
 
-  blast.setQuality({ name: 'phone' });
-
-  assert.equal(blast.ring.geometry, geometry);
-  assert.equal(blast.ring.geometry.drawRange.count, 32 * 6);
+  for (const [name, segments] of [
+    ['phone', 32],
+    ['low', 48],
+    ['medium', 72],
+    ['high', 96],
+  ]) {
+    blast.setQuality({ name });
+    assert.equal(blast.ring.geometry, geometry, `${name} must retain the maximum geometry`);
+    assert.equal(blast.ring.geometry.drawRange.count, segments * 6, `${name} draw count`);
+  }
   blast.dispose();
 });
 
@@ -70,6 +76,24 @@ test('ages out the fixed flash before hiding the shell and ring', () => {
   blast.update(1.25);
   assert.equal(blast.shell.visible, false);
   assert.equal(blast.ring.visible, false);
+  blast.dispose();
+});
+
+test('uses a normalized exponential flash envelope with an exact 350 ms boundary', () => {
+  const blast = new ImpactBlast();
+  blast.trigger(impact());
+  const peak = blast.light.intensity;
+
+  blast.update(0.175);
+  const midpointRatio = blast.light.intensity / peak;
+  assert.ok(Math.abs(midpointRatio - 0.07585818002124355) < 1e-12);
+  assert.ok(Math.abs(midpointRatio - 0.25) > 0.1, 'midpoint must not be quadratic');
+
+  blast.trigger(impact());
+  blast.update(0.349);
+  assert.ok(blast.light.intensity > 0);
+  blast.update(0.001);
+  assert.equal(blast.light.intensity, 0);
   blast.dispose();
 });
 
@@ -114,6 +138,25 @@ test('ships one displaced dissolving shell and a GLSL3 shock-ring profile', asyn
   assert.match(shaders, /\bout\s+vec4\s+outColor\s*;/);
   assert.match(implementation, /glslVersion:\s*THREE\.GLSL3/);
   assert.doesNotMatch(shaders, /gl_FragColor/);
+});
+
+test('shell ignition has nonzero alpha at trigger age without an update-order birth gate', async () => {
+  const shaders = await readFile(new URL('./impact-blast.glsl.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(shaders, /float\s+birth|smoothstep\(0\.0,\s*0\.045,\s*uAge\)/);
+
+  const smoothstep = (low, high, value) => {
+    const t = Math.max(0, Math.min(1, (value - low) / (high - low)));
+    return t * t * (3 - 2 * t);
+  };
+  const triggerAge = 0;
+  const shellNoise = 0.5;
+  const fresnel = 0.5;
+  const dissolveThreshold = smoothstep(0.28, 1, triggerAge);
+  const dissolve = smoothstep(dissolveThreshold - 0.16, dissolveThreshold + 0.1, shellNoise);
+  const alpha = (0.28 + fresnel * 0.72)
+    * dissolve
+    * (1 - smoothstep(0.7, 1, triggerAge));
+  assert.ok(alpha > 0);
 });
 
 test('trigger does not allocate a temporary impact vector', async () => {

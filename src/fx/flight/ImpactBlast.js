@@ -9,11 +9,19 @@ import {
 const UP = new THREE.Vector3(0, 1, 0);
 const RING_LIFE = 0.9;
 const SHELL_LIFE = 1.25;
-const LIGHT_LIFE = 0.36;
-const RING_SEGMENTS = Object.freeze({ phone: 32, low: 48, medium: 64, high: 96 });
+const LIGHT_LIFE = 0.35;
+// Dimensionless decay constant for a fast ignition spike. Normalizing expm1
+// keeps the peak at one and the 350 ms boundary exactly at zero.
+const LIGHT_DECAY_K = 5;
+const RING_SEGMENTS = Object.freeze({ phone: 32, low: 48, medium: 72, high: 96 });
 
 function clamp01(value) {
   return THREE.MathUtils.clamp(value, 0, 1);
+}
+
+function flashEnvelope(progress) {
+  if (progress >= 1) return 0;
+  return Math.expm1(LIGHT_DECAY_K * (1 - progress)) / Math.expm1(LIGHT_DECAY_K);
 }
 
 /**
@@ -166,7 +174,7 @@ export class ImpactBlast {
     this.ring.scale.setScalar(radius);
 
     const lightAge = clamp01(this._age / LIGHT_LIFE);
-    this.light.intensity = lightAge >= 1 ? 0 : this._peakLight * (1 - lightAge) ** 2;
+    this.light.intensity = this._peakLight * flashEnvelope(lightAge);
     if (this._age >= RING_LIFE) this.ring.visible = false;
     if (this._age >= SHELL_LIFE) this.shell.visible = false;
   }
