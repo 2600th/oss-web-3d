@@ -283,6 +283,7 @@ export class TakramCloudRendererAdapter {
       { width: this._width, height: this._height },
       AtmosphereParameters.DEFAULT,
     );
+    effect.skipRendering = false;
     effect.qualityPreset = this.profile.takram;
     effect.coverage = 0.28;
     effect.localWeatherRepeat.set(1.35, 1.1);

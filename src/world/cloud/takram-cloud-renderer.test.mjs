@@ -62,6 +62,8 @@ test('constructs and preallocates the real vanilla Takram backend', () => {
 
   assert.strictEqual(assertCloudRendererBackend(backend), backend);
   assert.ok(backend.effect instanceof CloudsEffect);
+  assert.equal(backend.effect.skipRendering, false);
+  assert.equal(backend.effect.defines.has('SKIP_RENDERING'), false);
   assert.strictEqual(backend.camera, options.camera);
   assert.strictEqual(backend.scene, options.scene);
   assert.strictEqual(backend.depthTexture, options.stableDepthTexture);
