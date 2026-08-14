@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Data3DTexture, RedFormat, Texture } from 'three';
+import { Data3DTexture, PerspectiveCamera, RedFormat, Texture, Vector3 } from 'three';
 import { DEFAULT_STBN_URL } from '@takram/three-geospatial';
 
 import {
@@ -685,6 +685,106 @@ test('startRun publishes and returns an ineligible result before warmup when clo
   assert.equal(calls.assetLoader, 1);
   assert.equal(runtime.phase, 'ineligible');
   assert.equal(runtime.cloudAssetMode, 'unavailable');
+  assert.equal(calls.render, 0);
+  assert.equal(calls.benchmarkFrames, 0);
+});
+
+test('startRun publishes a fresh ineligible result when a context-restore asset reload fails', async () => {
+  const calls = { render: 0, benchmarkFrames: 0 };
+  const staleResult = Object.freeze({ profile: 'stale-profile', sentinel: 'pre-context-result' });
+  let rejectContextRestore;
+  const runtime = Object.assign(Object.create(CloudComparisonHarness.prototype), {
+    disposed: false,
+    running: false,
+    phase: 'ready',
+    frame: 0,
+    runResult: staleResult,
+    backendName: 'takram',
+    initialQuality: 'high',
+    quality: 'high',
+    settings: { tier: {} },
+    requiresEnabledTakram: true,
+    cloudAssets: { mode: 'official-pinned' },
+    cloudAssetMode: 'official-pinned',
+    profileName: 'takram-reference',
+    view: 'cloud-alpha',
+    profileContext: null,
+    terrainDepthBypassed: false,
+    historyResets: [],
+    contextEvents: [],
+    lifecycleAudit: { reports: [] },
+    scenario: {
+      name: 'cloud-buffer', warmupFrames: 120, fixedDeltaSeconds: 1 / 60, minimumClearance: 0,
+      events: [{ frame: 0, camera: {
+        kind: 'world', position: [0, 6000, 0], target: [0, 0, 0], roll: 0, fov: 50,
+      } }],
+      captureKind: 'raw-cloud-buffer-diagnostic', inSceneMissionCapture: false,
+    },
+    environment: {
+      uniforms: { uTime: { value: 0 }, uCloudTime: { value: 0 } },
+      update() {},
+    },
+    sky: { update() {} },
+    terrain: { update() {} },
+    objective: { aimPoint: new Vector3(0, 0, 0) },
+    benchmark: {
+      minimumSamples: 1,
+      reset() {},
+      recordFrameInterval() { calls.benchmarkFrames += 1; },
+    },
+    backend: {
+      profile: { enabled: true },
+      cloudProfile: null,
+      setSize() {},
+      setCloudTextures() {},
+    },
+    engine: {
+      maxPixelRatio: 1,
+      camera: new PerspectiveCamera(50, 1),
+      renderer: {
+        setPixelRatio() {},
+        setSize() {},
+        getDrawingBufferSize(vector) { return vector.set(320, 180); },
+      },
+      composer: { setSize() {} },
+      render() { calls.render += 1; },
+    },
+    canvas: { width: 320, height: 180 },
+    _prepareAtmosphere: async () => {},
+    _prepareStbn: async () => {},
+    async _prepareCloudAssets() {
+      setTimeout(() => {
+        this.cloudAssets = null;
+        this.cloudAssetMode = 'unavailable';
+        const error = new Error('fixture context restore cloud asset load failed');
+        error.code = 'ineligible-reference';
+        rejectContextRestore(error);
+      }, 0);
+    },
+  });
+  runtime._contextRestorePromise = new Promise((_resolve, reject) => {
+    rejectContextRestore = reject;
+  });
+  const previousWindow = globalThis.window;
+  globalThis.window = { innerWidth: 320, innerHeight: 180, devicePixelRatio: 1 };
+  try {
+    const result = await runtime.startRun();
+    assert.strictEqual(result, runtime.runResult);
+    assert.notStrictEqual(result, staleResult);
+    assert.equal(result.profile, 'takram-reference');
+    assert.equal(result.view, 'cloud-alpha');
+    assert.equal(result.cloudAssetMode, 'unavailable');
+    assert.deepEqual(result.eligibility, {
+      eligible: false,
+      reason: 'official-cloud-assets-unavailable',
+      reasons: ['official-cloud-assets-unavailable'],
+    });
+    assert.equal(result.artifacts[0].renderedFrames, 0);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+
+  assert.equal(runtime.phase, 'ineligible');
   assert.equal(calls.render, 0);
   assert.equal(calls.benchmarkFrames, 0);
 });

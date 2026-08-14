@@ -1551,8 +1551,18 @@ export class CloudComparisonHarness {
         }
         applyCamera(this, this.frame);
         if (this._contextRestorePromise) {
-          await this._contextRestorePromise;
-          this._contextRestorePromise = null;
+          const restorePromise = this._contextRestorePromise;
+          try {
+            await restorePromise;
+          } catch (error) {
+            const assetEligibility = this._takramReferenceAssetEligibility();
+            if (error?.code === 'ineligible-reference' && !assetEligibility.eligible) {
+              return this._publishIneligibleAssetResult(assetEligibility);
+            }
+            throw error;
+          } finally {
+            if (this._contextRestorePromise === restorePromise) this._contextRestorePromise = null;
+          }
         }
         if (!this.contextLost) renderComparisonFrame(this, this.scenario.fixedDeltaSeconds);
         renderedFrames = this.frame + 1;
