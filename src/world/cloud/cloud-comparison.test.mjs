@@ -223,6 +223,43 @@ test('comparison installs exactly one cloud effect in a dedicated timed pass', (
   ]);
 });
 
+test('Takram comparison keeps cloud overlay and aerial perspective together before radiance', () => {
+  const clouds = { name: 'CloudsEffect' };
+  const aerialPerspective = { name: 'AerialPerspectiveEffect' };
+  class FakeEffectPass {
+    constructor(camera, ...effects) {
+      this.camera = camera;
+      this.effects = effects;
+    }
+    render() {}
+  }
+  const composer = {
+    passes: [{ name: 'render' }, { name: 'depth' }, { name: 'radiance' }, { name: 'finish' }],
+    addPass(pass) { this.passes.push(pass); },
+    removePass() {},
+  };
+  const engine = {
+    camera: { name: 'camera' },
+    composer,
+    clouds: clouds,
+    radiancePass: composer.passes[2],
+    finishPass: composer.passes[3],
+    _buildEffectPass() {},
+  };
+
+  const pass = installDedicatedCloudPass(
+    engine,
+    [clouds, aerialPerspective],
+    { measure: render => render() },
+    FakeEffectPass,
+  );
+
+  assert.deepEqual(pass.effects, [clouds, aerialPerspective]);
+  assert.ok(composer.passes.indexOf(composer.passes[0]) < composer.passes.indexOf(pass));
+  assert.ok(composer.passes.indexOf(pass) < composer.passes.indexOf(engine.radiancePass));
+  assert.ok(composer.passes.indexOf(engine.radiancePass) < composer.passes.indexOf(engine.finishPass));
+});
+
 test('comparison retains the dedicated pass for the same effect and replaces it once for a new effect', () => {
   const firstEffect = { name: 'first-cloud' };
   const secondEffect = { name: 'second-cloud' };

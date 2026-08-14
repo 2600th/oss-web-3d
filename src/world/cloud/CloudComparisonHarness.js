@@ -29,6 +29,7 @@ import {
   disposeTakramCloudAssets,
   loadOfficialTakramCloudAssets,
 } from './TakramCloudAssets.js';
+import { createTakramAtmosphereComposition } from './TakramAtmosphereComposition.js';
 import { TakramCloudRendererAdapter } from './TakramCloudRendererAdapter.js';
 
 const BACKENDS = new Set(['current', 'takram']);
@@ -266,6 +267,7 @@ export function renderComparisonFrame(runtime, dt) {
   runtime.environment.update(dt, camera.position);
   runtime.sky.update(camera);
   runtime.terrain.update(camera.position, runtime.terrainBudget ?? 4);
+  runtime.atmosphereComposition?.updateBindings();
   // The attached Effect is invoked once by EffectComposer. Calling the adapter
   // here as well would render the cloud backend twice and invalidate A/B data.
   runtime.lifecycleAudit?.beforeRender();
@@ -335,6 +337,8 @@ export function describeCloudLifecycleResources(runtime) {
   }
   add('takram-stbn-fallback', runtime.backend?.fallbackStbnTexture);
   add('takram-stbn-external', runtime.backend?.stbnTexture);
+  add('takram-aerial-perspective', runtime.atmosphereComposition?.aerialPerspective,
+    'takram-aerial-perspective-effect');
   return descriptors;
 }
 
@@ -397,11 +401,7 @@ export function assessTakramReferenceAssetEligibility({
 }
 
 function selectedEffectForComposer(name, adapter) {
-  const effect = name === 'current' ? adapter.cloudVolume : adapter.effect;
-  if (name === 'takram' && effect != null && effect.skipRendering !== false) {
-    throw new Error('Takram comparison effect must render when attached to the composer');
-  }
-  return effect ?? null;
+  return (name === 'current' ? adapter.cloudVolume : adapter.effect) ?? null;
 }
 
 const comparisonEffectIdentity = Symbol('cloud-comparison-effect');
@@ -423,6 +423,7 @@ export function installDedicatedCloudPass(
   benchmark,
   EffectPassClass = EffectPass,
 ) {
+  const effects = Array.isArray(effect) ? effect : effect == null ? [] : [effect];
   const installedPass = engine.cloudComparisonPass;
   if (
     installedPass != null
@@ -434,11 +435,11 @@ export function installDedicatedCloudPass(
   }
   releaseDedicatedCloudPass(engine);
   // The normal radiance pass remains lens-only. This makes the query boundary
-  // exactly one cloud effect instead of cloud + lens artifacts.
+  // exactly one cloud composition instead of cloud + lens artifacts.
   engine.clouds = null;
   engine._buildEffectPass();
-  if (effect == null) return null;
-  const pass = new EffectPassClass(engine.camera, effect);
+  if (effects.length === 0) return null;
+  const pass = new EffectPassClass(engine.camera, ...effects);
   pass[comparisonEffectIdentity] = effect;
   pass[comparisonBenchmarkIdentity] = benchmark;
   pass[comparisonPassClassIdentity] = EffectPassClass;
@@ -456,6 +457,25 @@ export function installDedicatedCloudPass(
   pass.renderToScreen = false;
   engine._buildEffectPass();
   return pass;
+}
+
+function installComparisonEffects(runtime) {
+  if (runtime.backendName === 'takram' && runtime.backend.effect != null) {
+    runtime.atmosphereComposition = createTakramAtmosphereComposition({
+      camera: runtime.engine.camera,
+      scene: runtime.engine.scene,
+      clouds: runtime.backend.effect,
+      textures: { ...(runtime.atmosphereTextures ?? {}), stbnTexture: runtime.stbnTexture },
+      renderer: runtime.engine.renderer,
+    });
+    installDedicatedCloudPass(runtime.engine, runtime.atmosphereComposition.effects, runtime.benchmark);
+    return;
+  }
+  installDedicatedCloudPass(
+    runtime.engine,
+    selectedEffectForComposer(runtime.backendName, runtime.backend),
+    runtime.benchmark,
+  );
 }
 
 function resolvedPose(pose, objectiveAim) {
@@ -544,12 +564,10 @@ function setRuntimeQuality(runtime, quality) {
   if (runtime.quality === quality) return;
   runtime.quality = quality;
   runtime.settings.tier = TIERS[quality];
+  runtime.atmosphereComposition?.dispose();
+  runtime.atmosphereComposition = null;
   runtime.backend.setQuality(TIERS[quality]);
-  installDedicatedCloudPass(
-    runtime.engine,
-    selectedEffectForComposer(runtime.backendName, runtime.backend),
-    runtime.benchmark,
-  );
+  installComparisonEffects(runtime);
   if (runtime.backendName === 'takram' && runtime.stbnTexture) {
     runtime.backend.setStbnTexture(runtime.stbnTexture);
   }
@@ -808,6 +826,7 @@ export class CloudComparisonHarness {
     this.consoleIssues = [];
     this.cloudAssets = null;
     this.cloudAssetMode = null;
+    this.atmosphereComposition = null;
     this._restoreConsole = installConsoleIssueCapture(console, this.consoleIssues);
 
     this.settings = { tier: TIERS[this.quality] };
@@ -835,11 +854,7 @@ export class CloudComparisonHarness {
 
     if (this.engine.composer.stableDepthTexture == null) this.engine.composer.createDepthTexture();
     this._constructBackend();
-    installDedicatedCloudPass(
-      this.engine,
-      selectedEffectForComposer(this.backendName, this.backend),
-      this.benchmark,
-    );
+    installComparisonEffects(this);
     this.lifecycleAudit = new CloudLifecycleAuditor(() => describeCloudLifecycleResources(this));
     this.backend.setDepthTexture(this.engine.composer.stableDepthTexture);
     setRuntimeSize(this, window.innerWidth, window.innerHeight);
@@ -910,6 +925,8 @@ export class CloudComparisonHarness {
     // leaves undefined contents in the final composite after a real loss.
     await nextAnimationFrame();
     releaseDedicatedCloudPass(this.engine);
+    this.atmosphereComposition?.dispose();
+    this.atmosphereComposition = null;
     this.backend.dispose();
     this.atmosphereGenerator?.dispose();
     disposeAtmosphereTextures(this.atmosphereTextures);
@@ -949,11 +966,7 @@ export class CloudComparisonHarness {
     if (this.engine.composer.stableDepthTexture == null) this.engine.composer.createDepthTexture();
     this._constructBackend();
     this.backend.setQuality(this.settings.tier);
-    installDedicatedCloudPass(
-      this.engine,
-      selectedEffectForComposer(this.backendName, this.backend),
-      this.benchmark,
-    );
+    installComparisonEffects(this);
     this.backend.setDepthTexture(this.engine.composer.stableDepthTexture);
     setRuntimeSize(this, window.innerWidth, window.innerHeight);
     await Promise.all([this._prepareAtmosphere(), this._prepareStbn(), this._prepareCloudAssets()]);
@@ -985,6 +998,7 @@ export class CloudComparisonHarness {
     if (this.atmosphereGenerator == null) return;
     if (this.atmosphereTextures != null) {
       this.backend._setEnvironment(this.atmosphereTextures);
+      this.atmosphereComposition?.updateBindings();
       this.lightingMode = 'takram-precomputed-lut';
       return;
     }
@@ -994,6 +1008,7 @@ export class CloudComparisonHarness {
       // no atmosphere-texture setter because the shipping backend does not need
       // one. The selected Takram effect still receives real generated LUTs.
       this.backend._setEnvironment(this.atmosphereTextures);
+      this.atmosphereComposition?.updateBindings();
       this.lightingMode = 'takram-precomputed-lut';
     } catch (error) {
       this.atmosphereError = error instanceof Error ? error.message : String(error);
@@ -1016,6 +1031,7 @@ export class CloudComparisonHarness {
       }
     }
     this.backend.setStbnTexture(this.stbnTexture);
+    this.atmosphereComposition?.updateBindings();
   }
 
   async _prepareCloudAssets() {
@@ -1185,6 +1201,7 @@ export class CloudComparisonHarness {
       });
       const backendResources = this.backend.getResourceReport();
       const atmosphereResources = describeAtmosphereTextures(this.atmosphereTextures);
+      const compositionResources = this.atmosphereComposition?.getResourceReport() ?? null;
       const cloudAssetResources = describeOfficialTakramCloudAssets(this.cloudAssets);
       const stbnResource = this.stbnTexture == null ? null : {
         name: 'official-stbn', kind: 'sampling-texture', source: DEFAULT_STBN_URL,
@@ -1197,6 +1214,7 @@ export class CloudComparisonHarness {
         stbnResource,
       });
       resourceItems.push(...(cloudAssetResources?.resources ?? []));
+      resourceItems.push(...(compositionResources?.resources ?? []));
       this.runResult = deepFreeze(createCloudComparisonResult({
         backend: this.backendName,
         versions: {
@@ -1236,6 +1254,12 @@ export class CloudComparisonHarness {
             gpuBytes: cloudAssetResources.totalBytes,
             gpuOwnership: 'comparison-harness',
           },
+          atmosphereComposition: compositionResources == null ? null : {
+            owner: compositionResources.owner,
+            gpuBytes: compositionResources.totalBytes,
+            effectOrder: ['clouds', 'aerial-perspective'],
+            normalPasses: this.atmosphereComposition.passes.length,
+          },
           visualComparisonEligible: visualGate.eligible,
           visualEligibilityReason: visualGate.reason,
           historyResets: structuredClone(this.historyResets),
@@ -1274,6 +1298,8 @@ export class CloudComparisonHarness {
     window.removeEventListener('unhandledrejection', this._onUnhandledRejection);
     this._restoreConsole();
     releaseDedicatedCloudPass(this.engine);
+    this.atmosphereComposition?.dispose();
+    this.atmosphereComposition = null;
     this.lifecycleAudit.dispose();
     this.benchmark.dispose();
     this.backend.dispose();
