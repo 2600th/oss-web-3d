@@ -740,6 +740,20 @@ function jet(throttle, speed = 250) {
 const NOZZLE = { nozzlePosition: new THREE.Vector3(0, 1000, 0), burnerActive: true };
 
 /**
+ * Run the burner until its ring buffer is saturated.
+ *
+ * One frame emits roughly a dozen puffs, and every one of them is born with a
+ * randomised cone direction, speed and lifetime. `effluxReach` reports a *max*
+ * over that population, and a max over twelve random draws is noisy enough that
+ * a ratio assertion between two speeds fails outright about once in eight runs.
+ * At the shortest lifetime the pool refills in well under a quarter of a second,
+ * so twenty frames is a full population and the max stops moving.
+ */
+function settleEfflux(fx, flight, frames = 20) {
+  for (let i = 0; i < frames; i++) fx.update(1 / 60, flight, new THREE.Vector3(), null, NOZZLE);
+}
+
+/**
  * Where the plume actually ends up on screen-space terms: the furthest a live
  * particle drifts behind the nozzle over its life, evaluated with the shader's
  * own closed-form trajectory.
@@ -791,14 +805,14 @@ test('reheat brightens the efflux and lengthens it, and dry power does neither',
   fx.setQuality(TIERS.high);
 
   const dryFlight = jet(0.75);
-  fx.update(1 / 60, dryFlight, new THREE.Vector3(), null, NOZZLE);
+  settleEfflux(fx, dryFlight);
   const dryOpacity = fx.exhaust.uniforms.uOpacity.value;
   const dryGlow = fx.exhaust.uniforms.uGlow.value;
   const dryReach = effluxReach(fx, dryFlight);
 
   fx.reset();
   const wetFlight = jet(1);
-  fx.update(1 / 60, wetFlight, new THREE.Vector3(), null, NOZZLE);
+  settleEfflux(fx, wetFlight);
   const wetReach = effluxReach(fx, wetFlight);
 
   assert.ok(fx.exhaust.uniforms.uOpacity.value > dryOpacity * 1.5, 'reheat is a visible event');
@@ -810,7 +824,7 @@ test('the plume trails the nozzle by a jet-sized distance, not a contrail-sized 
   const fx = new FlightFx(environment());
   fx.setQuality(TIERS.high);
   const flight = jet(1, 250);
-  fx.update(1 / 60, flight, new THREE.Vector3(), null, NOZZLE);
+  settleEfflux(fx, flight);
   const reach = effluxReach(fx, flight);
   // Long enough to read as a plume rather than a halo on the tailpipe, short
   // enough that it is an afterburner and not a smoke trail across the valley.
@@ -824,15 +838,16 @@ test('plume length scales with airspeed because the particles carry the airframe
   fx.setQuality(TIERS.high);
 
   const slow = jet(1, 120);
-  fx.update(1 / 60, slow, new THREE.Vector3(), null, NOZZLE);
+  settleEfflux(fx, slow);
   const slowReach = effluxReach(fx, slow);
 
   fx.reset();
   const fast = jet(1, 320);
-  fx.update(1 / 60, fast, new THREE.Vector3(), null, NOZZLE);
+  settleEfflux(fx, fast);
+  const fastReach = effluxReach(fx, fast);
   assert.ok(
-    effluxReach(fx, fast) > slowReach * 1.4,
-    'a faster aircraft must outrun its own efflux further',
+    fastReach > slowReach * 1.4,
+    `a faster aircraft must outrun its own efflux further: ${fastReach.toFixed(1)}m at 320 m/s vs ${slowReach.toFixed(1)}m at 120`,
   );
   fx.dispose();
 });
