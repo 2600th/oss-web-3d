@@ -72,7 +72,7 @@ one you last used.
 | `W` / `S` or `↑` / `↓` | Climb / descend |
 | `A` / `D` or `←` / `→` | Turn left / right |
 | `Shift` | Boost (hold) |
-| `Ctrl` | Slow down (hold) |
+| `X` | Slow down (hold) |
 | `Z` | Airbrake |
 | `Space` | Recon camera — toggle in Assisted, hold in Direct |
 | `F` / `V` | Zoom the optic in / out |

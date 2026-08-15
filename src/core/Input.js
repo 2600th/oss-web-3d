@@ -86,25 +86,18 @@ export class Input {
       // nor suppressed. Checked before `keys.add` so a field cannot leave a
       // key stuck down either.
       if (isTextEntry(e.target)) return;
-      // Command is the one modifier still refused outright. macOS does not
-      // deliver keyup for a character key while Command is held, so anything
-      // recorded during a Cmd chord would stay in `keys` for the rest of the
-      // session and fly the aircraft on its own. Ctrl and Alt do deliver keyup,
-      // and losing the window to a shortcut fires blur, which clears the set.
+      // Command is refused outright. macOS does not deliver keyup for a
+      // character key while Command is held, so anything recorded during a Cmd
+      // chord could stay in `keys` for the rest of the session and fly the
+      // aircraft on its own.
       if (e.metaKey) return;
       this.modality = 'keyboard';
       this.keys.add(e.code);
       this._pressed.add(e.code);
-      // Suppressing the default is what would swallow a browser shortcut —
-      // *recording* the key never could. The original guard returned early on
-      // any modifier, which meant Control's own keydown never reached `keys`
-      // (ctrlKey is already true on it), so the advertised throttle-down
-      // binding was unreachable and every other key was dropped for as long as
-      // Ctrl was held — i.e. for the whole time the player was pulling the
-      // throttle back. Gating the suppression instead gives both: Ctrl+R still
-      // reloads because we never call preventDefault on it, and bare Ctrl is an
-      // ordinary binding. Shift is excluded from the test because Shift is
-      // itself a binding and forms no browser accelerator with Space or Tab.
+      // Suppressing the default is what would swallow a browser shortcut;
+      // recording the key does not. Modifier chords therefore remain browser
+      // actions. Shift is excluded because it is itself a flight binding and
+      // forms no browser accelerator with Space or Tab.
       if (PREVENT_DEFAULT.has(e.code) && !e.ctrlKey && !e.altKey) e.preventDefault();
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
@@ -268,7 +261,7 @@ export class Input {
       let analogueVertical = false;
       intent.climb = p ? -p : 0;
       intent.turn = r;
-      intent.speed = k.has('ControlLeft') || k.has('ControlRight') ? -1 : 0;
+      intent.speed = k.has('KeyX') ? -1 : 0;
       intent.boost = k.has('ShiftLeft') || k.has('ShiftRight') || this.touchBoost;
 
       const pad = this._pad;
@@ -329,7 +322,7 @@ export class Input {
       if (k.has('ShiftLeft') || k.has('ShiftRight')) {
         this.throttle = Math.min(1, this.throttle + dt * 0.62);
       }
-      if (k.has('ControlLeft') || k.has('ControlRight')) {
+      if (k.has('KeyX')) {
         this.throttle = Math.max(0, this.throttle - dt * 0.62);
       }
       this.brake = k.has('KeyZ') ? 1 : 0;

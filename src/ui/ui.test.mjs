@@ -373,11 +373,17 @@ test('phone quality is represented by a real selected pause-menu choice', () => 
 test('control rows match the selected mode and active input modality', () => {
   assert.deepEqual(controlRows('assisted', 'keyboard')[0], ['W / Up', 'Climb']);
   assert.deepEqual(controlRows('assisted', 'keyboard')[1], ['S / Down', 'Descend']);
+  const assistedKeyboard = controlRows('assisted', 'keyboard').flat().join(' ');
+  const directKeyboard = controlRows('direct', 'keyboard').flat().join(' ');
+  assert.match(assistedKeyboard, /\bX\b/);
+  assert.doesNotMatch(assistedKeyboard, /Ctrl/);
+  assert.match(directKeyboard, /\bX\b/);
+  assert.doesNotMatch(directKeyboard, /Ctrl/);
   assert.equal(
     controlRows('assisted', 'touch').some(([key]) => /W|Shift|Ctrl|Space/.test(key)),
     false,
   );
-  assert.match(controlRows('direct', 'keyboard').flat().join(' '), /hold/i);
+  assert.match(directKeyboard, /hold/i);
   assert.match(controlRows('assisted', 'gamepad').flat().join(' '), /left stick/i);
 });
 

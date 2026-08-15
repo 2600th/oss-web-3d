@@ -61,9 +61,9 @@ withNavigator(() => [], () => {
   input.update(0.1);
   assert.ok(Math.abs(input.throttle - 0.782) < 1e-12, 'Shift must preserve the Direct throttle-up rate');
   target.fire('keyup', keyEvent('ShiftLeft'));
-  target.fire('keydown', keyEvent('ControlLeft', { ctrlKey: true }));
+  target.fire('keydown', keyEvent('KeyX'));
   input.update(0.1);
-  assert.ok(Math.abs(input.throttle - 0.72) < 1e-12, 'Ctrl must preserve the Direct throttle-down rate');
+  assert.ok(Math.abs(input.throttle - 0.72) < 1e-12, 'X must preserve the Direct throttle-down rate');
   input.dispose();
 });
 
@@ -107,12 +107,12 @@ withNavigator(() => [], () => {
     ['KeyS', 'climb', -1],
     ['KeyA', 'turn', -1],
     ['KeyD', 'turn', 1],
-    ['ControlLeft', 'speed', -1],
+    ['KeyX', 'speed', -1],
   ];
   for (const [code, field, expected] of semanticCases) {
     const target = new Target();
     const input = new Input(target);
-    target.fire('keydown', keyEvent(code, code === 'ControlLeft' ? { ctrlKey: true } : {}));
+    target.fire('keydown', keyEvent(code));
     input.update(0.1, 'upToDive');
     assert.equal(input.intent?.[field], expected, `${code} must expose semantic ${field}`);
     assert.equal(input.modality, 'keyboard');
@@ -380,12 +380,20 @@ withNavigator(() => [], () => {
   }});
   const target = new Target();
   const input = new Input(target);
+  target.fire('keydown', keyEvent('KeyX'));
+  input.update(0.1);
+  assert.ok(input.throttle < 0.72, 'X must reach the throttle-down binding');
+  assert.equal(input.intent.speed, -1, 'X must expose semantic slow-down intent');
+  const throttleAfterX = input.throttle;
+  target.fire('keyup', keyEvent('KeyX'));
+
   let prevented = false;
   target.fire('keydown', { code: 'ControlLeft', repeat: false, ctrlKey: true, altKey: false, metaKey: false, preventDefault() { prevented = true; } });
   input.update(0.1);
-  assert.ok(input.throttle < 0.72, 'Control must reach the throttle-down binding');
+  assert.equal(input.throttle, throttleAfterX, 'Control must have no flight throttle action');
+  assert.equal(input.intent.speed, 0, 'Control must have no semantic flight action');
   assert.equal(prevented, false, 'modifier shortcuts must not be intercepted');
-  assert.equal(samples, 1, 'gamepad state must be snapshotted once per frame');
+  assert.equal(samples, 2, 'gamepad state must be snapshotted once per frame');
   input.dispose();
   assert.equal(target.listeners.size, 0, 'Input must remove all listeners it owns');
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: oldNavigator });
