@@ -208,38 +208,40 @@ test('vertical edge placement keeps the shortest-turn chevron for both bearing d
   assert.equal(cue.direction.textContent, 'RAVEN · RIGHT 24° · 18.6 KM');
 });
 
-test('visible search and acquisition anchor to projected sector while clearing live obstacles', () => {
+/**
+ * A base in frame gets a marker on it, in every phase.
+ *
+ * The rule used to be narrower — `projected` was only honoured during search
+ * and acquisition — so a base you were looking straight at still got an edge
+ * arrow through the whole transit. And the marker goes exactly on the
+ * projected point, with none of the avoid-rect nudging the edge cue uses: a
+ * marker pushed clear of a HUD tape is no longer marking anything.
+ */
+test('a base in frame is marked where it is, in every phase', () => {
   const { cue, obstacles } = buildCue();
   const obstacle = new FakeElement('div', cue.root.ownerDocument);
-  obstacle.rect = { left: 238, top: 355, right: 360, bottom: 489, width: 122, height: 134 };
+  obstacle.rect = { left: 120, top: 120, right: 320, bottom: 520, width: 200, height: 400 };
   obstacles.push(obstacle);
 
-  cue.update({
-    ...transit,
-    phase: 'search',
-    projected: { x: 0.45, y: 0 },
-    edgeNdc: { x: -1, y: -1 },
-    trend: 'CLOSING',
-    altitude: 'BELOW',
-  });
-  const searchRect = cue.lastPlacement.rect;
-  assert.match(cue.root.className, /anchor-sector/);
-  assert.ok(searchRect.left > 100, 'projected x, not the fallback left edge, should drive placement');
-  assert.ok(gapBetween(searchRect, obstacle.rect) >= 8);
-  assert.equal(cue.direction.textContent, 'SEARCH · CLOSING · TARGET BELOW');
+  for (const phase of ['transit', 'search', 'acquisition']) {
+    cue.update({ ...transit, phase, projected: { x: 0.45, y: 0 }, edgeNdc: { x: -1, y: -1 } });
+    assert.match(cue.root.className, /on-target/, `${phase} must mark a visible base`);
+    assert.doesNotMatch(cue.root.className, /edge-/, `${phase} must not also show an edge arrow`);
+    assert.equal(cue.lastPlacement.edge, 'target');
+  }
 
-  cue.update({
-    ...transit,
-    phase: 'acquisition',
-    targetRange: 2450,
-    projected: { x: -0.5, y: 0.25 },
-    edgeNdc: { x: 1, y: -1 },
-  });
-  assert.match(cue.root.className, /anchor-sector/);
-  assert.ok(cue.lastPlacement.rect.left < 140, 'acquisition corners should follow projected aim sector');
+  // Exactly on the projected point, in the fixture's 390-wide viewport.
+  cue.update({ ...transit, phase: 'transit', projected: { x: 0.45, y: 0 }, edgeNdc: { x: -1, y: -1 } });
+  assert.equal(Math.round(cue.lastPlacement.left), Math.round((0.45 + 1) * 0.5 * 390));
+  assert.equal(Math.round(cue.lastPlacement.top), Math.round((1 - 0) * 0.5 * 844));
+
+  // Out of frame it goes back to the arrow.
+  cue.update({ ...transit, phase: 'transit', projected: null, edgeNdc: { x: -1, y: 0 } });
+  assert.doesNotMatch(cue.root.className, /on-target/);
+  assert.match(cue.root.className, /edge-left/);
 });
 
-test('masked acquisition ignores projected coordinates and keeps only its safe edge anchor', () => {
+test('a masked but visible base is still marked, hollow rather than hidden', () => {
   const { cue } = buildCue();
   const masked = {
     ...transit,
@@ -251,29 +253,31 @@ test('masked acquisition ignores projected coordinates and keeps only its safe e
     projected: { x: 0.9, y: 0.9 },
   };
 
+  // Knowing the base is behind that ridge is worth as much as knowing where it
+  // is, so the marker stays and the styling carries the masking.
   cue.update(masked);
-  const first = { left: cue.root.style.left, top: cue.root.style.top, text: cue.direction.textContent };
-  assert.doesNotMatch(cue.root.className, /anchor-sector/);
-  assert.match(cue.root.className, /edge-left/);
+  assert.match(cue.root.className, /on-target/);
+  assert.match(cue.root.className, /dashed/);
+  assert.equal(cue.direction.textContent, 'RIDGE MASKED');
 
-  cue.update({ ...masked, projected: { x: -0.85, y: -0.8 } });
-  assert.deepEqual(
-    { left: cue.root.style.left, top: cue.root.style.top, text: cue.direction.textContent },
-    first,
-    'masked presentation must not leak or react to the precise projected point',
-  );
+  // Masked and out of frame is the arrow again.
+  cue.update({ ...masked, projected: null });
+  assert.doesNotMatch(cue.root.className, /on-target/);
+  assert.match(cue.root.className, /edge-left/);
+  assert.match(cue.root.className, /dashed/);
 });
 
-test('search and acquisition render broad unfilled geometry and ridge masking is dashed', () => {
+test('phase still drives the cue class, and ridge masking is dashed', () => {
   const { cue } = buildCue();
 
   cue.update({ ...transit, phase: 'search', projected: { x: 0.2, y: -0.1 } });
   assert.match(cue.root.className, /phase-search/);
-  assert.ok(cue.root.find('nav-search-bracket'));
 
   cue.update({ ...transit, phase: 'acquisition', projected: { x: -0.1, y: 0.2 } });
   assert.match(cue.root.className, /phase-acquisition/);
-  assert.equal(cue.root.findAll('nav-acquisition-corner').length, 4);
+  // No reticle geometry to find: the cue is an arrow and a label.
+  assert.equal(cue.root.findAll('nav-acquisition-corner').length, 0);
+  assert.ok(!cue.root.find('nav-search-bracket'));
 
   cue.update({ ...transit, phase: 'acquisition', projected: null, masked: true, label: 'RIDGE MASKED' });
   assert.match(cue.root.className, /dashed/);
@@ -307,41 +311,22 @@ test('navigation cue queries current obstacle rectangles on every update', () =>
   assert.notEqual(cue.root.style.top, firstTop);
 });
 
-test('visible, ridge-masked, and visible acquisition never leaks stale projected coordinates', () => {
+test('the marker follows the projection and never retains a stale one', () => {
   const { cue } = buildCue();
-  cue.update({
-    ...transit,
-    phase: 'acquisition',
-    projected: { x: 0.65, y: -0.35 },
-    edgeNdc: { x: 1, y: -0.2 },
-  });
-  assert.match(cue.root.className, /anchor-sector/);
-  const visiblePosition = { left: cue.root.style.left, top: cue.root.style.top };
+  cue.update({ ...transit, phase: 'acquisition', projected: { x: 0.65, y: -0.35 }, edgeNdc: { x: 1, y: -0.2 } });
+  assert.match(cue.root.className, /on-target/);
+  const first = { left: cue.root.style.left, top: cue.root.style.top };
 
-  cue.update({
-    ...transit,
-    phase: 'acquisition',
-    projected: { x: 0.65, y: -0.35 },
-    edgeNdc: { x: -1, y: 0.25 },
-    masked: true,
-    label: 'RIDGE MASKED',
-  });
-  assert.match(cue.root.className, /edge-left/);
-  assert.doesNotMatch(cue.root.className, /anchor-sector/);
+  cue.update({ ...transit, phase: 'acquisition', projected: { x: -0.45, y: 0.2 }, edgeNdc: { x: -1, y: 0.25 } });
+  assert.match(cue.root.className, /on-target/);
   assert.notDeepEqual(
     { left: cue.root.style.left, top: cue.root.style.top },
-    visiblePosition,
-    'masked placement must move to its safe edge instead of retaining the precise sector',
+    first,
+    'the marker must move with the base, not hold its last position',
   );
 
-  cue.update({
-    ...transit,
-    phase: 'acquisition',
-    projected: { x: -0.45, y: 0.2 },
-    edgeNdc: { x: -1, y: 0.25 },
-  });
-  assert.match(cue.root.className, /anchor-sector/);
-  assert.doesNotMatch(cue.root.className, /dashed/);
+  cue.update({ ...transit, phase: 'acquisition', projected: null, edgeNdc: { x: -1, y: 0.25 } });
+  assert.doesNotMatch(cue.root.className, /on-target/);
 });
 
 test('navigation DOM is HUD-owned and dispose removes the cue, caret, probe, and announcer', () => {
@@ -359,4 +344,58 @@ test('navigation DOM is HUD-owned and dispose removes the cue, caret, probe, and
   assert.equal(cue.root.removed, true);
   assert.equal(cue.headingCaret.removed, true);
   assert.equal(cue.status.removed, true);
+});
+
+/**
+ * The caption belongs under the reticle, not through it.
+ *
+ * Measured before the fix: the search bracket is 126px wide and
+ * "SEARCH · CLOSING · TARGET BELOW" is 219px, so a caption centred in the cue
+ * ran 107px out through the right-hand border. Shortening the text is not a
+ * fix — every phase's label is wider than a frame that has to stay small
+ * enough to sit on a target — so the caption gets its own band beneath it.
+ */
+/**
+ * The cue is an arrow and a label on one row.
+ *
+ * The search bracket and acquisition corner-frame are gone. Both were
+ * fixed-size reticles: the bracket was 126px across and
+ * "SEARCH · CLOSING · TARGET BELOW" is 219px, so the label ran 107px out
+ * through the border, and shortening could never fix it because every phase's
+ * label is wider than a frame small enough to sit on a target.
+ */
+test('the cue carries no reticle and sizes itself to its content', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const source = await readFile(new URL('./NavigationCue.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(css, /nav-search-bracket/, 'the search bracket is gone');
+  assert.doesNotMatch(css, /nav-acquisition/, 'the acquisition frame is gone');
+  assert.doesNotMatch(source, /this\.searchBracket|nav-acquisition/, 'no reticle elements are built');
+
+  const cue = /\.navigation-cue \{([^}]*)\}/.exec(css);
+  assert.ok(cue, '.navigation-cue must be styled');
+  assert.match(cue[1], /display:\s*flex/, 'arrow and label share one row');
+  assert.match(cue[1], /align-items:\s*center/, 'the arrow must sit on the label centreline');
+  assert.match(cue[1], /width:\s*max-content/, 'the cue must size to its own content');
+  assert.doesNotMatch(cue[1], /height:\s*\d+px/, 'a fixed height is a box, and there is no box');
+
+  // The arrow sits on the side it points to.
+  assert.match(css, /\.nav-edge-left \{ order: 0; \}/);
+  assert.match(css, /\.nav-direction \{[^}]*order:\s*1/);
+  assert.match(css, /\.nav-edge-right \{ order: 2; \}/);
+});
+
+test('the cue exposes a caption clamp so a wide label cannot leave the frame', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('./NavigationCue.js', import.meta.url), 'utf8');
+  assert.match(source, /_keepCaptionOnScreen\(onTarget = false\)/, 'placement must clamp the caption');
+  assert.match(
+    source,
+    /setText\(this\.direction, text\);\s*\n\s*this\._keepCaptionOnScreen\(onTarget\);/,
+    'the clamp must run after the text is set, or it measures the previous label',
+  );
+  assert.ok(typeof NavigationCue?.prototype?._keepCaptionOnScreen === 'function');
+  // On target the label gives, never the marker.
+  assert.match(source, /const node = onTarget \? this\.direction : this\.root;/);
 });

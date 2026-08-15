@@ -304,7 +304,12 @@ export class Hud {
     this._buildReticle(this.recon);
 
     const head = el('div', 'recon-head', this.recon);
-    this.reconStatus = el('div', 'recon-status', head, 'RECON CAMERA — STANDBY');
+    // The instrument name and its state are separate elements so a narrow
+    // viewport can drop the name. Ellipsising one string cut it at "RECON
+    // CAMERA — NO TARGET…", which discards the only half that changes.
+    this.reconStatus = el('div', 'recon-status', head);
+    el('span', 'recon-status-name', this.reconStatus, 'RECON CAMERA');
+    this.reconStatusState = el('span', 'recon-status-state', this.reconStatus, 'STANDBY');
     const heading = el('div', 'recon-optics', head);
     this.reconZoom = el('b', '', heading, 'x1.0');
     this.reconExposure = el('span', '', heading, '1/1000 f/5.6');
@@ -500,15 +505,22 @@ export class Hud {
       toggle(this.qualityFill, 'good', q >= CAPTURE_THRESHOLD);
 
       if (!ev || !ev.inFrame) {
-        set(this.reconStatus, 'RECON CAMERA — NO TARGET IN FRAME');
+        set(this.reconStatusState, 'NO TARGET IN FRAME');
         set(this.qualityLabel, 'FRAME THE OBJECTIVE');
         set(this.qualityDetail, '');
       } else if (ev.visibility < 0.35) {
-        set(this.reconStatus, `RECON CAMERA — ${ev.post.callsign}`);
+        set(this.reconStatusState, ev.post.callsign);
         set(this.qualityLabel, 'LINE OF SIGHT OBSTRUCTED');
         set(this.qualityDetail, gradeFor(q));
+      } else if (q >= CAPTURE_THRESHOLD) {
+        // Past the threshold the camera is taking the shot itself, and it waits
+        // for the peak. Without a line saying so the arming delay reads as the
+        // shutter having failed, and the pilot breaks the very hold it wants.
+        set(this.reconStatusState, ev.post.callsign);
+        set(this.qualityLabel, 'AUTO CAPTURE ARMED');
+        set(this.qualityDetail, gradeFor(q));
       } else {
-        set(this.reconStatus, `RECON CAMERA — ${ev.post.callsign}`);
+        set(this.reconStatusState, ev.post.callsign);
         set(this.qualityLabel, hintFor(ev));
         set(this.qualityDetail, gradeFor(q));
       }
@@ -592,7 +604,7 @@ function hintFor(ev) {
     { k: 'ZOOM IN / GET CLOSER', v: ev.coverage },
     { k: 'IMPROVE VIEWING ANGLE', v: ev.angleQuality },
   ].sort((a, b) => a.v - b.v)[0];
-  if (weakest.v > 0.78) return 'GOOD FRAME — SHOOT';
+  if (weakest.v > 0.78) return 'GOOD FRAME — HOLD IT';
   if (weakest.k === 'CLOSE THE RANGE' && ev.range < 320) return 'TOO CLOSE — PULL BACK';
   return weakest.k;
 }

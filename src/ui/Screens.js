@@ -1,4 +1,11 @@
 import { gradeFor } from '../game/ReconCamera.js';
+import {
+  formatDuration,
+  isRankable,
+  sanitiseName,
+  NAME_MAX,
+  NAME_MIN,
+} from '../game/Leaderboard.js';
 
 /**
  * Title sequence, briefing, pause, both debriefs, and the states nobody wants
@@ -16,6 +23,9 @@ import { gradeFor } from '../game/ReconCamera.js';
  * loading at all — happens before this file has been evaluated. This class
  * delegates to that surface rather than owning a second copy of it.
  */
+
+/** performance.now() where it exists; the fallback keeps jsdom-less tests happy. */
+const now = () => (globalThis.performance?.now?.() ?? Date.now());
 
 const el = (tag, className, parent, text) => {
   const node = document.createElement(tag);
@@ -132,7 +142,7 @@ const CONTROL_COPY = Object.freeze({
       ['Z', 'Airbrake'],
       ['Space', 'Toggle recon'],
       ['F / V', 'Zoom in / out'],
-      ['Enter', 'Shutter'],
+      ['Enter', 'Manual shutter'],
       ['Tab', 'Cycle objective'],
       ['Esc', 'Pause'],
     ]),
@@ -142,7 +152,7 @@ const CONTROL_COPY = Object.freeze({
       ['Drag down', 'Descend'],
       ['BOOST', 'Boost while held'],
       ['RECON', 'Toggle recon'],
-      ['SHOOT', 'Shutter'],
+      ['SHOOT', 'Manual shutter'],
       ['+ / −', 'Zoom'],
     ]),
     gamepad: Object.freeze([
@@ -160,7 +170,7 @@ const CONTROL_COPY = Object.freeze({
       ['Z', 'Airbrake (hold)'],
       ['Space', 'Recon camera (hold)'],
       ['F / V', 'Zoom in / out'],
-      ['Enter', 'Shutter'],
+      ['Enter', 'Manual shutter'],
       ['Tab', 'Cycle objective'],
       ['Esc', 'Pause'],
     ]),
@@ -168,7 +178,7 @@ const CONTROL_COPY = Object.freeze({
       ['Drag', 'Pitch and roll while held'],
       ['THR', 'Throttle strip'],
       ['RECON', 'Recon camera'],
-      ['SHOOT', 'Shutter'],
+      ['SHOOT', 'Manual shutter'],
       ['+ / −', 'Zoom'],
     ]),
     gamepad: Object.freeze([
@@ -216,6 +226,11 @@ export class Screens {
     this._titleCleanup = null;
     this._focusFrame = 0;
     this._returnFocus = null;
+    this._noticeDismiss = null;
+    this._noticeTimer = 0;
+    this._noticeRemaining = 0;
+    this._noticeStartedAt = 0;
+    this._onNoticeVisibility = null;
     this._onDialogKeyDown = (event) => this._trapDialogFocus(event);
 
     this._buildVeil();
@@ -281,23 +296,92 @@ export class Screens {
   }
 
   /**
-   * A non-blocking failure the player still needs to be told about — the one
-   * that exists today is the airframe failing to load, which leaves them flying
-   * an invisible aircraft with nothing on screen to explain it.
+   * A non-blocking message the player still needs to be told about.
+   *
+   * Two kinds share this bar and they expire differently. A *failure* — the
+   * airframe not loading, a terrain quality change refused — persists until
+   * dismissed, because the notice is the only thing on screen explaining why
+   * the game looks wrong. An *orientation* note like the assisted-controls one
+   * has been read within a couple of seconds and then just sits over the
+   * briefing, so it passes `autoDismissMs` and retires itself.
+   *
+   * @param {string} text
+   * @param {(() => void)|null} [onDismiss]
+   * @param {number} [autoDismissMs] 0 keeps the notice until dismissed
    */
-  showNotice(text, onDismiss = null) {
-    this.noticeText.textContent = text;
+  showNotice(text, onDismiss = null, autoDismissMs = 0) {
+    this._stopNoticeTimer();
     this._noticeDismiss = typeof onDismiss === 'function' ? onDismiss : null;
-    this.noticeBar.classList.add('show');
+    // Expose the live region *before* writing into it. Assistive technology
+    // generally ignores mutations inside an aria-hidden subtree and does not
+    // re-announce on unhide, so setting the text first meant the notice could
+    // reach the screen without ever being announced.
     this.noticeBar.setAttribute('aria-hidden', 'false');
+    this.noticeBar.classList.add('show');
+    this.noticeText.textContent = text;
+    if (Number.isFinite(autoDismissMs) && autoDismissMs > 0) this._startNoticeTimer(autoDismissMs);
   }
 
   clearNotice() {
+    this._stopNoticeTimer();
     this.noticeBar.classList.remove('show');
     this.noticeBar.setAttribute('aria-hidden', 'true');
     const acknowledge = this._noticeDismiss;
     this._noticeDismiss = null;
     acknowledge?.();
+  }
+
+  /**
+   * Count down only while the page is actually being looked at.
+   *
+   * A plain setTimeout keeps running in a background tab, so alt-tabbing away
+   * from the briefing burned the whole window and the player came back to a
+   * notice that had already fired its onDismiss — and that callback is what
+   * marks the assist note as seen, so it would never have been shown again.
+   * The remaining time is banked on hide and re-armed on show.
+   */
+  _startNoticeTimer(ms) {
+    this._noticeRemaining = ms;
+    this._noticeStartedAt = now();
+    if (!this._onNoticeVisibility) {
+      this._onNoticeVisibility = () => this._syncNoticeTimer();
+      document.addEventListener('visibilitychange', this._onNoticeVisibility);
+    }
+    // Do not start the clock for a player who is not looking at the page. The
+    // banking logic below only runs on a visibilitychange, so a notice *armed*
+    // while the tab was already in the background used to spend its whole
+    // window unseen — and the assist note's onDismiss marks it seen forever, so
+    // it would never be shown again. The title sequence resolves on its own
+    // timers, which keep running in a background tab, so this is reachable
+    // simply by opening the game in a new tab and looking away.
+    if (document.visibilityState === 'hidden') return;
+    this._noticeTimer = setTimeout(() => {
+      this._noticeTimer = 0;
+      this.clearNotice();
+    }, ms);
+  }
+
+  _syncNoticeTimer() {
+    if (!this._noticeRemaining) return;
+    if (document.visibilityState === 'hidden') {
+      if (!this._noticeTimer) return;
+      clearTimeout(this._noticeTimer);
+      this._noticeTimer = 0;
+      this._noticeRemaining = Math.max(0, this._noticeRemaining - (now() - this._noticeStartedAt));
+      return;
+    }
+    if (this._noticeTimer) return;
+    this._startNoticeTimer(this._noticeRemaining);
+  }
+
+  _stopNoticeTimer() {
+    if (this._noticeTimer) clearTimeout(this._noticeTimer);
+    this._noticeTimer = 0;
+    this._noticeRemaining = 0;
+    if (this._onNoticeVisibility) {
+      document.removeEventListener('visibilitychange', this._onNoticeVisibility);
+      this._onNoticeVisibility = null;
+    }
   }
 
   /**
@@ -498,13 +582,71 @@ export class Screens {
   /**
    * Runs the staged title fade. Resolves when the player skips or it finishes,
    * so the caller can simply await it.
+   *
+   * The sequence is gated on a press before any of it plays. That is not a
+   * dramatic choice, it is the autoplay policy: a browser will not start audio
+   * without a user gesture, and this screen used to consume the only gesture
+   * available — its layer dismissed the whole sequence on `pointerdown`, so the
+   * press that could have started the score was the same press that ended the
+   * cards it belonged under. Measured on a cold load with no input, the context
+   * was never even constructed and the dedication played in silence for all
+   * 13.4 seconds. Holding on the prompt until the player asks for it buys the
+   * gesture honestly, and the score runs from the first card.
    */
-  playTitle(skipSignal) {
+  async playTitle(skipSignal) {
     this._titleCleanup?.();
     this.show(this.titleLayer);
     for (const node of [this.t1, this.t2, this.t3, this.titlePrompt]) node.style.opacity = '0';
     this.titlePrompt.classList.remove('live');
     this.titlePrompt.tabIndex = -1;
+
+    await this._awaitTitleGate(skipSignal);
+    if (this._destroyed) return;
+    await this._runTitleStages(skipSignal);
+  }
+
+  /**
+   * Hold on the prompt until the player presses something.
+   *
+   * Resolves on the same three inputs the sequence itself accepts, so whatever
+   * a player reaches for works: a press anywhere on the layer, the prompt's own
+   * activation, and the keyboard signal Game feeds in.
+   */
+  _awaitTitleGate(skipSignal) {
+    this.titlePrompt.textContent = gateLabel();
+    this.titlePrompt.style.opacity = '1';
+    this.titlePrompt.classList.add('live');
+    this.titlePrompt.tabIndex = 0;
+    if (this.current === this.titleLayer) this.titlePrompt.focus({ preventScroll: true });
+
+    return new Promise((resolve) => {
+      let done = false;
+      const open = () => {
+        if (done) return;
+        done = true;
+        skipSignal.off(open);
+        this.titleLayer.removeEventListener('pointerdown', onPointer);
+        this.titlePrompt.removeEventListener('click', open);
+        if (this._titleCleanup === open) this._titleCleanup = null;
+        // Hand the prompt back the way the staged sequence expects to find it.
+        this.titlePrompt.style.opacity = '0';
+        this.titlePrompt.classList.remove('live');
+        this.titlePrompt.tabIndex = -1;
+        this.titlePrompt.textContent = promptLabel();
+        resolve();
+      };
+      const onPointer = (e) => {
+        e.preventDefault();
+        open();
+      };
+      this._titleCleanup = open;
+      this.titleLayer.addEventListener('pointerdown', onPointer);
+      this.titlePrompt.addEventListener('click', open);
+      skipSignal.on(open);
+    });
+  }
+
+  _runTitleStages(skipSignal) {
     const stages = REDUCED_MOTION
       ? [
           { node: this.t3, at: 0, hold: Infinity },
@@ -568,7 +710,7 @@ export class Screens {
     const centre = el('div', 'centre', layer);
     const grid = el('div', 'briefing', centre);
 
-    const left = el('div', '', grid);
+    const left = el('div', 'brief-col', grid);
     el('div', 'eyebrow', left, 'Fictional operation • Western Himalaya');
     el('h2', 'brief-heading', left, 'Sortie Briefing');
     const body = el('div', 'brief-body', left);
@@ -586,7 +728,7 @@ export class Screens {
     el('div', 'panel-title', list, 'Objectives');
     this.targetList = el('ul', 'target-list', list);
 
-    const right = el('div', '', grid);
+    const right = el('div', 'brief-col', grid);
     const controls = el('div', 'panel', right);
     el('div', 'panel-title', controls, 'Controls');
     this.controlsGrid = el('div', 'controls-grid', controls);
@@ -672,9 +814,14 @@ export class Screens {
     this.continueButton.addEventListener('click', () => this._showRecord());
 
     this.recordCard = el('div', 'stack', stack);
-    el('div', 'eyebrow', this.recordCard, 'Sortie record — fictional');
+    // "— fictional" came off the heading because the framing is already carried
+    // where it belongs: the briefing eyebrow reads "Fictional operation" and so
+    // does the page description. Repeating it over the contact sheet made the
+    // one line the player reads as a result caption argue with itself.
+    el('div', 'eyebrow record-eyebrow', this.recordCard, 'Sortie record');
     this.contactSheet = el('div', 'contact-sheet', this.recordCard);
     this.statsRow = el('div', 'stats', this.recordCard);
+    this._buildLeaderboard(this.recordCard);
     const menu = el('div', 'menu', this.recordCard);
     this.debriefButton = el('button', 'primary', menu, 'Retry Sortie');
     this.debriefButton.addEventListener('click', () => this.callbacks.onRestart());
@@ -688,6 +835,149 @@ export class Screens {
     this.recordCard.style.display = '';
     this.recordCard.setAttribute('aria-hidden', 'false');
     this.debriefButton.focus();
+  }
+
+  // --------------------------------------------------------- leaderboard --
+
+  /**
+   * Fastest complete sorties on this machine.
+   *
+   * It sits on the record card and nowhere else. The record card is already the
+   * one place in this experience where a number is allowed to be a result — the
+   * comment above _buildDebrief spells out why the remembrance card is kept
+   * separate from anything scored, and a ranked list of times is exactly the
+   * thing that separation exists to keep away from it.
+   */
+  _buildLeaderboard(parent) {
+    this.boardSection = el('section', 'board', parent);
+    this.boardSection.setAttribute('aria-label', 'Fastest sorties');
+    el('div', 'eyebrow board-eyebrow', this.boardSection, 'Fastest sorties');
+
+    this.boardEntry = el('form', 'board-entry', this.boardSection);
+    const label = el('label', 'board-label', this.boardEntry, 'Callsign');
+    this.boardName = el('input', 'board-name', this.boardEntry);
+    this.boardName.type = 'text';
+    this.boardName.maxLength = NAME_MAX;
+    this.boardName.placeholder = 'PILOT';
+    this.boardName.autocomplete = 'off';
+    this.boardName.spellcheck = false;
+    this.boardName.id = 'board-callsign';
+    label.setAttribute('for', this.boardName.id);
+    this.boardSubmit = el('button', 'board-save', this.boardEntry, 'Record time');
+    this.boardSubmit.type = 'submit';
+    this.boardEntry.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this._recordTime();
+    });
+
+    this.boardNote = el('p', 'board-note', this.boardSection, '');
+    this.boardNote.setAttribute('role', 'status');
+    this.boardList = el('ol', 'board-list', this.boardSection);
+  }
+
+  /** @param {{leaderboard: object}} context */
+  setLeaderboard(context) {
+    this._board = context?.leaderboard ?? null;
+  }
+
+  /**
+   * Prepare the board for the sortie that has just ended.
+   *
+   * @param {boolean} success whether the sortie was completed rather than lost.
+   *   Checked as well as the objective count because the two can disagree for a
+   *   frame: securing the last site and hitting the ridge in the same update
+   *   leaves the mission failed with every objective captured, and a sortie
+   *   that ended in the mountain must not take a place on the board.
+   */
+  _showBoardFor(mission, grade, success = true) {
+    if (!this._board) {
+      this.boardSection.style.display = 'none';
+      return;
+    }
+    this.boardSection.style.display = '';
+    const total = mission.posts.length;
+    const rankable = success && isRankable({
+      captured: mission.captured,
+      total,
+      seconds: mission.elapsed,
+    });
+    this._boardRun = rankable
+      ? {
+        seconds: mission.elapsed,
+        grade,
+        objectives: `${mission.captured}/${total}`,
+        at: Date.now(),
+      }
+      : null;
+    this._boardName = null;
+    this.boardName.value = this._board.lastName();
+    this._renderBoard(this._board.read(), {
+      rank: null,
+      improved: false,
+      recorded: false,
+      rankable,
+    });
+  }
+
+  _recordTime() {
+    if (!this._board || !this._boardRun) return;
+    const name = sanitiseName(this.boardName.value);
+    if (!name) {
+      this.boardNote.textContent =
+        `Callsign must be ${NAME_MIN}–${NAME_MAX} characters: letters, digits, spaces, . _ or -`;
+      this.boardName.focus();
+      return;
+    }
+    const result = this._board.submit({ ...this._boardRun, name });
+    this._boardName = name;
+    const hadFocus = this.boardEntry.contains(document.activeElement);
+    this._renderBoard(result.entries, {
+      rank: result.rank,
+      improved: result.improved,
+      recorded: true,
+    });
+    // _renderBoard hides the form, which would drop focus to <body> and strand
+    // a keyboard player outside the dialog's tab ring.
+    if (hadFocus) this.debriefButton?.focus();
+  }
+
+  /**
+   * @param {Array} entries
+   * @param {{rank: number|null, improved: boolean, recorded: boolean, rankable: boolean}} state
+   */
+  _renderBoard(entries, state) {
+    const rankable = state.rankable ?? true;
+    // The entry form only appears for a run that could actually place. Showing
+    // it after a partial sortie invites the player to press a button that is
+    // going to refuse them.
+    this.boardEntry.style.display = rankable && !state.recorded ? '' : 'none';
+
+    if (!rankable) {
+      this.boardNote.textContent = 'Secure every objective to record a sortie time.';
+    } else if (state.recorded && state.rank && state.improved) {
+      this.boardNote.textContent = `Recorded at number ${state.rank}.`;
+    } else if (state.recorded && state.rank) {
+      this.boardNote.textContent = `Your best stands at number ${state.rank}.`;
+    } else if (state.recorded) {
+      this.boardNote.textContent = 'Recorded, but outside the top ten.';
+    } else {
+      this.boardNote.textContent = '';
+    }
+
+    this.boardList.innerHTML = '';
+    if (!entries.length) {
+      el('li', 'board-empty', this.boardList, 'No sorties recorded yet.');
+      return;
+    }
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const row = el('li', 'board-row', this.boardList);
+      if (state.recorded && entry.name === this._boardName) row.classList.add('mine');
+      el('span', 'board-rank', row, String(i + 1));
+      el('span', 'board-who', row, entry.name);
+      el('span', 'board-time', row, formatDuration(entry.seconds));
+      el('span', 'board-grade', row, entry.grade || '');
+    }
   }
 
   /**
@@ -788,6 +1078,8 @@ export class Screens {
     stat('Sortie time', `${minutes}:${String(seconds).padStart(2, '0')}`);
     stat('Distance flown', `${(mission.distanceFlown / 1000).toFixed(1)} km`);
     stat('Exposures', String(mission.photosTaken));
+
+    this._showBoardFor(mission, scored.length ? gradeFor(avg) : '', success);
 
     this.show(this.debriefLayer);
   }
@@ -958,23 +1250,35 @@ export class Screens {
 
   // ---------------------------------------------------------------- misc --
 
+  /**
+   * Move focus within the open dialog, and never out of it.
+   *
+   * This moves focus *itself* on every Tab rather than only at the wrap points.
+   * The previous version handled first/last and left everything in between to
+   * the browser's own tab order — but Input.js has `Tab` in its PREVENT_DEFAULT
+   * set and cancels it globally, so that default never ran and focus could only
+   * ever reach the first and last control in a layer. Nothing exposed it until
+   * the leaderboard added the first dialog with more than a row of buttons:
+   * there was no way to Tab from the callsign field to the button beside it.
+   * Doing the move here keeps the trap correct whatever Input decides to
+   * suppress.
+   */
   _trapDialogFocus(event) {
     if (event.key !== 'Tab' || !this.current) return;
     const focusable = visibleFocusables(this.current);
-    if (!focusable.length) {
-      event.preventDefault();
+    event.preventDefault();
+    if (!focusable.length) return;
+
+    const active = document.activeElement;
+    const index = focusable.indexOf(active);
+    if (index === -1) {
+      // Focus is outside the dialog: pull it back to the near end.
+      focusable[event.shiftKey ? focusable.length - 1 : 0].focus();
       return;
     }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || !this.current.contains(active))) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (active === last || !this.current.contains(active))) {
-      event.preventDefault();
-      first.focus();
-    }
+    const step = event.shiftKey ? -1 : 1;
+    const next = (index + step + focusable.length) % focusable.length;
+    focusable[next].focus();
   }
 
   _restoreDialogFocus() {
@@ -1027,6 +1331,11 @@ export class Screens {
     this._raf = 0;
     clearTimeout(this._loadingRemoveTimer);
     this._loadingRemoveTimer = 0;
+    // Drop the timer without running clearNotice(), which would fire the
+    // pending onDismiss during teardown and mark a notice seen that the player
+    // never actually saw.
+    this._stopNoticeTimer();
+    this._noticeDismiss = null;
     for (const node of [
       this.veil,
       this.noticeBar,
@@ -1043,4 +1352,14 @@ export class Screens {
 /** Say what actually dismisses the title on *this* device, and nothing else. */
 function promptLabel() {
   return COARSE_POINTER ? 'Tap to continue' : 'Press any key or click to continue';
+}
+
+/**
+ * The label on the gate, which starts the sequence rather than skipping it.
+ * "Begin" rather than "continue" because at that point there is nothing yet to
+ * continue from, and the press is doing real work: it is what allows the score
+ * to play at all.
+ */
+function gateLabel() {
+  return COARSE_POINTER ? 'Tap to begin' : 'Press any key or click to begin';
 }
