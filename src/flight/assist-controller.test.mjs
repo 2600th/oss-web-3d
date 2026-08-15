@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { AssistController } from './AssistController.js';
-import { FlightModel } from './FlightModel.js';
+import { AIRCRAFT, FlightModel } from './FlightModel.js';
 
 const DEG = THREE.MathUtils.degToRad;
 const NEUTRAL = Object.freeze({
@@ -19,10 +19,93 @@ const NORMAL = Object.freeze({
   reconActive: false,
 });
 
-test('a sustained turn stays inside the assisted bank envelope', () => {
+/**
+ * The turn law is a rate command, so bank is an *output*: the aircraft lays
+ * over as far as the requested rate needs at the current speed, which at cruise
+ * is around 80 degrees. The envelope that matters is the load factor, and
+ * FlightModel's structural limit is what bounds it.
+ */
+test('a sustained turn banks to the load the requested rate needs', () => {
   const result = run({ seconds: 5, intent: { ...NEUTRAL, turn: 1 } });
-  assert.ok(result.maxBank >= DEG(20), `turn only reached ${THREE.MathUtils.radToDeg(result.maxBank).toFixed(2)} degrees`);
-  assert.ok(result.maxBank <= DEG(48), `bank reached ${THREE.MathUtils.radToDeg(result.maxBank).toFixed(2)} degrees`);
+  assert.ok(
+    result.maxBank >= DEG(70),
+    `turn only reached ${THREE.MathUtils.radToDeg(result.maxBank).toFixed(2)} degrees of bank`,
+  );
+  assert.ok(
+    result.maxBank <= DEG(87),
+    `bank reached ${THREE.MathUtils.radToDeg(result.maxBank).toFixed(2)} degrees`,
+  );
+  assert.ok(result.maxLoad <= AIRCRAFT.gLimit, `turn pulled ${result.maxLoad.toFixed(2)} G`);
+});
+
+/**
+ * The headline acceptance criterion. The bank-command controller this replaced
+ * measured 3.2 deg/s in flight, so a 360 took ninety seconds and turning was
+ * the single worst thing about the game.
+ */
+test('assisted turn rate is arcade-usable at cruise and orders by sensitivity', () => {
+  const rates = ['low', 'normal', 'high'].map((sensitivity) => run({
+    seconds: 6,
+    intent: { ...NEUTRAL, turn: 1 },
+    options: { ...NORMAL, sensitivity },
+  }).steadyTurnRate);
+
+  assert.ok(
+    rates[1] >= DEG(12),
+    `normal sustained only ${THREE.MathUtils.radToDeg(rates[1]).toFixed(1)} deg/s`,
+  );
+  assert.ok(
+    rates[0] < rates[1] && rates[1] < rates[2],
+    `turn rates were ${rates.map((r) => THREE.MathUtils.radToDeg(r).toFixed(1)).join(', ')} deg/s`,
+  );
+});
+
+test('a 180 degree reversal completes within ten seconds at normal sensitivity', () => {
+  const assist = new AssistController();
+  const flight = makeFlight();
+  let turned = 0;
+  let previous = heading(flight);
+  let elapsed = 0;
+  const dt = 1 / 120;
+  while (Math.abs(turned) < Math.PI && elapsed < 30) {
+    advance(assist, flight, { ...NEUTRAL, turn: 1 }, NORMAL, dt);
+    const current = heading(flight);
+    turned += Math.atan2(Math.sin(current - previous), Math.cos(current - previous));
+    previous = current;
+    elapsed += dt;
+  }
+  assert.ok(elapsed <= 10, `reversal took ${elapsed.toFixed(2)} seconds`);
+});
+
+/**
+ * Induced drag is what makes the turn a trade rather than a free ride, and it
+ * used to be absent: a hard turn held its entry speed all the way round.
+ */
+test('a hard turn bleeds energy toward corner speed without decaying to a stall', () => {
+  const result = run({ seconds: 6, intent: { ...NEUTRAL, turn: 1 } });
+  assert.ok(
+    result.flight.airspeed < 230,
+    `six seconds of full turn left ${result.flight.airspeed.toFixed(0)} m/s`,
+  );
+  assert.ok(
+    result.flight.airspeed > AIRCRAFT.stallSpeed * 1.5,
+    `turn decayed to ${result.flight.airspeed.toFixed(0)} m/s, near stall`,
+  );
+});
+
+/** The induced-drag term is a feedback loop; it must not be able to run away. */
+test('forty seconds of maximum turn stays numerically bounded', () => {
+  const result = run({
+    seconds: 40,
+    intent: { ...NEUTRAL, turn: 1 },
+    options: { ...NORMAL, sensitivity: 'high' },
+  });
+  assert.ok(Number.isFinite(result.flight.airspeed), 'airspeed diverged');
+  assert.ok(result.maxLoad <= AIRCRAFT.gLimit + 0.5, `peak load was ${result.maxLoad.toFixed(1)} G`);
+  assert.ok(
+    result.flight.airspeed > AIRCRAFT.stallSpeed,
+    `airspeed collapsed to ${result.flight.airspeed.toFixed(0)} m/s`,
+  );
 });
 
 test('releasing turn intent levels the wings within 1.5 seconds', () => {
@@ -39,18 +122,32 @@ test('releasing turn intent levels the wings within 1.5 seconds', () => {
   assert.ok(elapsed <= 1.5, `level recovery took ${elapsed.toFixed(3)} seconds`);
 });
 
-test('full climb and dive stay inside the 18 degree attitude and flight-path envelope at every sensitivity', () => {
+/**
+ * The vertical envelope opened from 14 to 26-38 degrees of flight path. A jet
+ * that could only ever change its path by 14 degrees cannot cross a Himalayan
+ * ridge that is already filling the canopy, which is the terrain this sortie is
+ * flown through. The ceiling still keeps the horizon in frame.
+ */
+test('full climb and dive stay inside the assisted vertical envelope at every sensitivity', () => {
   const epsilon = DEG(0.01);
+  const CEILING = { low: DEG(26), normal: DEG(32), high: DEG(38) };
   for (const sensitivity of ['low', 'normal', 'high']) {
     const options = { ...NORMAL, sensitivity };
     const climb = run({ seconds: 5, intent: { ...NEUTRAL, climb: 1 }, options });
     const dive = run({ seconds: 5, intent: { ...NEUTRAL, climb: -1 }, options });
 
-    assert.ok(climb.maxFlightPathAngle > DEG(5), `${sensitivity} climb did not establish a positive path`);
-    assert.ok(dive.minFlightPathAngle < DEG(-5), `${sensitivity} dive did not establish a negative path`);
+    assert.ok(climb.maxFlightPathAngle > DEG(15), `${sensitivity} climb did not establish a usable path`);
+    assert.ok(dive.minFlightPathAngle < DEG(-15), `${sensitivity} dive did not establish a usable path`);
+    // Attitude runs ahead of flight path by the angle of attack, so it is
+    // allowed a margin over the commanded path ceiling rather than its own.
+    // The path itself gets one degree of settling allowance: full stick is a
+    // step input into a damped loop, and the measured transient overshoot is
+    // 0.3 degrees. Damping it to exactly zero costs turn rate for nothing.
+    const path = CEILING[sensitivity] + DEG(1);
+    const attitude = path + DEG(12);
     for (const [maneuver, result] of [['climb', climb], ['dive', dive]]) {
-      assertEnvelope(result.minPitchAttitude, result.maxPitchAttitude, epsilon, `${sensitivity} ${maneuver} attitude`);
-      assertEnvelope(result.minFlightPathAngle, result.maxFlightPathAngle, epsilon, `${sensitivity} ${maneuver} path`);
+      assertEnvelope(result.minPitchAttitude, result.maxPitchAttitude, attitude, epsilon, `${sensitivity} ${maneuver} attitude`);
+      assertEnvelope(result.minFlightPathAngle, result.maxFlightPathAngle, path, epsilon, `${sensitivity} ${maneuver} path`);
     }
   }
 });
@@ -191,8 +288,15 @@ test('low, normal, and high sensitivity produce ordered turn and climb authority
   );
 });
 
+/**
+ * The cap rose from 0.35 to 0.94 because 0.35 of a 3.5 rad/s ceiling put a
+ * fighter bank 1.2 s away, and a bank that takes over a second to establish is
+ * the difference between aiming the aircraft and asking it. It is still a hard
+ * cap: roll authority must never be unbounded, and recon must always damp it.
+ */
 test('assisted roll output is hard-capped across sensitivity and recon modes', () => {
   for (const sensitivity of ['low', 'normal', 'high']) {
+    let unscaled = 0;
     for (const reconActive of [false, true]) {
       const assist = new AssistController();
       const flight = makeFlight();
@@ -202,9 +306,16 @@ test('assisted roll output is hard-capped across sensitivity and recon modes', (
         reconActive,
       });
       assert.ok(
-        Math.abs(control.roll) <= 0.35,
+        Math.abs(control.roll) <= 0.94,
         `${sensitivity}/${reconActive ? 'recon' : 'normal'} roll was ${control.roll}`,
       );
+      if (!reconActive) unscaled = Math.abs(control.roll);
+      else {
+        assert.ok(
+          Math.abs(control.roll) < unscaled,
+          `${sensitivity} recon roll ${control.roll} was not damped below ${unscaled}`,
+        );
+      }
     }
   }
 });
@@ -248,28 +359,53 @@ function run({ seconds, intent, hz = 60, options = NORMAL }) {
   const initialHeading = heading(flight);
   const initialOrientation = flight.orientation.clone();
   let maxBank = 0;
+  let maxLoad = 0;
   let minPitchAttitude = Infinity;
   let maxPitchAttitude = -Infinity;
   let minFlightPathAngle = Infinity;
   let maxFlightPathAngle = -Infinity;
 
+  // Heading is unwrapped so a turn past 180 degrees still accumulates, and the
+  // last second is sampled separately: the interesting figure is the *settled*
+  // rate, not one diluted by the roll-in.
+  let unwrappedHeading = 0;
+  let previousHeading = initialHeading;
+  const finalSecond = [];
+  const totalSteps = Math.round(seconds * hz);
+  let stepIndex = 0;
+
   step(assist, flight, intent, options, seconds, hz, () => {
     maxBank = Math.max(maxBank, Math.abs(bankAngle(flight)));
+    maxLoad = Math.max(maxLoad, flight.gLoad);
     const pitchAttitude = Math.asin(clamp(flight.forward.y, -1, 1));
     const flightPathAngle = Math.asin(clamp(flight.velocity.y / Math.max(flight.velocity.length(), 1), -1, 1));
     minPitchAttitude = Math.min(minPitchAttitude, pitchAttitude);
     maxPitchAttitude = Math.max(maxPitchAttitude, pitchAttitude);
     minFlightPathAngle = Math.min(minFlightPathAngle, flightPathAngle);
     maxFlightPathAngle = Math.max(maxFlightPathAngle, flightPathAngle);
+
+    const current = heading(flight);
+    const delta = Math.atan2(Math.sin(current - previousHeading), Math.cos(current - previousHeading));
+    unwrappedHeading += delta;
+    previousHeading = current;
+    stepIndex++;
+    if (stepIndex > totalSteps - hz) finalSecond.push(delta * hz);
   });
+
+  const steadyTurnRate = finalSecond.length
+    ? Math.abs(finalSecond.reduce((a, v) => a + v, 0) / finalSecond.length)
+    : 0;
 
   return {
     flight,
     maxBank,
+    maxLoad,
     minPitchAttitude,
     maxPitchAttitude,
     minFlightPathAngle,
     maxFlightPathAngle,
+    steadyTurnRate,
+    totalHeadingChange: Math.abs(unwrappedHeading),
     flightPathAngle: Math.asin(clamp(flight.velocity.y / Math.max(flight.velocity.length(), 1), -1, 1)),
     headingDelta: angleDistance(initialHeading, heading(flight)),
     opticalDelta: initialOrientation.angleTo(flight.orientation),
@@ -305,13 +441,13 @@ function spread(values) {
   return Math.max(...values) - Math.min(...values);
 }
 
-function assertEnvelope(minimum, maximum, epsilon, label) {
+function assertEnvelope(minimum, maximum, ceiling, epsilon, label) {
   assert.ok(
-    minimum >= DEG(-18) - epsilon,
+    minimum >= -ceiling - epsilon,
     `${label} fell to ${THREE.MathUtils.radToDeg(minimum).toFixed(2)} degrees`,
   );
   assert.ok(
-    maximum <= DEG(18) + epsilon,
+    maximum <= ceiling + epsilon,
     `${label} reached ${THREE.MathUtils.radToDeg(maximum).toFixed(2)} degrees`,
   );
 }

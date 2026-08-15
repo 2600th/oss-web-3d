@@ -34,13 +34,45 @@ export const AIRCRAFT = {
   dragCoefficient: 0.0271,
   airbrakeDrag: 0.075,
 
+  /**
+   * Induced-drag denominator, pi·AR·e for a delta wing (AR 2.2, e 0.78).
+   *
+   * Drag used to be parasitic plus a small angle-of-attack term, which meant a
+   * hard turn cost almost nothing: the aircraft held 266 m/s all the way round
+   * and the turn rate never improved, because turn rate at fixed load is
+   * inversely proportional to speed. Lift-induced drag grows with the *square*
+   * of the load factor, so a real turn bleeds energy hard and the rate climbs
+   * as it does. That trade — height and speed for degrees per second — is the
+   * whole of fighter energy management, and without this term the game has
+   * none of it.
+   */
+  inducedDragSpan: Math.PI * 2.2 * 0.78,
+
+  /**
+   * Maximum lift coefficient the wing can actually generate.
+   *
+   * Without this the induced-drag term is a runaway: demanding load at low
+   * speed asks for a lift coefficient no wing can produce, which raises drag,
+   * which lowers speed, which raises the demanded coefficient again. Measured
+   * on the first build of the term — a high-sensitivity turn wound itself from
+   * 266 m/s down to 130 and reported 1682 G. A real wing simply stalls instead,
+   * and 1.5 is the delta's rough ceiling.
+   */
+  maxLiftCoefficient: 1.5,
+
   // Attitude authority, radians/second at full deflection and full authority.
-  maxRollRate: 3.5,
+  maxRollRate: 4.2,
   maxPitchRate: 1.05,
   maxYawRate: 0.42,
 
   // First-order lag on reaching commanded rate. Roll is crisp, pitch has mass.
-  rollAgility: 5.2,
+  //
+  // Roll was 5.2 (tau 0.19 s) against a 3.5 rad/s ceiling, which put a 72-degree
+  // bank about 1.2 s away. A bank that takes over a second to establish is the
+  // difference between "aim the aircraft" and "ask the aircraft"; every arcade
+  // flight game in this lineage establishes one in roughly half a second, and
+  // 7.4 rad/s of lag against a 4.2 rad/s ceiling is what that costs.
+  rollAgility: 7.4,
   pitchAgility: 3.4,
   yawAgility: 2.8,
 
@@ -59,8 +91,14 @@ export const AIRCRAFT = {
    * commanded rate at nLimit·g/v also reproduces corner speed for free — turn
    * rate peaks in the middle of the envelope and falls off at both ends, which
    * is the single most recognisable thing about how a fast jet handles.
+   *
+   * 9.0 rather than the previous 11.5 because the HUD shows this number. A
+   * limit the assist could not reach was harmless; the assist now commands load
+   * directly, so an 11.5 ceiling meant ordinary turns reading 9-11 G and the
+   * gauge stopped meaning anything. 9 is the recognisable fighter figure and
+   * the assist's own demand ladder tops out exactly on it.
    */
-  gLimit: 11.5,
+  gLimit: 9.0,
 
   // How hard the velocity vector is pulled onto the nose, per second.
   gripLow: 0.35,
@@ -101,6 +139,19 @@ export class FlightModel {
     this.stallFactor = 0;
     this.crashed = false;
     this.throttleSmoothed = 0.72;
+
+    /**
+     * The rate ceilings this frame's control inputs are actually scaled by.
+     *
+     * Published because AssistController has to command in radians per second —
+     * it computes the pitch rate a coordinated turn needs from g, bank and true
+     * airspeed — and then normalise that into the -1..1 stick this model
+     * expects. Re-deriving the caps there would duplicate the authority curve,
+     * the high-speed stiffening and the G limit in a second place, and the two
+     * copies would drift the first time either is tuned.
+     */
+    this.pitchAuthority = AIRCRAFT.maxPitchRate;
+    this.rollAuthority = AIRCRAFT.maxRollRate;
 
     /** Where the aircraft entered the terrain clearance envelope, once crashed. */
     this.impactPoint = new THREE.Vector3();
@@ -173,9 +224,12 @@ export class FlightModel {
     // above it, G does.
     const gLimitedRate = (AIRCRAFT.gLimit * GRAVITY) / Math.max(speed, 60);
     const pitchCap = Math.min(AIRCRAFT.maxPitchRate * authority * highSpeedStiffen, gLimitedRate);
+    const rollCap = AIRCRAFT.maxRollRate * authority;
+    this.pitchAuthority = pitchCap;
+    this.rollAuthority = rollCap;
 
     const targetPitch = -control.pitch * pitchCap;
-    const targetRoll = -control.roll * AIRCRAFT.maxRollRate * authority;
+    const targetRoll = -control.roll * rollCap;
     const targetYaw = -control.yaw * Math.min(AIRCRAFT.maxYawRate * authority, gLimitedRate * 0.5);
 
     this.rates.x += (targetPitch - this.rates.x) * (1 - Math.exp(-AIRCRAFT.pitchAgility * dt));
@@ -230,9 +284,18 @@ export class FlightModel {
       this.angleOfAttack = 0;
     }
 
+    // Lift-induced drag. The load factor is read from the body pitch rate the
+    // airframe actually reached this step — omega·V is the centripetal
+    // acceleration the wing is producing — rather than from the previous
+    // frame's gLoad, which lags by a step and feeds back on itself.
+    const liftLoad = 1 + (Math.abs(this.rates.x) * speed) / GRAVITY;
+    const liftCoefficient = Math.min(
+      (liftLoad * AIRCRAFT.mass * GRAVITY) / Math.max(q, 1),
+      AIRCRAFT.maxLiftCoefficient,
+    );
     const cd =
       AIRCRAFT.dragCoefficient +
-      0.14 * this.angleOfAttack * this.angleOfAttack +
+      (liftCoefficient * liftCoefficient) / AIRCRAFT.inducedDragSpan +
       AIRCRAFT.airbrakeDrag * control.brake;
 
     const accel = _v2.set(0, 0, 0);
