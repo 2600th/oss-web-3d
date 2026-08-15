@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "vite",
     "build": "node tools/check-glsl.mjs && vite build",
-    "build:cloud-comparison": "node tools/check-glsl.mjs && vite build --config tools/cloud-comparison.vite.config.js",
     "preview": "vite preview",
     "optimize:model": "node tools/optimize-model.mjs",
     "check": "node tools/check-glsl.mjs"
@@ -21,10 +20,6 @@
     "@gltf-transform/core": "^4.4.2",
     "@gltf-transform/extensions": "^4.4.2",
     "@gltf-transform/functions": "^4.4.2",
-    "@takram/three-atmosphere": "0.19.1",
-    "@takram/three-clouds": "0.7.6",
-    "@takram/three-geospatial": "0.9.1",
-    "@takram/three-geospatial-effects": "0.6.4",
     "meshoptimizer": "^1.2.0",
     "sharp": "^0.35.3",
     "vite": "^8.2.1"
