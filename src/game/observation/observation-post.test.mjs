@@ -15,15 +15,21 @@ assert.equal(a.photo, null);
 assert.deepEqual(a.position.toArray(), world.toArray());
 assert.deepEqual(a.aimPoint.toArray(), [world.x, world.y + 13, world.z]);
 assert.equal(POST_RADIUS, 58);
-assert.equal(POST_HEIGHT, 16);
+assert.equal(POST_HEIGHT, 22);
 assert.equal(a.group.children.length, 2, 'installation must remain a two-draw merged assembly');
 assert.equal(a.structures.isMesh, true);
 assert.equal(a.patch.isMesh, true);
 
 const geometry = a.structures.geometry;
 const triangles = geometry.index.count / 3;
-assert.ok(triangles >= 1600, `recon payoff needs modeled silhouette detail, got ${triangles} triangles`);
-assert.ok(triangles <= 6500, `five posts must stay bounded, got ${triangles} triangles each`);
+// The ceiling rose from 6500 with the shelter, stores dump, drum lines and
+// snow berm that make the position legible at a 1.5-3 km stand-off. Five posts
+// at this budget is about 45k triangles against the terrain's 1.03M, and each
+// post is still a single merged draw, so the cost that matters here is not
+// triangles — but the bound stays, because an unbounded site is how a handful
+// of props becomes a scene.
+assert.ok(triangles >= 2400, `recon payoff needs modeled silhouette detail, got ${triangles} triangles`);
+assert.ok(triangles <= 9000, `five posts must stay bounded, got ${triangles} triangles each`);
 assert.ok(geometry.attributes.aWear, 'merged structures need deterministic weathering data');
 assert.ok(geometry.attributes.aGrounding, 'contact shading must be primitive-relative on steep terrain');
 assert.ok(a.patch.geometry.attributes.aScour, 'terrain patch needs snow-scour data');

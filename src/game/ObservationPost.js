@@ -17,7 +17,7 @@ import { terrainHeight, terrainNormal } from '../world/heightfield.js';
  */
 
 export const POST_RADIUS = 58; // metres; the scuffed ground footprint
-export const POST_HEIGHT = 16; // metres; roughly the antenna tip
+export const POST_HEIGHT = 22; // metres; roughly the antenna tip
 
 /**
  * How far the site sits proud of the analytic ground.
@@ -37,6 +37,20 @@ const STONE_DARK = new THREE.Color(0x332f2b);
 const TARP = new THREE.Color(0x3c4232);
 const METAL = new THREE.Color(0x5a5c58);
 const CRATE = new THREE.Color(0x6b5a3c);
+
+/**
+ * Accent materials.
+ *
+ * A position built only from stone and olive reads as terrain from the air —
+ * which is what these did. Reconnaissance finds occupied ground by looking for
+ * things nature does not make: straight edges, repeated spacing, and colour
+ * that does not belong on a mountain. Rust and weathered canvas are what a
+ * supply dump at 5,500 m actually looks like, and they are also the only warm
+ * pixels within a kilometre of white.
+ */
+const RUST = new THREE.Color(0x7a4526);
+const CANVAS = new THREE.Color(0x8a7c5e);
+const BERM = new THREE.Color(0xb9c2cc);
 
 /** Deterministic per-post PRNG so a given seed always builds the same camp. */
 function rng(seed) {
@@ -191,6 +205,50 @@ function cylinderBetween(list, start, end, radius, color, segments = 5) {
   );
   decorateGeometry(geometry, color, 0.9);
   list.push(geometry);
+}
+
+/**
+ * A prefab shelter with a pitched roof.
+ *
+ * The largest hard-edged silhouette on the site, and the one that carries the
+ * position at range: a ridge line and two sloped planes are a shape no
+ * mountain makes, so the eye finds it long before it can resolve sandbags.
+ */
+function hutAt(list, x, y, z, width, depth, wallHeight, roofRise, rotY, wallColor, roofColor) {
+  boxAt(list, x, y + wallHeight * 0.5, z, width, wallHeight, depth, rotY, wallColor);
+  const slope = Math.atan2(roofRise, width * 0.5);
+  const panel = Math.hypot(roofRise, width * 0.5);
+  for (const side of [-1, 1]) {
+    const offset = (width * 0.25) * side;
+    const geometry = new THREE.BoxGeometry(panel, 0.36, depth + 1.4);
+    geometry.rotateZ(-slope * side);
+    geometry.rotateY(rotY);
+    geometry.translate(
+      x + Math.cos(rotY) * offset,
+      y + wallHeight + roofRise * 0.5,
+      z - Math.sin(rotY) * offset,
+    );
+    decorateGeometry(geometry, roofColor, 0.5);
+    list.push(geometry);
+  }
+}
+
+/**
+ * A row of fuel drums.
+ *
+ * Even spacing is the giveaway. A scatter of rocks and a scatter of stores look
+ * the same from four kilometres up; a line of eight identical cylinders at two
+ * metre centres does not occur naturally, and it survives being only a few
+ * pixels tall because the eye reads the *rhythm* rather than the objects.
+ */
+function drumRowAt(list, groundAt, x, z, count, angle, rand) {
+  const spacing = 2.15;
+  for (let i = 0; i < count; i++) {
+    const offset = (i - (count - 1) * 0.5) * spacing;
+    const px = x + Math.cos(angle) * offset;
+    const pz = z + Math.sin(angle) * offset;
+    cylinderAt(list, px, groundAt(px, pz), pz, 0.62, 0.62, 1.55, rand() > 0.55 ? RUST : METAL, 8);
+  }
 }
 
 function roofPanelAt(list, x, y, z, width, depth, rotY, tilt, color) {
@@ -464,26 +522,62 @@ export class ObservationPost {
     }
     roofPanelAt(parts, cx, canopyGround + 3.72, cz, 7.2, 5.0, upSlope, 0.08, TARP);
 
-    // Antenna mast — the tallest feature, and the giveaway from the air.
+    // Antenna mast — the tallest feature, and the giveaway from the air. Raised
+    // from 14 m: at the 1.5-3 km stand-off where reconnaissance happens, 14 m
+    // subtends about four pixels, which is below the threshold at which a
+    // vertical line reads as a mast rather than as noise on a ridge.
     const ax = Math.cos(upSlope + 2.05) * 11.5;
     const az = Math.sin(upSlope + 2.05) * 11.5;
     const aGround = groundAt(ax, az);
-    cylinderAt(parts, ax, aGround, az, 0.17, 0.31, 14, METAL, 7);
-    boxAt(parts, ax, aGround + 13.6, az, 3.6, 0.18, 0.18, upSlope, METAL);
-    boxAt(parts, ax, aGround + 13.6, az, 0.18, 0.18, 3.6, upSlope, METAL);
-    const guyTop = new THREE.Vector3(ax, aGround + 11.8, az);
+    cylinderAt(parts, ax, aGround, az, 0.19, 0.38, 21, METAL, 7);
+    boxAt(parts, ax, aGround + 20.4, az, 4.4, 0.20, 0.20, upSlope, METAL);
+    boxAt(parts, ax, aGround + 20.4, az, 0.20, 0.20, 4.4, upSlope, METAL);
+    boxAt(parts, ax, aGround + 17.2, az, 3.0, 0.18, 0.18, upSlope + 0.7, METAL);
+    const guyTop = new THREE.Vector3(ax, aGround + 17.6, az);
     for (let i = 0; i < 3; i++) {
       const a = upSlope + 0.45 + (i / 3) * Math.PI * 2;
-      const gx = ax + Math.cos(a) * 8.5;
-      const gz = az + Math.sin(a) * 8.5;
+      const gx = ax + Math.cos(a) * 12.5;
+      const gz = az + Math.sin(a) * 12.5;
       cylinderBetween(
         parts,
         guyTop,
         new THREE.Vector3(gx, groundAt(gx, gz) + 0.18, gz),
-        0.045,
+        0.05,
         METAL,
         4,
       );
+    }
+
+    // Prefab accommodation hut, set across the slope from the sangar. Its ridge
+    // line is the strongest straight edge on the position.
+    const hutAngle = upSlope + 1.32;
+    const hx = Math.cos(upSlope + 1.05) * 24;
+    const hz = Math.sin(upSlope + 1.05) * 24;
+    hutAt(parts, hx, groundAt(hx, hz), hz, 11.5, 6.4, 2.9, 1.9, hutAngle, STONE_DARK, CANVAS);
+
+    // Stores dump: a netted stack and two drum lines, deliberately regular.
+    const sx = Math.cos(upSlope - 0.62) * 27;
+    const sz = Math.sin(upSlope - 0.62) * 27;
+    const sGround = groundAt(sx, sz);
+    for (let i = 0; i < 6; i++) {
+      const row = i % 3;
+      const tier = Math.floor(i / 3);
+      const px = sx + Math.cos(hutAngle) * (row - 1) * 2.6;
+      const pz = sz + Math.sin(hutAngle) * (row - 1) * 2.6;
+      boxAt(parts, px, sGround + 0.95 + tier * 1.7, pz, 2.5, 1.7, 2.1, hutAngle, CRATE);
+    }
+    roofPanelAt(parts, sx, sGround + 4.0, sz, 9.2, 5.2, hutAngle, 0.06, TARP);
+    drumRowAt(parts, groundAt, sx + Math.cos(hutAngle + 1.57) * 6.5, sz + Math.sin(hutAngle + 1.57) * 6.5, 7, hutAngle, rand);
+    drumRowAt(parts, groundAt, sx + Math.cos(hutAngle + 1.57) * 9.0, sz + Math.sin(hutAngle + 1.57) * 9.0, 5, hutAngle, rand);
+
+    // Snow pushed clear of the working area. The bright rim is what gives the
+    // dark scour a hard boundary instead of letting it fade into the slope.
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2 + rand() * 0.12;
+      const r = 34 + rand() * 5;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      sandbagAt(parts, x, groundAt(x, z) + 0.85, z, 7.2 + rand() * 2.4, 1.7, 3.4, a + Math.PI * 0.5, BERM);
     }
 
     // Restrained stores supply occupation cues without becoming visual confetti.
