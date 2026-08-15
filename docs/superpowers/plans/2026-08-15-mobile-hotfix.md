@@ -195,7 +195,7 @@ git status --short --branch
 
 Expected: all tests/build pass, no whitespace errors, and only the intended hotfix files are changed.
 
-- [ ] **Step 5: Commit and push the hotfix**
+- [x] **Step 5: Commit and push the hotfix**
 
 Run:
 
