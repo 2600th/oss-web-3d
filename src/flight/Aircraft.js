@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { burnerHeat, burnerReheat } from './burner.js';
 
 /**
  * The player's MiG-21: model loading, orientation, and the engine plume.
@@ -77,6 +78,9 @@ export class Aircraft {
     this._crashPresentation = false;
     this.length = REAL_LENGTH;
     this.wingspan = 7.15;
+    /** World-space nozzle, republished every update for the particle envelope. */
+    this.nozzlePosition = new THREE.Vector3();
+    this.burnerActive = false;
 
     this._buildExhaust();
   }
@@ -208,9 +212,14 @@ export class Aircraft {
         vertexShader: /* glsl */ `
           precision highp float;
           varying vec2 vUv;
+          varying vec3 vViewNormal;
+          varying vec3 vViewDir;
           void main() {
             vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+            vViewNormal = normalMatrix * normal;
+            vViewDir = -viewPosition.xyz;
+            gl_Position = projectionMatrix * viewPosition;
           }
         `,
         fragmentShader: /* glsl */ `
@@ -219,11 +228,36 @@ export class Aircraft {
           uniform float uOpacity;
           uniform float uTime;
           varying vec2 vUv;
+          varying vec3 vViewNormal;
+          varying vec3 vViewDir;
           void main() {
-            float axial = sin(3.14159265 * clamp(vUv.y, 0.0, 1.0));
-            float cell = 0.92 + 0.08 * sin(vUv.y * 36.0 - uTime * 28.0);
-            float rim = mix(0.72, 1.0, 1.0 - abs(vUv.x * 2.0 - 1.0));
-            float alpha = axial * cell * rim * uOpacity;
+            // How much gas this view ray crosses. A cylinder's chord is longest
+            // straight through the axis and zero at the silhouette, and that is
+            // exactly |dot(N, V)| — 1 where the surface faces the eye, 0 where
+            // it turns away. Without it the tube has no falloff across its
+            // width, so its silhouette is a hard line and the plume reads as a
+            // flat plank rather than a volume. The old shader tried to do this
+            // from the angular UV, which is fixed to the geometry and does not
+            // follow the eye, so it shaded one side of the tube bright
+            // regardless of where the camera was.
+            // Not squared. Squaring narrows the bright band and drops the mean
+            // alpha to about 0.5 against the old rim term's 0.86, which on top
+            // of a shorter plume left the burner looking weak. Unsquared it
+            // still reaches zero at the silhouette, which is all the hard edge
+            // needed.
+            vec3 normal = normalize(vViewNormal);
+            float chord = abs(dot(normal, normalize(vViewDir)));
+
+            // Hot just aft of the nozzle, then a long fade to nothing at the
+            // tip. sin() peaked in the middle and left the plume dark where it
+            // leaves the engine, which is backwards; this holds brightness well
+            // down the tube so a long plume still reads as lit gas rather than
+            // fading out a metre behind the nozzle.
+            float v = clamp(vUv.y, 0.0, 1.0);
+            float axial = smoothstep(0.0, 0.08, v) * (1.0 - v * v);
+            float cell = 0.92 + 0.08 * sin(v * 36.0 - uTime * 28.0);
+
+            float alpha = axial * cell * chord * uOpacity;
             if (alpha < 0.006) discard;
             // Three injects pc_fragColor and aliases gl_FragColor to it. A
             // second user-declared output conflicts with the composer's
@@ -273,6 +307,7 @@ export class Aircraft {
         toneMapped: false,
       });
       const mesh = new THREE.Mesh(geometry, material);
+      // Inside the mid plume, which reaches about 8 m at full reheat.
       mesh.position.z = 1.35 + i * 1.05;
       mesh.frustumCulled = true;
       this.exhaust.add(mesh);
@@ -283,10 +318,13 @@ export class Aircraft {
   update(dt, flight) {
     this.group.position.copy(flight.position);
     this.group.quaternion.copy(flight.orientation);
-    if (this._crashPresentation) return;
+    if (this._crashPresentation) {
+      this.burnerActive = false;
+      return;
+    }
 
     const t = flight.throttleSmoothed;
-    const reheat = THREE.MathUtils.clamp((t - 0.84) / 0.16, 0, 1);
+    const reheat = burnerReheat(t);
     this._exhaustTime += dt;
     // Deterministic frame-clock flicker: no wall-clock discontinuity after a
     // pause and no browser-global dependency in tests.
@@ -294,18 +332,32 @@ export class Aircraft {
 
     // Below about half throttle there is essentially nothing to see, which is
     // what makes lighting the burner feel like an event.
-    const heat = THREE.MathUtils.clamp((t - 0.35) / 0.65, 0, 1);
+    const heat = burnerHeat(t);
 
+    // Published for FlightFx, which hangs the turbulent particle envelope off
+    // the same nozzle. Read from the scene graph rather than reconstructed from
+    // the flight state: the offset is measured off the loaded model's bounds in
+    // load(), and duplicating that arithmetic in another file is how the plume
+    // and its particles end up in two different places.
+    this.exhaust.getWorldPosition(this.nozzlePosition);
+    this.burnerActive = true;
+
+    // Lengths are the original ones. Lighting the burner should be dramatic,
+    // and the plank the plume used to render as was a shading bug, not a length
+    // one — the fix for it is the view-relative chord in the shader. Opacities
+    // are up about a third to hold the same apparent brightness through that
+    // chord term, whose mean across the tube is lower than the flat rim factor
+    // it replaced.
     this.flameCore.scale.set(0.72 + 0.28 * heat, 0.72 + 0.28 * heat, 0.5 + 0.7 * heat + reheat * 1.5);
-    this.flameCore.material.uniforms.uOpacity.value = (0.08 + 0.40 * heat + 0.34 * reheat) * flicker;
+    this.flameCore.material.uniforms.uOpacity.value = (0.11 + 0.52 * heat + 0.44 * reheat) * flicker;
     this.flameCore.material.uniforms.uTime.value = this._exhaustTime;
 
     this.flameMid.scale.set(0.62 + 0.38 * heat, 0.62 + 0.38 * heat, 0.35 + 0.5 * heat + reheat * 1.9);
-    this.flameMid.material.uniforms.uOpacity.value = (0.035 + 0.16 * heat + 0.27 * reheat) * flicker;
+    this.flameMid.material.uniforms.uOpacity.value = (0.045 + 0.21 * heat + 0.35 * reheat) * flicker;
     this.flameMid.material.uniforms.uTime.value = this._exhaustTime;
 
     this.flameOuter.scale.set(0.55 + 0.45 * reheat, 0.55 + 0.45 * reheat, 0.3 + 1.4 * reheat);
-    this.flameOuter.material.uniforms.uOpacity.value = 0.012 + 0.19 * reheat;
+    this.flameOuter.material.uniforms.uOpacity.value = 0.016 + 0.25 * reheat;
     this.flameOuter.material.uniforms.uTime.value = this._exhaustTime;
     this.flameOuter.visible = reheat > 0.01;
 

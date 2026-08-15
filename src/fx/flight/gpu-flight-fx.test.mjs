@@ -374,15 +374,26 @@ test('phone orange lobe stays below 32 percent of a true 390x844 short side', ()
   const originalRandom = Math.random;
   let worst = 0;
   try {
-    for (let sample = 0; sample < 24; sample++) {
+    // 96 rather than 24: the breach this was meant to catch sits in the tail,
+    // and two dozen draws was not enough of the distribution to find it.
+    for (let sample = 0; sample < 96; sample++) {
+      // Construct *outside* the seeded window. three draws four Math.random()
+      // values per UUID, and a FlightFx builds dozens of geometries, materials
+      // and meshes, so seeding before construction made this measure how many
+      // objects the effects graph happens to contain: adding one unrelated
+      // particle system shifted every sample onto a different draw and swung
+      // the worst case by more than a point. The emission is the thing under
+      // test, so the emission is what gets the deterministic stream.
+      const fx = new FlightFx(environment());
+      fx.setQuality(TIERS.phone);
+
       let seed = (0x7f4a7c15 ^ (sample * 0x9e3779b9)) >>> 0;
       Math.random = () => {
         seed = (1664525 * seed + 1013904223) >>> 0;
         return seed / 0x100000000;
       };
-      const fx = new FlightFx(environment());
-      fx.setQuality(TIERS.phone);
       fx.crash(impact);
+      Math.random = originalRandom;
       const system = fx.explosion;
       const age = 0.3;
       const gravity = system.uniforms.uGravity.value;
@@ -702,5 +713,170 @@ test('afterburner uses bounded shader surfaces, never camera-intersecting cones'
   const size = bounds.getSize(new THREE.Vector3());
   assert.ok(size.x <= 3 && size.y <= 3 && size.z <= 12, `oversized plume ${size.toArray()}`);
   assert.equal(typeof aircraft.dispose, 'function');
+  aircraft.dispose();
+});
+
+// ---------------------------------------------------------------- efflux --
+
+/**
+ * A flight state complete enough to run a whole FlightFx.update. The efflux
+ * only reads throttle, forward and velocity, but it shares the frame with the
+ * streak, condensation and spindrift emitters and those want the rest.
+ */
+function jet(throttle, speed = 250) {
+  return {
+    throttleSmoothed: throttle,
+    airspeed: speed,
+    position: new THREE.Vector3(0, 1000, 0),
+    velocity: new THREE.Vector3(0, 0, -speed),
+    forward: new THREE.Vector3(0, 0, -1),
+    right: new THREE.Vector3(1, 0, 0),
+    altitude: 5000,
+    agl: 2000,
+    gLoad: 1,
+  };
+}
+
+const NOZZLE = { nozzlePosition: new THREE.Vector3(0, 1000, 0), burnerActive: true };
+
+/**
+ * Where the plume actually ends up on screen-space terms: the furthest a live
+ * particle drifts behind the nozzle over its life, evaluated with the shader's
+ * own closed-form trajectory.
+ */
+function effluxReach(fx, flight) {
+  const system = fx.exhaust;
+  const drag = Math.max(system.uniforms.uDrag.value, 1e-3);
+  const aft = flight.forward.clone().multiplyScalar(-1);
+  const point = new THREE.Vector3();
+  const velocity = new THREE.Vector3();
+  const airframe = new THREE.Vector3();
+  let reach = 0;
+  for (let i = 0; i < system.active; i++) {
+    const life = system.data.life[i];
+    if (life <= 0) continue;
+    const age = life;
+    const travel = (1 - Math.exp(-drag * age)) / drag;
+    point.fromArray(system.data.start, i * 3);
+    velocity.fromArray(system.data.velocity, i * 3);
+    point.addScaledVector(velocity, travel);
+    // Where the nozzle has got to by then.
+    airframe.copy(NOZZLE.nozzlePosition).addScaledVector(flight.velocity, age);
+    reach = Math.max(reach, point.sub(airframe).dot(aft));
+  }
+  return reach;
+}
+
+test('the efflux is dormant below dry heat and lights with the burner', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+
+  fx.update(1 / 60, jet(0.2), new THREE.Vector3(0, 1000, 60), null, NOZZLE);
+  assert.equal(fx.exhaust.mesh.visible, false, 'an idling engine draws no efflux at all');
+
+  fx.update(1 / 60, jet(0.8), new THREE.Vector3(0, 1000, 60), null, NOZZLE);
+  assert.equal(fx.exhaust.mesh.visible, true);
+
+  // A crashed or unloaded airframe publishes no nozzle, and the plume must not
+  // be left hanging in the air where the aircraft used to be.
+  fx.update(1 / 60, jet(1), new THREE.Vector3(0, 1000, 60), null, { burnerActive: false });
+  assert.equal(fx.exhaust.mesh.visible, false);
+  fx.update(1 / 60, jet(1), new THREE.Vector3(0, 1000, 60), null, null);
+  assert.equal(fx.exhaust.mesh.visible, false);
+  fx.dispose();
+});
+
+test('reheat brightens the efflux and lengthens it, and dry power does neither', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+
+  const dryFlight = jet(0.75);
+  fx.update(1 / 60, dryFlight, new THREE.Vector3(), null, NOZZLE);
+  const dryOpacity = fx.exhaust.uniforms.uOpacity.value;
+  const dryGlow = fx.exhaust.uniforms.uGlow.value;
+  const dryReach = effluxReach(fx, dryFlight);
+
+  fx.reset();
+  const wetFlight = jet(1);
+  fx.update(1 / 60, wetFlight, new THREE.Vector3(), null, NOZZLE);
+  const wetReach = effluxReach(fx, wetFlight);
+
+  assert.ok(fx.exhaust.uniforms.uOpacity.value > dryOpacity * 1.5, 'reheat is a visible event');
+  assert.ok(fx.exhaust.uniforms.uGlow.value > dryGlow);
+  assert.ok(wetReach > dryReach * 1.3, `reheat ${wetReach.toFixed(1)}m vs dry ${dryReach.toFixed(1)}m`);
+});
+
+test('the plume trails the nozzle by a jet-sized distance, not a contrail-sized one', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+  const flight = jet(1, 250);
+  fx.update(1 / 60, flight, new THREE.Vector3(), null, NOZZLE);
+  const reach = effluxReach(fx, flight);
+  // Long enough to read as a plume rather than a halo on the tailpipe, short
+  // enough that it is an afterburner and not a smoke trail across the valley.
+  assert.ok(reach > 8, `plume only reaches ${reach.toFixed(1)}m behind the nozzle`);
+  assert.ok(reach < 70, `plume reaches ${reach.toFixed(1)}m and reads as a contrail`);
+  fx.dispose();
+});
+
+test('plume length scales with airspeed because the particles carry the airframe velocity', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+
+  const slow = jet(1, 120);
+  fx.update(1 / 60, slow, new THREE.Vector3(), null, NOZZLE);
+  const slowReach = effluxReach(fx, slow);
+
+  fx.reset();
+  const fast = jet(1, 320);
+  fx.update(1 / 60, fast, new THREE.Vector3(), null, NOZZLE);
+  assert.ok(
+    effluxReach(fx, fast) > slowReach * 1.4,
+    'a faster aircraft must outrun its own efflux further',
+  );
+  fx.dispose();
+});
+
+test('phone drops the efflux entirely and the frusta carry the burner alone', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.phone);
+  assert.equal(fx.exhaust.active, 0);
+  fx.update(1 / 60, jet(1), new THREE.Vector3(), null, NOZZLE);
+  assert.equal(fx.exhaust.mesh.visible, false);
+
+  fx.setQuality(TIERS.high);
+  assert.ok(fx.exhaust.active > 0, 'and it comes back on a tier that can afford it');
+  fx.dispose();
+});
+
+test('the efflux emitter does not disturb the shared spawn scratch', () => {
+  const fx = new FlightFx(environment());
+  fx.setQuality(TIERS.high);
+  // emit() prefers `velocity` over `direction`, so a cone emitter sharing this
+  // object would have to null the field and restore it. It has its own.
+  assert.notEqual(fx._effluxSpawn, fx._spawn);
+  fx.update(1 / 60, jet(1), new THREE.Vector3(), null, NOZZLE);
+  assert.ok(fx._spawn.velocity?.isVector3, 'the streak emitter still owns a live velocity vector');
+  assert.equal(fx._effluxSpawn.velocity, undefined, 'the efflux emits along a cone, not a vector');
+  fx.dispose();
+});
+
+test('aircraft publishes the measured nozzle and withdraws it on crash presentation', () => {
+  const aircraft = new Aircraft(environment());
+  const flight = {
+    position: new THREE.Vector3(100, 2000, -300),
+    orientation: new THREE.Quaternion(),
+    throttleSmoothed: 1,
+  };
+  aircraft.update(1 / 60, flight);
+  assert.equal(aircraft.burnerActive, true);
+  // Behind the aircraft origin, on the tail, not at the model origin.
+  const offset = aircraft.nozzlePosition.clone().sub(flight.position);
+  assert.ok(offset.length() > 1, `nozzle sits on the origin: ${offset.toArray()}`);
+  assert.ok(offset.z > 0, 'the jet leaves the far end from the nose');
+
+  aircraft.setCrashPresentation(true);
+  aircraft.update(1 / 60, flight);
+  assert.equal(aircraft.burnerActive, false);
   aircraft.dispose();
 });

@@ -9,22 +9,29 @@ import {
 import { Ribbon } from './gpu/Ribbon.js';
 import { frameUniforms, updateFrameUniforms } from './gpu/FrameUniforms.js';
 import { ImpactBlast } from './flight/ImpactBlast.js';
+import { burnerHeat, burnerReheat } from '../flight/burner.js';
 
 const SYSTEM_KEYS = Object.freeze([
   'speedStreaks',
   'condensation',
   'spindrift',
+  'exhaust',
   'explosion',
   'smoke',
   'sparks',
   'debris',
 ]);
 
+// `exhaust` is 0 on phone on purpose. The bounded plume frusta in Aircraft.js
+// carry the burner on their own — the particles are the turbulent envelope
+// around them, not the flame itself — so dropping them costs a texture of
+// detail rather than the effect, which is the same trade phone already makes
+// with contrails.
 const BUDGETS = Object.freeze({
-  phone: { drift: 32, condense: 32, trail: 0, explosion: 32, smoke: 64, sparks: 48, debris: 16 },
-  low: { drift: 48, condense: 56, trail: 0, explosion: 48, smoke: 96, sparks: 80, debris: 24 },
-  medium: { drift: 110, condense: 120, trail: 160, explosion: 72, smoke: 160, sparks: 144, debris: 40 },
-  high: { drift: 180, condense: 220, trail: 256, explosion: 96, smoke: 256, sparks: 240, debris: 64 },
+  phone: { drift: 32, condense: 32, trail: 0, exhaust: 0, explosion: 32, smoke: 64, sparks: 48, debris: 16 },
+  low: { drift: 48, condense: 56, trail: 0, exhaust: 48, explosion: 48, smoke: 96, sparks: 80, debris: 24 },
+  medium: { drift: 110, condense: 120, trail: 160, exhaust: 96, explosion: 72, smoke: 160, sparks: 144, debris: 40 },
+  high: { drift: 180, condense: 220, trail: 256, exhaust: 160, explosion: 96, smoke: 256, sparks: 240, debris: 64 },
 });
 
 const WHITE = new THREE.Color(0.94, 0.97, 1.0);
@@ -33,6 +40,19 @@ const FIRE = new THREE.Color(1.0, 0.24, 0.025);
 const EMBER = new THREE.Color(1.0, 0.72, 0.12);
 const SOOT = new THREE.Color(0.14, 0.16, 0.18);
 const METAL = new THREE.Color(0.34, 0.36, 0.37);
+
+// Efflux gradient: pale gold at the nozzle, through orange, into a deep red
+// that dies to nothing. Additive blending means the last stop going near-black
+// is what makes the plume end rather than stop.
+const EFFLUX_CORE = new THREE.Color(1.0, 0.90, 0.70);
+const EFFLUX_MID = new THREE.Color(1.0, 0.50, 0.16);
+const EFFLUX_TAIL = new THREE.Color(0.52, 0.15, 0.05);
+const EFFLUX_DEAD = new THREE.Color(0.05, 0.045, 0.04);
+// Per-particle tint, lerped by reheat. At dry power a jet does not glow — what
+// you see is disturbed air, so the tint pulls the gradient down to a cold grey
+// and the opacity ramp does the rest.
+const EFFLUX_DRY = new THREE.Color(0.34, 0.38, 0.46);
+const EFFLUX_WET = new THREE.Color(1.0, 0.96, 0.90);
 
 const SPEED_STREAK_WIDTH_PX = 0.8;
 const SPEED_STREAK_LENGTH_PX = 8.5;
@@ -78,6 +98,13 @@ export class FlightFx {
       name: 'ridge-spindrift', capacity: 180, shape: ParticleShape.SMOKE,
       additive: false, lit: true, curl: true, wind: true, renderOrder: 12,
     });
+    // SMOKE rather than SOFT: the fbm-eroded silhouette is what makes an eddy
+    // read as gas being torn apart instead of a row of glowing bubbles, and a
+    // jet efflux is nothing but eddies.
+    this.exhaust = new ParticleSystem({
+      name: 'exhaust-plume', capacity: 160, shape: ParticleShape.SMOKE,
+      additive: true, curl: true, softDepth: false, softFade: 3, renderOrder: 12,
+    });
     this.explosion = new ParticleSystem({
       name: 'impact-fireball', capacity: 96, shape: ParticleShape.SOFT,
       additive: true, curl: true, softDepth: false, softFade: 4, renderOrder: 15,
@@ -109,6 +136,10 @@ export class FlightFx {
     this._speedRate = new RateEmitter();
     this._condensationRate = new RateEmitter();
     this._driftRate = new RateEmitter();
+    this._exhaustRate = new RateEmitter();
+    this._effluxTint = new THREE.Color();
+    this._effluxAxis = new THREE.Vector3();
+    this._effluxInherit = new THREE.Vector3();
     this._trailDistance = new DistanceEmitter(18);
     this._time = 0;
     this._disposed = false;
@@ -139,6 +170,27 @@ export class FlightFx {
       lifeVariance: 0.25,
       spin: 0,
       tint: WHITE,
+      time: 0,
+    };
+    // Its own scratch rather than a share of _spawn. emit() reads `velocity`
+    // in preference to `direction`, so a cone emitter and a velocity emitter
+    // cannot safely take turns with one object: any early return between
+    // nulling the field and restoring it leaves the next caller's
+    // `spawn.velocity.set(...)` throwing on null.
+    this._effluxSpawn = {
+      position: new THREE.Vector3(),
+      direction: this._effluxAxis,
+      inherit: this._effluxInherit,
+      radius: 0.3,
+      speed: 20,
+      speedVariance: 0.3,
+      spread: 0.18,
+      size: 0.3,
+      sizeVariance: 0.4,
+      life: 0.36,
+      lifeVariance: 0.3,
+      spin: 1.6,
+      tint: this._effluxTint,
       time: 0,
     };
   }
@@ -173,6 +225,37 @@ export class FlightFx {
     this.condensation.uniforms.uDistFade.value.set(0, 1, 2500, 4200);
     this.condensation.uniforms.uStretch.value = 0.006;
     this.spindrift.uniforms.uDistFade.value.set(20, 50, 1600, 2600);
+
+    // Efflux. The plume's *length* is how far the airframe outruns a particle
+    // before it dies -- every one is born carrying the whole aircraft velocity
+    // plus an aft kick -- so it is set by lifetime and drag together, and it
+    // scales with airspeed for free. Real efflux is thrown backwards at several
+    // hundred metres per second and would trail for hundreds of metres if it
+    // stayed visible; what actually ends the plume is the gas cooling and
+    // mixing, which here is the particle lifetime. Lower drag shortens it,
+    // which is the opposite of the intuition: a particle that keeps its speed
+    // stays with the aircraft.
+    //
+    // Measured at 250 m/s: 15 m at dry power, 36 m in reheat, and 26 m to 40 m
+    // across 120 to 320 m/s. The first pass ran drag at 1.35 with a longer life
+    // and reached 72 m, which is a smoke trail, not a burner.
+    const efflux = this.exhaust.uniforms;
+    efflux.uGravity.value.set(0, 3.2, 0);
+    efflux.uDrag.value = 0.8;
+    efflux.uTurbulence.value = 4.0;
+    efflux.uTurbFrequency.value = 0.09;
+    efflux.uTurbSpeed.value = 1.5;
+    efflux.uEndSize.value = 3.2;
+    efflux.uSizeIn.value = 0.04;
+    efflux.uFadeIn.value = 0.03;
+    efflux.uFadeOut.value = 0.6;
+    efflux.uOpacity.value = 0.13;
+    efflux.uGlow.value = 1.4;
+    // The chase camera sits inside the far end of the plume on a hard
+    // deceleration, and a puff filling the screen behind the tail is the single
+    // ugliest thing this system can do. Fade it out before the eye reaches it.
+    efflux.uDistFade.value.set(3, 9, 2600, 3600);
+    this.exhaust.setGradient(EFFLUX_CORE, EFFLUX_MID, EFFLUX_TAIL, EFFLUX_DEAD);
 
     this.explosion.uniforms.uGravity.value.set(0, 2.0, 0);
     this.explosion.uniforms.uDrag.value = 2.5;
@@ -215,11 +298,19 @@ export class FlightFx {
     this.speedStreaks.setActive(Math.min(this.speedStreaks.capacity, tier?.speedParticles ?? 700));
     this.spindrift.setActive(budget.drift);
     this.condensation.setActive(budget.condense);
+    this.exhaust.setActive(budget.exhaust);
     this.explosion.setActive(budget.explosion);
     this.smoke.setActive(budget.smoke);
     this.sparks.setActive(budget.sparks);
     this.debris.setActive(budget.debris);
-    this._impactScale = name === 'phone' ? 0.55 : 1;
+    // 0.55 met the 32%-of-short-side budget for the phone impact lobe on
+    // average but not at the tail: measured over 2000 seeded emissions it broke
+    // it on 1.3% of crashes, worst case 34.6%. The test that was supposed to
+    // catch that seeded Math.random before constructing FlightFx, so it was
+    // really sampling three's UUID stream and never rolled a tail case. 0.50
+    // puts the measured worst case at 31.8% with no breaches, and a 9% radius
+    // change on a fireball is not something anyone can see.
+    this._impactScale = name === 'phone' ? 0.5 : 1;
     this.explosion.uniforms.uSizeScale.value = this._impactScale;
     this.impactBlast.setQuality(tier);
     for (const trail of this.trails) trail.setActive(tier?.contrails ? budget.trail : 0);
@@ -232,6 +323,7 @@ export class FlightFx {
     this._speedRate.reset();
     this._condensationRate.reset();
     this._driftRate.reset();
+    this._exhaustRate.reset();
     this._trailDistance.reset();
   }
 
@@ -239,15 +331,84 @@ export class FlightFx {
     this.impactBlast.reset();
   }
 
-  update(dt, flight, cameraPos, camera = null) {
+  /**
+   * @param {object|null} [burner] `{ nozzlePosition, burnerActive }` from
+   *   Aircraft, whose scene node owns the measured nozzle offset. Null leaves
+   *   the efflux dormant, which is what a crashed or unloaded airframe wants.
+   */
+  update(dt, flight, cameraPos, camera = null, burner = null) {
     this._time += dt;
     updateFrameUniforms(dt, this.environment, camera);
     this._updateSpeed(dt, flight, cameraPos, camera);
     this._updateCondensation(dt, flight);
     this._updateSpindrift(dt, flight);
+    this._updateExhaust(dt, flight, burner);
     this.impactBlast.update(dt);
     for (const key of SYSTEM_KEYS) this[key].flush();
     for (const trail of this.trails) trail.flush();
+  }
+
+  /**
+   * The turbulent envelope around the burner.
+   *
+   * The bounded frusta in Aircraft.js stay exactly as they are and remain the
+   * flame: they own the hard silhouette, the shock diamonds and the nozzle
+   * glow, and none of that is a job for particles. What they cannot do is come
+   * apart — a frustum is a smooth solid at every throttle setting, so the jet
+   * has no edge that tears. This hangs eroded, curl-driven puffs off the same
+   * nozzle to give it one.
+   *
+   * Every particle is born with the whole airframe velocity, so it is the drag
+   * term rather than lifetime that decides how far behind the tail the plume
+   * reaches, and that length scales with airspeed for free.
+   */
+  _updateExhaust(dt, flight, burner) {
+    const system = this.exhaust;
+    if (system.active <= 0 || !burner?.burnerActive) {
+      system.mesh.visible = false;
+      return;
+    }
+
+    const throttle = flight.throttleSmoothed ?? 0;
+    const heat = burnerHeat(throttle);
+    const reheat = burnerReheat(throttle);
+    // Below dry heat there is no efflux worth drawing, and skipping it entirely
+    // is what keeps an idling aircraft free rather than merely cheap.
+    system.mesh.visible = heat > 0.02;
+    if (!system.mesh.visible) return;
+
+    // These are small because the blending is additive and 160 puffs overlap
+    // along the line of sight. The first pass ran 0.42 here and rendered a
+    // blown-out white ball the size of the aircraft; 0.06 was invisible against
+    // the frusta. 0.129 at full reheat is the measured point where the
+    // particles visibly extend and roughen the plume without washing it out.
+    system.uniforms.uOpacity.value = 0.004 + 0.045 * heat + 0.08 * reheat;
+    system.uniforms.uGlow.value = 1.0 + 0.8 * reheat;
+
+    // Enough to keep the ring buffer saturated at the shortest lifetime, or the
+    // plume thins out at exactly the throttle setting it should be densest.
+    this._exhaustRate.rate = system.active * (1.0 + 1.6 * heat + 1.8 * reheat);
+    let owed = this._exhaustRate.tick(dt);
+    if (owed <= 0) return;
+
+    // Aft along the nose axis. flight.forward is the nose direction, and the
+    // jet leaves the other end of the aircraft.
+    this._effluxAxis.copy(flight.forward).multiplyScalar(-1);
+    this._effluxTint.copy(EFFLUX_DRY).lerp(EFFLUX_WET, reheat);
+
+    const spawn = this._effluxSpawn;
+    spawn.position.copy(burner.nozzlePosition);
+    spawn.radius = 0.22;
+    spawn.speed = 14 + 26 * reheat;
+    // A wide cone put puffs metres off the jet axis, which reads as a spray,
+    // not an efflux. The turbulence term supplies the wander; this only needs
+    // enough to stop the plume being a perfect cylinder.
+    spawn.spread = 0.06 + 0.05 * reheat;
+    spawn.inherit.copy(flight.velocity);
+    spawn.size = 0.18 + 0.12 * reheat;
+    spawn.life = 0.28 + 0.07 * reheat;
+    spawn.time = frameUniforms.uTime.value;
+    system.emit(owed, spawn);
   }
 
   _updateSpeed(dt, flight, cameraPos, camera) {

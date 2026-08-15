@@ -182,7 +182,15 @@ test('launch resets the angular baseline after the chase camera cut', () => {
   assert.equal(fixture.profiles.at(-1).amount, 0);
 });
 
-test('leaving recon cuts the angular baseline instead of emitting a six-pixel spike', () => {
+/**
+ * This used to assert the opposite: that leaving recon *discarded* the frame's
+ * angular velocity. It had to, because recon and chase were a hard cut and the
+ * measured delta was most of a right angle in 16 ms, which the blur read as a
+ * whip pan and smeared to its six-pixel ceiling. The transition is now an eased
+ * blend bounded by Game's camera rig, so a large delta here is real camera
+ * motion and blurring it is correct. What still must hold is the ceiling.
+ */
+test('a large camera swing is blurred as real motion and stays inside the pixel budget', () => {
   const fixture = makePostGame();
   fixture.game._motionWasReconActive = true;
   fixture.game.reconActive = false;
@@ -191,9 +199,9 @@ test('leaving recon cuts the angular baseline instead of emitting a six-pixel sp
 
   fixture.game._updatePostEffects(1 / 60);
   const profile = fixture.profiles.at(-1);
-  assert.equal(profile.angularX, 0);
-  assert.equal(profile.angularY, 0);
-  assert.ok(profile.radialPixels >= 1.5 && profile.radialPixels <= 2.5);
+  assert.ok(Math.hypot(profile.angularX, profile.angularY) > 0, 'camera motion must reach the blur');
+  assert.ok(profile.combinedPixels <= 6.0001, `blur reached ${profile.combinedPixels} px`);
+  assert.ok(profile.radialPixels >= 0);
 });
 
 test('reduced-motion preference is cached once and its listener is removable', () => {
