@@ -177,6 +177,25 @@ withNavigator(() => [], () => {
   input.dispose();
 });
 
+// Releasing touch input must never claim the touch modality. The touch layer
+// clears held input on mode change, on blur, and when it disables itself on a
+// desktop load, so a release that announced "touch" relabelled the briefing's
+// control legend with drag gestures for keyboard players.
+withNavigator(() => [], () => {
+  const target = new Target();
+  const input = new Input(target);
+  target.fire('keydown', keyEvent('KeyW'));
+  input.update(0.1);
+  assert.equal(input.modality, 'keyboard');
+  input.setTouchBoost(false);
+  input.setTouchAxes(null, null);
+  input.releaseTouch();
+  assert.equal(input.modality, 'keyboard', 'clearing held touch input must not claim the touch modality');
+  input.setTouchBoost(true);
+  assert.equal(input.modality, 'touch', 'a real touch press must still claim the modality');
+  input.dispose();
+});
+
 withNavigator(() => [{
   connected: true,
   axes: [0, 0, 0],
@@ -431,3 +450,57 @@ withNavigator(() => [], () => {
 }
 
 console.log('input, chase and flight lifecycle contracts passed');
+
+// --------------------------------------------------- text fields vs flying --
+//
+// The keydown listener is on the window, so anything typed into a control in
+// the UI layer bubbles up to it. Until the leaderboard there were no text
+// fields in the experience at all, and it never mattered; with one, twice.
+{
+  const target = new Target();
+  const input = new Input(target);
+  const typed = (code, tagName = 'INPUT', extra = {}) => {
+    const event = keyEvent(code, {
+      target: { tagName, ...extra },
+      prevented: false,
+      preventDefault() { this.prevented = true; },
+    });
+    target.fire('keydown', event);
+    return event;
+  };
+
+  // Enter in the callsign field must not reach the debrief, which consumes
+  // Enter to restart: recording it tore the debrief down in the same frame the
+  // time was saved, so the player never saw their rank.
+  const enter = typed('Enter');
+  assert.equal(input.consumePress('Enter'), false, 'Enter in a text field is text, not a control');
+  assert.equal(enter.prevented, false, 'and must not be suppressed');
+
+  // Space is in PREVENT_DEFAULT, which made a callsign containing a space
+  // impossible to type even though sanitiseName accepts one.
+  const space = typed('Space');
+  assert.equal(space.prevented, false, 'a space must reach the field');
+  assert.equal(input.keys.has('Space'), false);
+
+  for (const tag of ['TEXTAREA', 'SELECT']) {
+    typed('KeyW', tag);
+    assert.equal(input.keys.has('KeyW'), false, tag + ' counts as text entry');
+  }
+  typed('KeyW', 'DIV', { isContentEditable: true });
+  assert.equal(input.keys.has('KeyW'), false, 'contenteditable counts as text entry');
+
+  // The same keys away from a field still fly the aircraft.
+  const flying = typed('KeyW', 'CANVAS');
+  assert.equal(input.keys.has('KeyW'), true, 'flight keys are unaffected');
+  assert.equal(input.consumePress('KeyW'), true);
+  void flying;
+
+  const bare = keyEvent('Space', { prevented: false, preventDefault() { this.prevented = true; } });
+  target.fire('keydown', bare);
+  assert.equal(bare.prevented, true, 'Space away from a field is still suppressed');
+
+  input.dispose();
+}
+
+console.log('text-entry input contracts passed');
+

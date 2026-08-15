@@ -19,6 +19,26 @@
 const AXIS_ATTACK = 7.0; // how fast a key press reaches full deflection
 const AXIS_RELEASE = 9.5; // how fast it centres again
 
+const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+/**
+ * Is this keystroke being typed into a text field rather than flown with?
+ *
+ * The listener is on `window`, so anything typed into a control in the UI layer
+ * bubbles up to it. Until the leaderboard there were no text fields anywhere in
+ * the experience and it never mattered; with one, it mattered twice over.
+ * Recording the key meant Enter in the callsign field also reached the debrief's
+ * `consumePress('Enter')` and restarted the sortie in the same frame the score
+ * was saved — the player never saw their rank. Suppressing the key meant Space
+ * was preventDefaulted, so a callsign with a space in it could not be typed at
+ * all, even though sanitiseName accepts one.
+ */
+function isTextEntry(node) {
+  if (!node) return false;
+  if (TEXT_ENTRY_TAGS.has(node.tagName)) return true;
+  return node.isContentEditable === true;
+}
+
 export class Input {
   constructor(target = window) {
     this.keys = new Set();
@@ -62,6 +82,10 @@ export class Input {
 
     this._onKeyDown = (e) => {
       if (e.repeat) return;
+      // Keys typed into a text field are text, not controls: neither recorded
+      // nor suppressed. Checked before `keys.add` so a field cannot leave a
+      // key stuck down either.
+      if (isTextEntry(e.target)) return;
       // Command is the one modifier still refused outright. macOS does not
       // deliver keyup for a character key while Command is held, so anything
       // recorded during a Cmd chord would stay in `keys` for the rest of the
@@ -109,7 +133,7 @@ export class Input {
    * @param {number|null} roll
    */
   setTouchAxes(pitch, roll) {
-    this.modality = 'touch';
+    if (pitch !== null) this.modality = 'touch';
     this.touchActive = pitch !== null;
     this._touchPitch = pitch;
     this._touchRoll = roll;
@@ -120,8 +144,13 @@ export class Input {
     this._touchThrottle = t;
   }
 
+  // Only a *press* claims the modality. Releasing does not: the touch layer
+  // clears held input on mode change, on blur and when it disables itself,
+  // and a release that announced "touch" would relabel a desktop session's
+  // control legend with drag gestures before the player ever touched a
+  // screen — which is exactly what setEnabled(false) did on every load.
   setTouchBoost(held) {
-    this.modality = 'touch';
+    if (held === true) this.modality = 'touch';
     this.touchBoost = held === true;
   }
 
