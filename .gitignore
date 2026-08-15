@@ -5,8 +5,10 @@ dist/
 *.local
 
 # Large upstream art source. Only the optimized public/models/mig21.glb is
-# tracked; regenerate it with `npm run optimize:model` when this is present.
+# tracked; drop the original here and run `npm run optimize:model` to
+# regenerate it.
 assets/source/
 
-# Agent execution checkpoint (see PROMPT.md section 6)
+# Local scratch: development notes, captures and probe scripts.
 .agent/
+.superpowers/
