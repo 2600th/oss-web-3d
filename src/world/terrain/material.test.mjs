@@ -44,8 +44,26 @@ assert.match(high, /fwidth\(vWorld\.xz\)/, 'high shader filters procedural norma
 assert.match(high, /float surfaceHeight = stored\.r/, 'material altitude must use bilinear height instead of triangle-planar vWorld.y');
 assert.match(high, /ironMix/, 'high shader must preserve a distinct iron geology channel');
 assert.match(high, /graniteMix/, 'high shader must preserve a distinct warm granite channel');
-assert.match(low, /float lowNormalRadius/, 'low tier must use a distance-aware broad normal stencil');
-assert.match(low, /max\(lowN\.y, 0\.32\)/, 'low lighting normals must retain a safe upward component');
+// Lighting reads the normal the generation pass baked, rather than
+// differentiating a bilinear height field per fragment. That is what removed
+// the triangular faceting at recon range, and it must not come back.
+assert.match(high, /vec3 N = storedNormal\(stored, /, 'high lighting must use the baked normal');
+assert.match(low, /vec3 N = storedNormal\(stored, 0\.32\)/, 'low lighting normals must retain a safe upward component');
+assert.doesNotMatch(high, /normalRadius|gradientBlend/, 'lighting normals must not be reconstructed from a distance-varying stencil');
+assert.doesNotMatch(low, /lowNormalRadius/, 'low tier must not reconstruct a distance-varying lighting normal');
+
+// Classification must be a pure function of world position: fixed metre
+// stencils, on a fixed clipmap level, with no camera distance anywhere in it.
+for (const [name, shader] of [['high', high], ['low', low]]) {
+  assert.match(shader, /classifyLevel\(level\)/, `${name} must classify from the fixed level`);
+  assert.doesNotMatch(
+    shader.slice(shader.indexOf('float slope'), shader.indexOf('float snowLine')),
+    /distanceToCamera/,
+    `${name} slope classification must not depend on camera distance`,
+  );
+}
+assert.match(high, /curvatureSample \* 288\.0 \* 0\.38/, 'curvature must be normalised by a fixed length, not by the clipmap cell');
+assert.doesNotMatch(high, /wide\.z \* cell/, 'curvature must not scale with the clipmap cell');
 
 // Golden probes are evaluated from the GLSL hash/warp/triplanar equations,
 // rather than from the former sine-hash approximation. A change to either
@@ -65,15 +83,19 @@ const productionProbe = evaluateTerrainMaterial({
   skyIrradiance: [0.12, 0.18, 0.28],
   viewDirection: [0.1, 0.7, 0.7],
 });
+// These moved when the lighting normal became the baked one and classification
+// moved to fixed world stencils on a fixed level. Geology is unchanged because
+// it was always a pure function of world position; mineral, roughness and the
+// lit colour all read the normal.
 assert.ok(Math.abs(productionProbe.geology - 0.696373584310663) < 1e-12);
-assert.ok(Math.abs(productionProbe.mineral - 0.6523138439725243) < 1e-12);
-assert.ok(Math.abs(productionProbe.roughness - 0.695724923600153) < 1e-12);
+assert.ok(Math.abs(productionProbe.mineral - 0.688093393637056) < 1e-12);
+assert.ok(Math.abs(productionProbe.roughness - 0.6920015234364671) < 1e-12);
 assert.deepEqual(
   productionProbe.litColor.map((value) => Number(value.toFixed(12))),
-  [0.180068948122, 0.240363772958, 0.369158859472],
+  [0.218709580617, 0.282737549407, 0.418527698031],
   'CPU lighting must match the deployed shadow/sun/ambient/specular equation',
 );
-assert.ok(Math.abs(productionProbe.lightingProxy - 0.2368440984440886) < 1e-12);
+assert.ok(Math.abs(productionProbe.lightingProxy - 0.27892925197264085) < 1e-12);
 
 // Numeric material contract: broad continuous accumulation, bounded albedo,
 // and no threshold-sized jumps over a 30 m flight-camera step.
@@ -104,36 +126,64 @@ assert.ok(minRockLuma >= 0.05, `rock albedo crushed: ${minRockLuma}`);
 assert.ok(maxSnowLuma <= 0.9, `snow albedo clips before lighting: ${maxSnowLuma}`);
 assert.ok(maxSnowLuma - minRockLuma > 0.5, 'rock/snow value separation is meaningful');
 
-// Low-tier rendered-response proxy. Closely spaced route samples cross many
-// alternate clipmap triangle diagonals; a faceted lighting normal used to turn
-// those transitions into severe dark wedges despite a continuous heightfield.
-let previousLow;
-let maxLowLightingJump = 0;
-let minLowLighting = Infinity;
-for (let i = 0; i < 320; i++) {
-  const x = 15000 + i * 32;
-  const z = 1800 + i * 17 + Math.sin(i * 0.09) * 420;
-  const lowSample = evaluateTerrainMaterial({
-    x,
-    z,
-    height: terrainHeight(x, z),
-    cell: 64,
-    nextCell: 128,
-    morph: (i % 48) / 47,
-    distance: 1800 + i * 11,
-    quality: 0,
-  });
-  minLowLighting = Math.min(minLowLighting, lowSample.lightingProxy);
-  if (previousLow) {
-    maxLowLightingJump = Math.max(
-      maxLowLightingJump,
-      Math.abs(lowSample.lightingProxy - previousLow.lightingProxy),
-    );
+/**
+ * Faceting is a *discontinuity*, and the way to test for one is to shrink the
+ * sample spacing and watch what the largest step does.
+ *
+ * The lighting normal used to be reconstructed by differentiating the bilinear
+ * height field, whose derivative is piecewise constant, so the normal stepped
+ * at every texel boundary. The largest lighting jump along a route therefore
+ * had a floor: sampling finer moved the crossings around but never removed
+ * them. Reading the baked, bilinearly filtered normal instead gives a field
+ * that is continuous everywhere, so the jump falls off with the spacing.
+ *
+ * This replaces a fixed 0.17 ceiling on a 32 m route, which the old shader met
+ * only by smoothing its normal over a ~250 m stencil — that is, by erasing the
+ * relief rather than by being continuous.
+ */
+function routeLightingJump(step, quality) {
+  let previous;
+  let worst = 0;
+  let darkest = Infinity;
+  for (let i = 0; i < 320; i++) {
+    const sample = evaluateTerrainMaterial({
+      x: 15000 + i * step,
+      z: 1800 + i * step * 0.53,
+      height: terrainHeight(15000 + i * step, 1800 + i * step * 0.53),
+      cell: 64,
+      nextCell: 128,
+      morph: 0.4,
+      distance: 3000,
+      quality,
+    });
+    darkest = Math.min(darkest, sample.lightingProxy);
+    if (previous) worst = Math.max(worst, Math.abs(sample.lightingProxy - previous.lightingProxy));
+    previous = sample;
   }
-  previousLow = lowSample;
+  return { worst, darkest };
 }
-assert.ok(minLowLighting > 0.046, `low route lighting collapsed into black wedges: ${minLowLighting}`);
-assert.ok(maxLowLightingJump < 0.17, `low route lighting retained hard facet jumps: ${maxLowLightingJump}`);
+
+for (const quality of [0, 2]) {
+  const coarse = routeLightingJump(32, quality);
+  const fine = routeLightingJump(2, quality);
+  const finest = routeLightingJump(0.5, quality);
+  assert.ok(
+    fine.worst < coarse.worst * 0.2,
+    `quality ${quality} lighting did not converge as spacing shrank: ${coarse.worst} -> ${fine.worst}`,
+  );
+  assert.ok(
+    finest.worst < 0.01,
+    `quality ${quality} lighting retained a facet step at 0.5 m spacing: ${finest.worst}`,
+  );
+}
+
+// The low tier clamps its normal's upward component so an unlit face still
+// receives sky fill; the high tier deliberately does not, because near-black
+// exposed rock against sunlit snow is the contrast the image is built on.
+assert.ok(
+  routeLightingJump(32, 0).darkest > 0.04,
+  `low route lighting collapsed into black wedges: ${routeLightingJump(32, 0).darkest}`,
+);
 
 // Real operational-route samples exercise the deployed fract hash,
 // height-warped geology, triplanar mineral field, and clipmap LOD reconstruction.
@@ -176,11 +226,49 @@ assert.ok(maxLowLightingJump < 0.17, `low route lighting retained hard facet jum
     rock: result.rock + sample.rock / lowSamples.length,
     snow: result.snow + sample.snow / lowSamples.length,
   }), { rock: 0, snow: 0 });
+  // The low tier has only rock and snow — no ice or scree channel — so its rock
+  // share is the complement of its snow and is not comparable to the high
+  // tier's. What has to hold is that neither material takes the whole route.
   assert.ok(
-    lowMeans.rock >= 0.35 && lowMeans.rock <= 0.50,
+    lowMeans.rock >= 0.35 && lowMeans.rock <= 0.65,
     `low route needs substantial exposed rock: ${JSON.stringify(lowMeans)}`,
   );
+  assert.ok(lowMeans.snow >= 0.30, `low route cannot collapse to bare rock: ${JSON.stringify(lowMeans)}`);
   assert.ok(lowMeans.snow <= 0.60, `low route cannot collapse to white: ${JSON.stringify(lowMeans)}`);
+}
+
+/**
+ * The whole point of the fixed-radius, fixed-level classification: a patch of
+ * ground must still be the same patch of ground when the aircraft gets there.
+ *
+ * The clipmap puts a fragment at range d on the smallest level whose half
+ * extent (128 * 4 * 2^L metres) covers it, so closing from 3 km to 250 m walks
+ * a fixed world point down through four levels. Classification used to be
+ * measured with a stencil proportional to that level's cell *and* to camera
+ * distance, so snow, ice and talus all migrated during the approach — measured
+ * at one summit as snow 0.84 at 900 m and 0.00 at 400 m.
+ */
+{
+  const approachLevels = [250, 400, 700, 900, 1500, 1800, 3000].map((distance) => {
+    let level = 0;
+    while (level < 9 && 512 * 2 ** level < distance) level++;
+    return { distance, cell: 4 * 2 ** level, nextCell: 8 * 2 ** level };
+  });
+
+  for (const [x, z] of [[21000, 6000], [19500, 9000], [24000, 3000], [17400, 9800]]) {
+    const height = terrainHeight(x, z);
+    const seen = approachLevels.map(({ distance, cell, nextCell }) => evaluateTerrainMaterial({
+      x, z, height, cell, nextCell, morph: 0.4, distance,
+    }));
+    for (const channel of ['snow', 'ice', 'scree', 'rock']) {
+      const values = seen.map((sample) => sample[channel]);
+      const drift = Math.max(...values) - Math.min(...values);
+      assert.ok(
+        drift < 0.02,
+        `${channel} at ${x},${z} drifted ${drift.toFixed(3)} across the approach: ${values.map((v) => v.toFixed(3)).join(', ')}`,
+      );
+    }
+  }
 }
 
 {

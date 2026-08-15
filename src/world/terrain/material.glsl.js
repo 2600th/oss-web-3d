@@ -118,57 +118,151 @@ function clipmapHeightCpu(x, z, cell, centerX, centerZ) {
   return (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
 }
 
-function terrainFrameAtCell(x, z, cell, radiusScale, focusX, focusZ) {
+/**
+ * The lighting normal, mirrored the way the GPU actually produces it.
+ *
+ * The generation pass bakes one normal per heightmap texel from a central
+ * difference at plus/minus one texel, and the fragment shader then reads it
+ * back through the same bilinear filter it reads height with. So the normal
+ * field is an interpolation of *normals*, which is continuous everywhere.
+ *
+ * Differentiating the interpolated *height* at the fragment's own position —
+ * which is what this mirror used to do, and what the shader used to do — is a
+ * different construction with a different answer: the derivative of a bilinear
+ * patch is piecewise constant, so it steps at every texel boundary. That step
+ * is the triangular faceting the recon camera showed, and a mirror that models
+ * it cannot validate the shader that no longer has it.
+ */
+function storedNormalCpu(x, z, cell, centerX, centerZ) {
+  const gx = (x - centerX) / cell;
+  const gz = (z - centerZ) / cell;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  const fx = gx - ix;
+  const fz = gz - iz;
+
+  let nx = 0;
+  let nz = 0;
+  for (let dj = 0; dj <= 1; dj++) {
+    for (let di = 0; di <= 1; di++) {
+      const px = centerX + (ix + di) * cell;
+      const pz = centerZ + (iz + dj) * cell;
+      const left = cachedTerrainHeight(px - cell, pz);
+      const right = cachedTerrainHeight(px + cell, pz);
+      const down = cachedTerrainHeight(px, pz - cell);
+      const up = cachedTerrainHeight(px, pz + cell);
+      const length = Math.hypot(left - right, 2 * cell, down - up);
+      const weight = (di ? fx : 1 - fx) * (dj ? fz : 1 - fz);
+      nx += ((left - right) / length) * weight;
+      nz += ((down - up) / length) * weight;
+    }
+  }
+  return [nx, nz];
+}
+
+function terrainFrameAtRadius(x, z, cell, radius, focusX, focusZ) {
   const centerX = Math.round(focusX / (cell * 2)) * cell * 2;
   const centerZ = Math.round(focusZ / (cell * 2)) * cell * 2;
-  const radius = Math.max(cell * radiusScale, 2);
+  const e = Math.max(radius, 2);
   const center = clipmapHeightCpu(x, z, cell, centerX, centerZ);
-  const left = clipmapHeightCpu(x - radius, z, cell, centerX, centerZ);
-  const right = clipmapHeightCpu(x + radius, z, cell, centerX, centerZ);
-  const down = clipmapHeightCpu(x, z - radius, cell, centerX, centerZ);
-  const up = clipmapHeightCpu(x, z + radius, cell, centerX, centerZ);
+  const left = clipmapHeightCpu(x - e, z, cell, centerX, centerZ);
+  const right = clipmapHeightCpu(x + e, z, cell, centerX, centerZ);
+  const down = clipmapHeightCpu(x, z - e, cell, centerX, centerZ);
+  const up = clipmapHeightCpu(x, z + e, cell, centerX, centerZ);
   return {
-    gx: (right - left) / (2 * radius),
-    gz: (up - down) / (2 * radius),
-    curvature: (left + right + down + up - 4 * center) / (radius * radius),
+    gx: (right - left) / (2 * e),
+    gz: (up - down) / (2 * e),
+    curvature: (left + right + down + up - 4 * center) / (e * e),
   };
 }
 
+/**
+ * How the surface is classified into snow, glacial ice, talus and bedrock.
+ *
+ * Two decisions, and both exist because the classification used to move under
+ * the aircraft as it closed on a mountain.
+ *
+ * **Fixed world radii.** The stencil used to be `uCells[level] *
+ * f(distanceToCamera)`, so the same shoulder was measured with a ~575 m stencil
+ * at 5 km and a ~60 m one at 1 km. Slope, curvature and aspect are properties of
+ * the mountain, not of where the camera is, so they are now sampled at lengths
+ * in metres. Distance may only fade *detail*, never reclassify.
+ *
+ * **A fixed source level.** Fixed radii alone are not enough, and this is the
+ * part that is easy to miss: each clipmap level is a *different reconstruction*
+ * of the terrain — a bilinear surface over its own grid — so a 28 m slope
+ * measured on an 8 m grid and on a 32 m grid are genuinely different numbers.
+ * Measured at one summit they were 0.151 and 0.082, and `retention` maps that
+ * range from full snow to bare rock. Classification therefore always reads
+ * level CLASSIFY_LEVEL — 64 m texels, ±8 km of coverage — never the level the
+ * geometry happens to be using, and falls back to coarser levels only outside
+ * that footprint. Because every level snaps its centre to twice its cell, its
+ * texels land on fixed world coordinates, so a fixed level is a genuinely fixed
+ * function of position.
+ *
+ * Level 4 rather than 3 because the morph blend at the top of a ring reaches
+ * into the *next* level's classification: pinned to level 3, ground beyond
+ * about 3 km started blending toward level 4 and drifted again. Pinned to 4,
+ * the first blending happens at the outer edge of ring 4, past 5.7 km, which is
+ * beyond the range at which a snow line is resolvable through aerial haze.
+ */
+const CLASSIFY_LEVEL = 4;
+const CLASSIFY_CELL = 64;
+const SLOPE_RADIUS = 96;
+const CURVATURE_RADIUS = 288;
+
 function terrainFrameCpu(x, z, cell, nextCell, morph, distance, quality, focusX, focusZ) {
   const t = clamp01(morph);
-  const lowRadius = 2.8 + (5.2 - 2.8) * smoothstep(800, 5200, distance);
-  const normalRadius = quality === 0
-    ? lowRadius
-    : 1.15 + (2.9 - 1.15) * smoothstep(900, 6200, distance);
-  const fine = terrainFrameAtCell(x, z, cell, normalRadius, focusX, focusZ);
-  const coarse = terrainFrameAtCell(x, z, nextCell, normalRadius, focusX, focusZ);
-  const wideFine = quality === 0
-    ? fine
-    : terrainFrameAtCell(x, z, cell, normalRadius * 3.1, focusX, focusZ);
-  const wideCoarse = quality === 0
-    ? coarse
-    : terrainFrameAtCell(x, z, nextCell, normalRadius * 3.1, focusX, focusZ);
-  const surfaceGx = fine.gx + (coarse.gx - fine.gx) * t;
-  const surfaceGz = fine.gz + (coarse.gz - fine.gz) * t;
-  const wideGx = wideFine.gx + (wideCoarse.gx - wideFine.gx) * t;
-  const wideGz = wideFine.gz + (wideCoarse.gz - wideFine.gz) * t;
-  const gradientBlend = quality === 0 ? 0 : 0.5 + 0.28 * smoothstep(1100, 5800, distance);
-  const gx = surfaceGx + (wideGx - surfaceGx) * gradientBlend;
-  const gz = surfaceGz + (wideGz - surfaceGz) * gradientBlend;
-  const sampleCell = cell + (nextCell - cell) * t;
-  let invLength = 1 / Math.hypot(gx, 1, gz);
-  let normal = [-gx * invLength, invLength, -gz * invLength];
-  if (quality === 0 && normal[1] < 0.32) {
-    invLength = 1 / Math.hypot(normal[0], 0.32, normal[2]);
-    normal = [normal[0] * invLength, 0.32 * invLength, normal[2] * invLength];
-  }
-  const classifiedGx = surfaceGx + (wideGx - surfaceGx) * (quality === 0 ? 0 : 0.42);
-  const classifiedGz = surfaceGz + (wideGz - surfaceGz) * (quality === 0 ? 0 : 0.42);
-  const wideCurvature = wideFine.curvature + (wideCoarse.curvature - wideFine.curvature) * t;
+
+  // Lighting normal: the baked, bilinearly filtered normal of the level's own
+  // grid, blended across the LOD handoff exactly as the shader blends `stored`.
+  // Its resolution is allowed to follow the LOD — that is an ordinary mip
+  // chain, and vMorph keeps the handoff continuous.
+  const fineNormal = storedNormalCpu(
+    x, z, cell,
+    Math.round(focusX / (cell * 2)) * cell * 2,
+    Math.round(focusZ / (cell * 2)) * cell * 2,
+  );
+  const coarseNormal = storedNormalCpu(
+    x, z, nextCell,
+    Math.round(focusX / (nextCell * 2)) * nextCell * 2,
+    Math.round(focusZ / (nextCell * 2)) * nextCell * 2,
+  );
+  const minUp = quality === 0 ? 0.32 : 0.05;
+  const nx = fineNormal[0] + (coarseNormal[0] - fineNormal[0]) * t;
+  const nz = fineNormal[1] + (coarseNormal[1] - fineNormal[1]) * t;
+  const up = Math.max(Math.sqrt(Math.max(1 - nx * nx - nz * nz, 1e-4)), minUp);
+  const normalLength = 1 / Math.hypot(nx, up, nz);
+  const normal = [nx * normalLength, up * normalLength, nz * normalLength];
+
+  const classifyFine = Math.max(CLASSIFY_CELL, cell);
+  const classifyCoarse = Math.max(CLASSIFY_CELL, nextCell);
+  const slopeFine = terrainFrameAtRadius(x, z, classifyFine, SLOPE_RADIUS, focusX, focusZ);
+  const slopeCoarse = terrainFrameAtRadius(x, z, classifyCoarse, SLOPE_RADIUS, focusX, focusZ);
+  const classifiedGx = slopeFine.gx + (slopeCoarse.gx - slopeFine.gx) * t;
+  const classifiedGz = slopeFine.gz + (slopeCoarse.gz - slopeFine.gz) * t;
+
+  const curveFine = terrainFrameAtRadius(x, z, classifyFine, CURVATURE_RADIUS, focusX, focusZ);
+  const curveCoarse = terrainFrameAtRadius(x, z, classifyCoarse, CURVATURE_RADIUS, focusX, focusZ);
+  const curvature = curveFine.curvature + (curveCoarse.curvature - curveFine.curvature) * t;
+
+  // The surface orientation classification reasons about. Distinct from the
+  // lighting normal on purpose: slope and aspect decide snow, ice and talus, so
+  // they have to come from the fixed-level stencil above. Reading them off the
+  // lighting normal instead — which is what this did — reintroduced the whole
+  // artifact through the back door, because that normal follows the LOD.
+  const classifyLength = 1 / Math.hypot(classifiedGx, 1, classifiedGz);
+  const classifyNormal = [
+    -classifiedGx * classifyLength,
+    classifyLength,
+    -classifiedGz * classifyLength,
+  ];
+
   return {
     gradient: [classifiedGx, classifiedGz],
     normal,
-    curvature: Math.max(-1, Math.min(1, wideCurvature * sampleCell * 0.38)),
+    classifyNormal,
+    curvature: Math.max(-1, Math.min(1, curvature * CURVATURE_RADIUS * 0.38)),
   };
 }
 
@@ -205,13 +299,14 @@ export function evaluateTerrainMaterial({
   let frame = null;
   if (!Number.isFinite(slope) && Number.isFinite(cell)) {
     frame = terrainFrameCpu(x, z, cell, nextCell, morph, distance, quality, focusX, focusZ);
-    slope = 1 - frame.normal[1];
+    const classify = frame.classifyNormal;
+    slope = 1 - classify[1];
     curvature = frame.curvature;
     const aspectLength = Math.hypot(-0.22, 0.25, 0.94);
     northAspect = (
-      frame.normal[0] * (-0.22 / aspectLength) +
-      frame.normal[1] * (0.25 / aspectLength) +
-      frame.normal[2] * (0.94 / aspectLength)
+      classify[0] * (-0.22 / aspectLength) +
+      classify[1] * (0.25 / aspectLength) +
+      classify[2] * (0.94 / aspectLength)
     ) * 0.5 + 0.5;
     const gradientLength = Math.hypot(...frame.gradient);
     const windLength = Math.max(Math.hypot(...wind), 1e-9);
@@ -468,8 +563,8 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
       return mix(a, b, f.y);
     }
     float terrainHeightAt(vec2 world, int level) { return terrainBilinear(levelUV(world, level), level).r; }
-    vec3 terrainSample(vec2 world, int level, float radius) {
-      float e = uCells[level] * radius;
+    /** Gradient and Laplacian over a stencil measured in metres, not in cells. */
+    vec3 terrainSample(vec2 world, int level, float e) {
       float hx0 = terrainHeightAt(world - vec2(e, 0.0), level);
       float hx1 = terrainHeightAt(world + vec2(e, 0.0), level);
       float hz0 = terrainHeightAt(world - vec2(0.0, e), level);
@@ -477,6 +572,32 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
       float h = terrainHeightAt(world, level);
       return vec3(vec2(hx1 - hx0, hz1 - hz0) / (2.0 * e),
                   (hx0 + hx1 + hz0 + hz1 - 4.0 * h) / max(e * e, 1.0));
+    }
+
+    /**
+     * The clipmap level classification reads, whatever level the geometry uses.
+     *
+     * Level ${CLASSIFY_LEVEL} has ${CLASSIFY_CELL} m texels and covers the first
+     * four kilometres, so everything the player can see the surface of is
+     * classified from one reconstruction of the terrain. See the CPU mirror in
+     * this file for why a fixed *radius* alone was not enough.
+     */
+    int classifyLevel(int level) { return max(level, ${CLASSIFY_LEVEL}); }
+
+    /**
+     * Unpack the normal the generation pass baked into g/b.
+     *
+     * Only xz are stored; y is recovered as sqrt(1 - x^2 - z^2), which is exact
+     * for a heightfield and freed the alpha channel for sun visibility. The
+     * clamp matters because the sample is a mix of two levels' filtered
+     * normals, and a blend of two unit vectors is shorter than one — without it
+     * a steep face where x^2 + z^2 drifts past 1 produces a NaN and a black
+     * pixel. minUp keeps a lighting-safe upward component on the low tier.
+     */
+    vec3 storedNormal(vec4 stored, float minUp) {
+      vec2 xz = stored.gb;
+      float up = sqrt(max(1.0 - dot(xz, xz), 1e-4));
+      return normalize(vec3(xz.x, max(up, minUp), xz.y));
     }
     float hash21(vec2 p) {
       vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
@@ -532,16 +653,20 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
       vec3 V = toCamera / distanceToCamera;
 
       #if TERRAIN_QUALITY == 0
-        // Use the same two samples as before, but widen their world-space
-        // stencil with distance. This removes triangle-scale lighting wedges
-        // without adding texture fetches to the low/phone branch.
-        float lowNormalRadius = mix(2.8, 5.2, smoothstep(800.0, 5200.0, distanceToCamera));
-        vec3 lowFine = terrainSample(vWorld.xz, level, lowNormalRadius);
-        vec3 lowCoarse = terrainSample(vWorld.xz, nextLevel, lowNormalRadius);
-        vec2 lowGradient = mix(lowFine.xy, lowCoarse.xy, vMorph);
-        vec3 lowN = normalize(vec3(-lowGradient.x, 1.0, -lowGradient.y));
-        vec3 N = normalize(vec3(lowN.x, max(lowN.y, 0.32), lowN.z));
-        float slope = 1.0 - N.y;
+        // The lighting normal is the one the generation pass baked, which is
+        // bilinearly filtered and therefore already smooth across texels. It
+        // used to be reconstructed here from a distance-widened height stencil
+        // to hide triangle-scale lighting wedges; the stored normal has no
+        // wedges to hide, costs four fetches instead of twenty, and does not
+        // change as the aircraft closes.
+        vec3 N = storedNormal(stored, 0.32);
+        // Classification reads one fixed level so a patch of ground keeps its
+        // identity at every range. See classifyLevel().
+        vec2 lowSlopeGradient = mix(
+          terrainSample(vWorld.xz, classifyLevel(level), ${SLOPE_RADIUS.toFixed(1)}).xy,
+          terrainSample(vWorld.xz, classifyLevel(nextLevel), ${SLOPE_RADIUS.toFixed(1)}).xy,
+          vMorph);
+        float slope = 1.0 - inversesqrt(1.0 + dot(lowSlopeGradient, lowSlopeGradient));
         float geology = noise2(vWorld.xz * 0.00042) * 0.65 + noise2(vWorld.xz * 0.00091 + 13.0) * 0.35;
         float snowLine = 4870.0 + (geology - 0.5) * 600.0;
         float snow = smoothstep(snowLine - 620.0, snowLine + 720.0, surfaceHeight) * (1.0 - smoothstep(0.10, 0.40, slope));
@@ -555,29 +680,48 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         vec3 ambient = mix(vec3(0.39, 0.42, 0.48), vec3(0.32, 0.40, 0.55), snow);
         vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * 0.22, 1.25) * direct);
       #else
-        // Evaluate both clipmap levels at the fragment's world position.  The
-        // distance-growing stencil removes the constant-gradient triangles of
-        // a plain heightfield normal while vMorph keeps the LOD handoff exact.
-        float normalRadius = mix(1.15, 2.90, smoothstep(900.0, 6200.0, distanceToCamera));
-        vec3 fineA = terrainSample(vWorld.xz, level, normalRadius);
-        vec3 fineB = terrainSample(vWorld.xz, nextLevel, normalRadius);
-        vec3 wideA = terrainSample(vWorld.xz, level, normalRadius * 3.10);
-        vec3 wideB = terrainSample(vWorld.xz, nextLevel, normalRadius * 3.10);
-        vec3 surface = mix(fineA, fineB, vMorph);
-        vec3 wide = mix(wideA, wideB, vMorph);
-        float gradientBlend = mix(0.50, 0.78, smoothstep(1100.0, 5800.0, distanceToCamera));
-        vec2 lightingGradient = mix(surface.xy, wide.xy, gradientBlend);
-        vec3 N = normalize(vec3(-lightingGradient.x, 1.0, -lightingGradient.y));
-        vec2 classified = mix(surface.xy, wide.xy, 0.42);
-        float slope = 1.0 - inversesqrt(1.0 + dot(classified, classified));
-        float curvature = clamp(wide.z * cell * 0.38, -1.0, 1.0);
+        // Lighting normal, straight from the heightmap.
+        //
+        // This used to be reconstructed here from four five-tap height stencils
+        // across two levels — 80 texture fetches per terrain fragment — with the
+        // stencil width growing with camera distance. Two things were wrong with
+        // it. The reconstruction differentiates a *bilinear* height field, whose
+        // derivative is discontinuous at every texel boundary, so the normal was
+        // piecewise flat: that is the hard triangular faceting the recon camera
+        // showed at range. And the distance-varying stencil meant the same
+        // hillside was lit from a different normal at 5 km than at 1 km.
+        //
+        // The generation pass already bakes a normal per texel, and reading it
+        // through the same bilinear filter gives a normal that is continuous by
+        // construction, matches the shadow term it was baked alongside, and
+        // costs nothing extra: the sample was already fetched for the height.
+        vec3 N = storedNormal(stored, 0.05);
+
+        // Classification: fixed world-space stencils on a fixed clipmap level.
+        int cLevel = classifyLevel(level);
+        int cNextLevel = classifyLevel(nextLevel);
+        vec3 slopeSample = mix(
+          terrainSample(vWorld.xz, cLevel, ${SLOPE_RADIUS.toFixed(1)}),
+          terrainSample(vWorld.xz, cNextLevel, ${SLOPE_RADIUS.toFixed(1)}),
+          vMorph);
+        float curvatureSample = mix(
+          terrainSample(vWorld.xz, cLevel, ${CURVATURE_RADIUS.toFixed(1)}).z,
+          terrainSample(vWorld.xz, cNextLevel, ${CURVATURE_RADIUS.toFixed(1)}).z,
+          vMorph);
+        vec2 classified = slopeSample.xy;
+        // The orientation classification reasons about, which is deliberately
+        // not the lighting normal: snow, ice and talus are decided by landform,
+        // and the lighting normal follows the LOD.
+        vec3 classifyN = normalize(vec3(-classified.x, 1.0, -classified.y));
+        float slope = 1.0 - classifyN.y;
+        float curvature = clamp(curvatureSample * ${CURVATURE_RADIUS.toFixed(1)} * 0.38, -1.0, 1.0);
         vec3 weights = triplanarWeights(N);
         float geology = ridgedGeology(vWorld);
         float mineral = fbmTriplanar(vWorld * 0.00115, weights);
         vec3 wind = normalize(vec3(uWind.x, 0.0, uWind.y) + vec3(1e-3, 0.0, 0.0));
         vec3 downhill = normalize(vec3(classified.x, 0.0, classified.y) + vec3(1e-3, 0.0, 0.0));
         float lee = dot(downhill, wind) * 0.5 + 0.5;
-        float northAspect = dot(N, normalize(vec3(-0.22, 0.25, 0.94))) * 0.5 + 0.5;
+        float northAspect = dot(classifyN, normalize(vec3(-0.22, 0.25, 0.94))) * 0.5 + 0.5;
         float warpedStrata = sin((vWorld.x + vWorld.z * 0.37) * 0.00019 + (geology - 0.5) * 1.4);
         float snowLine = 4990.0 + (geology - 0.5) * 720.0 + warpedStrata * 120.0;
         float altitudeSnow = smoothstep(snowLine - 620.0, snowLine + 720.0, surfaceHeight);
