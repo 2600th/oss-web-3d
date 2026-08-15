@@ -31,6 +31,23 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+MiG-21 Bison Indian (War Thunder)
+---------------------------------
+
+The aircraft model in public/models/mig21.glb is an optimized derivative of
+"MiG-21 Bison Indian (War Thunder)" by KojfDiscord, used under CC BY 4.0.
+
+Author:  KojfDiscord - https://sketchfab.com/KojfDiscord
+Source:  https://sketchfab.com/3d-models/mig-21-bison-indian-war-thunder-eaefc619a50047a0acf4af12cd269b92
+License: CC BY 4.0 - http://creativecommons.org/licenses/by/4.0/
+
+Changes made: specular-glossiness converted to metallic-roughness, meshes
+deduplicated, flattened, joined and welded, textures re-encoded to WebP capped
+at 1024 px, and vertices reordered, quantized and Meshopt-compressed. The
+pipeline is tools/optimize-model.mjs and is reproducible with
+`npm run optimize:model`. The same attribution is carried inside the .glb
+itself, under asset.extras.
+
 three.js
 --------
 
