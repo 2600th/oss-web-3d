@@ -4,6 +4,7 @@ import { Sky } from '../world/Sky.js';
 import { Terrain, configureTerrain } from '../world/Terrain.js';
 import { Water } from '../world/Water.js';
 import { CloudVolume } from '../world/CloudVolume.js';
+import { CloudField } from '../world/CloudField.js';
 import { terrainHeight, maxHeightAlong } from '../world/heightfield.js';
 import { FlightFx } from '../fx/FlightFx.js';
 import { computeMotionProfile } from '../fx/post/motionProfile.js';
@@ -16,6 +17,7 @@ import { ChaseCamera } from '../flight/ChaseCamera.js';
 import { Mission } from './Mission.js';
 import { ReconCamera, CAPTURE_THRESHOLD } from './ReconCamera.js';
 import { NavigationHintTracker } from './NavigationHint.js';
+import { Leaderboard } from './Leaderboard.js';
 import { terrainVisibility } from './TerrainVisibility.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
@@ -34,7 +36,44 @@ import { Screens } from '../ui/Screens.js';
 const PHYSICS_STEP = 1 / 120;
 const MAX_STEPS = 6;
 
+/** Seconds the view takes to travel between the chase boom and the nose optic. */
+const RECON_ENTER_SECONDS = 0.26;
+const RECON_EXIT_SECONDS = 0.36;
+
+/**
+ * How long the one-time assisted-controls note stays up. It is orientation, not
+ * a failure: a single sentence is read well inside four seconds, and leaving it
+ * pinned over the briefing made the player dismiss a bar that had already done
+ * its job. Failure notices in the same widget still persist until dismissed.
+ */
+const ASSIST_NOTICE_MS = 4000;
+
+/**
+ * Auto-capture controller. The dwell floor stops a framing that clips the
+ * threshold for a single frame mid-slew from firing; the ceiling is well inside
+ * EXCELLENT, where waiting for better is a worse bet than banking the shot; and
+ * the falloff is the drop from the run's peak that counts as "turned over".
+ * The dwell ceiling exists so a perfectly steady hold at a merely good score
+ * still resolves instead of waiting forever for an improvement that never comes.
+ */
+/**
+ * Screens the player sits still on, and therefore the ones the menu theme plays
+ * under. Flight, and both debriefs, book their own cue.
+ */
+const MENU_MUSIC_STATES = new Set(['title', 'briefing', 'paused']);
+
+const AUTO_CAPTURE_MIN_DWELL = 0.25;
+const AUTO_CAPTURE_MAX_DWELL = 1.4;
+const AUTO_CAPTURE_CEILING = 0.86;
+const AUTO_CAPTURE_FALLOFF = 0.012;
+
 const START = new THREE.Vector3(21000, 0, 6000);
+
+/** Ease with zero first *and* second derivative at both ends, so no visible kick. */
+function smootherstep(t) {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
 
 /** Half-resolution, hard-capped scene source for lake refraction. */
 export function waterRefractionSize(width, height, tier, out = null) {
@@ -98,8 +137,18 @@ export class Game {
       far: engine.camera.far,
     };
 
+    // CloudVolume no longer draws the sky — CloudField does. What it still owns
+    // is the live transmittance map the terrain samples for cloud shadows, and
+    // both are placed from the same weather model, so a shadow on the ground
+    // still belongs to a cloud that is really overhead.
     this.clouds = new CloudVolume(this.environment, engine.camera);
-    engine.setClouds(this.clouds);
+    this.clouds.setShadowOnly(true);
+    engine.setClouds(null);
+
+    this.cloudField = new CloudField(this.environment, engine.camera);
+    this.cloudField.initialize(engine.renderer);
+    this.cloudField.setQuality(settings.tier);
+    engine.scene.add(this.cloudField.mesh);
 
     this.fx = new FlightFx(this.environment);
     this.fx.setQuality(settings.tier);
@@ -110,6 +159,9 @@ export class Game {
       this._waterDrawingSize.x,
       this._waterDrawingSize.y,
     );
+    this.clouds.initialize(engine.renderer);
+    this.clouds.setDepthTexture(engine.composer.stableDepthTexture);
+    this.cloudField.setDepthTexture(engine.composer.stableDepthTexture);
 
     this.audio = new Audio(settings);
 
@@ -167,6 +219,8 @@ export class Game {
       verticalMode: settings.verticalMode,
     });
     this.screens.setControlContext({ controlMode: this._controlMode, modality: input.modality });
+    this.leaderboard = new Leaderboard();
+    this.screens.setLeaderboard({ leaderboard: this.leaderboard });
     this.hud = new Hud(ui);
 
     this._skipHandlers = new Set();
@@ -177,7 +231,30 @@ export class Game {
 
     this.reconActive = false;
     this.evaluation = null;
+    /** Seconds the current framing has held above the capture threshold. */
+    this._autoDwell = 0;
+    /** Best score seen during that hold, so the shutter can wait for the peak. */
+    this._autoPeak = 0;
+    /** Which post the hold belongs to; a different one starts a new hold. */
+    this._autoPost = null;
     this.terrainWarning = false;
+    /**
+     * How far the view has travelled from the chase boom into the nose camera.
+     *
+     * Recon and chase drive the same PerspectiveCamera, and only one of them
+     * used to run per frame. Releasing the recon key therefore rewrote the
+     * camera's position, orientation and field of view in a single frame — 31 m
+     * of dolly, most of a right angle of rotation and a 17-to-70-degree lens
+     * change, all in 8 ms. That is a hard cut, and the game read it as a glitch
+     * rather than as an edit. Both rigs now run every frame and this weight
+     * blends their poses.
+     */
+    this._reconBlend = 0;
+    this._chasePosition = new THREE.Vector3();
+    this._chaseQuaternion = new THREE.Quaternion();
+    this._chaseFov = 58;
+    this._reconPosition = new THREE.Vector3();
+    this._reconQuaternion = new THREE.Quaternion();
     this._postCrashImpulse = 0;
     this._sunWorld = new THREE.Vector3();
     this._sunNdc = new THREE.Vector3();
@@ -255,6 +332,7 @@ export class Game {
       this.screens.showNotice(
         'Assisted Controls active. Direct mode is available under Pause → Flying.',
         () => this.settings.setAssistedNoticeSeen(true),
+        ASSIST_NOTICE_MS,
       );
     }
   }
@@ -301,6 +379,7 @@ export class Game {
     this.flight.reset(this._startPosition(), Math.PI * 0.62, 260);
     this.chase.reset(this.flight);
     this.reconActive = false;
+    this._reconBlend = 0;
     this._resetMotionBaseline();
     this.terrain.prime(this.flight.position);
     this.fx.reset();
@@ -342,6 +421,9 @@ export class Game {
     this.state = 'paused';
     this.hud.show(false);
     this.screens.show(this.screens.pauseLayer);
+    // Nothing drives the flight bed while paused, so without this the engine
+    // holds its last gain and the menu theme plays over a frozen afterburner.
+    this.audio?.quietFlightBed?.(0.5);
   }
 
   resume() {
@@ -349,6 +431,9 @@ export class Game {
     this.state = 'flying';
     this.screens.hideAll();
     this.hud.show(true);
+    // Pausing handed the score to the menu theme; unpausing has to hand it back,
+    // because nothing else on the flying path ever calls play() again.
+    this.audio.music?.play('sortie');
   }
 
   setQuality(tier) {
@@ -363,6 +448,8 @@ export class Game {
     this.water.setQuality(this.settings.tier.name);
     if (tier === 'low' || tier === 'phone') this._disposeWaterRefraction();
     this.fx.setQuality(this.settings.tier);
+    this.cloudField.setQuality(this.settings.tier);
+    this.clouds.setQuality(this.settings.tier);
     this.screens.setQuality(tier);
   }
 
@@ -490,9 +577,17 @@ export class Game {
 
   _finish(success) {
     this.state = success ? 'complete' : 'failed';
+    // Before the cue, not after: endSortie reopens the cabin filter the last
+    // manoeuvre may have closed, and the closing cue is the thing it would
+    // otherwise be muffling.
+    this.audio.endSortie?.();
     this.audio.music?.play(success ? 'return' : 'loss');
     this.hud.show(false);
     this.reconActive = false;
+    // The debrief holds whatever pose the camera had, but the blend must not
+    // survive into the next sortie: a retry that resumed at 0.7 would open on a
+    // half-telephoto view of the start position.
+    this._reconBlend = 0;
     this.screens.showDebrief(this.mission, success);
   }
 
@@ -508,6 +603,12 @@ export class Game {
       this.audio.start();
       this.audio.resume();
     }
+
+    // The menu theme owns every screen the player is sitting still on. Every
+    // other state already books its own cue, and Music.play is a no-op for the
+    // cue that is already running, so this costs a Set lookup on all but the
+    // one frame that actually changes screen.
+    if (MENU_MUSIC_STATES.has(this.state)) this.audio.music?.play('menu');
 
     if (this.state === 'title' && input.anyPress()) {
       for (const fn of [...this._skipHandlers]) fn();
@@ -548,6 +649,19 @@ export class Game {
 
     this.environment.update(dt, this.engine.camera.position);
     this.sky.update(this.engine.camera);
+    // The volume is shadow-only now, so nothing in the post chain drives it;
+    // the terrain still needs its stripe refreshed every frame.
+    this.clouds.update(this.engine.renderer, null, dt);
+    // The composer allocates its stable depth texture in applySettings, after
+    // Game is constructed, and swaps it whenever a depth-reading pass is added
+    // or removed — so this is re-read rather than bound once.
+    const depth = this.engine.composer.stableDepthTexture;
+    if (depth !== this._cloudDepthTexture) {
+      this._cloudDepthTexture = depth;
+      this.cloudField.setDepthTexture(depth);
+      this.clouds.setDepthTexture(depth);
+    }
+    this.cloudField.update();
     this._updateWaterRefraction(dt);
     this._updatePostEffects(dt);
     this.screens.refreshTargets(this.mission?.posts ?? []);
@@ -602,23 +716,11 @@ export class Game {
     const projectedClearance = flight.position.y + flight.velocity.y * look - ridge;
     this.terrainWarning = !flight.crashed && projectedClearance < 120;
 
-    if (this.reconActive) {
-      this.recon.update(dt, flight);
-      this.evaluation = this._evaluateBest();
-      if (
-        this.input.consumePress('Enter') &&
-        this.recon.shutterCooldown <= 0 &&
-        this.evaluation
-      ) {
-        this._takePhoto(this.evaluation);
-      }
-    } else {
-      this.evaluation = null;
-      this.chase.update(dt, flight, flight.crashed ? 0.85 : 0);
-    }
+    this._updateCameraRig(dt, flight);
 
-    this.terrain.update(flight.position, this.settings.tier.terrainBudget);
-    this.fx.update(dt, flight, this.engine.camera.position, this.engine.camera);
+    this.terrain.update(this._terrainFocus(flight), this.settings.tier.terrainBudget);
+    // aircraft.update ran above, so the nozzle it publishes is this frame's.
+    this.fx.update(dt, flight, this.engine.camera.position, this.engine.camera, this.aircraft);
 
     // Closing rate between camera and aircraft, for the Doppler shift. The
     // chase camera trails, so hard acceleration opens the gap and drops the
@@ -644,6 +746,101 @@ export class Game {
     }
   }
 
+  /**
+   * Where the terrain clipmap should put its finest levels.
+   *
+   * Normally that is the aircraft. Under the recon camera it is not: the optic
+   * narrows the field of view to as little as 8.5 degrees, which magnifies the
+   * ground being photographed by up to seven times, and the clipmap chooses its
+   * levels by world distance alone. A level-3 cell is 32 m, so at a 3 km
+   * stand-off it lands on nearly fifty screen pixels and the target ridge reads
+   * as flat triangles — in the one shot the whole mission exists to take.
+   *
+   * Sliding the clipmap centre toward the aim point puts levels 0-2 on the
+   * ground in frame. Nothing about gameplay depends on where the centre is —
+   * collision, scoring and post placement all run on the JS heightfield mirror,
+   * not on the clipmap — and the aircraft's own surroundings are off-frame
+   * while the optic is up. The shift follows the transition weight, so the
+   * regeneration is spread across the same frames as the camera move.
+   */
+  _terrainFocus(flight) {
+    if (this._reconBlend <= 0) return flight.position;
+    const focus = this._terrainFocusPoint ?? (this._terrainFocusPoint = new THREE.Vector3());
+    const axis = this._terrainFocusAxis ?? (this._terrainFocusAxis = new THREE.Vector3());
+    // The blended camera's own axis, so the fine levels follow what is on
+    // screen rather than where the airframe happens to point.
+    this.engine.camera.getWorldDirection(axis);
+    // Roughly where the optical axis meets the ground, clamped so a shallow
+    // look-ahead cannot throw the centre kilometres down a valley.
+    const reach = THREE.MathUtils.clamp(flight.agl * 4.2, 400, 2600);
+    focus.copy(flight.position).addScaledVector(axis, reach);
+    return focus.lerp(flight.position, 1 - smootherstep(this._reconBlend));
+  }
+
+  /**
+   * Drive both camera rigs and blend the view between them.
+   *
+   * Order matters. The chase runs first so that its exponential smoothing keeps
+   * integrating while recon is up — parked, it would resume from a `lookAt`
+   * point tens of seconds stale and whip across the valley on release. Recon
+   * runs second and its *pure* pose is what evaluate() and capture() see, so
+   * scoring and the photographic plate are never taken through a half-finished
+   * transition. Only the displayed camera is blended.
+   *
+   * Entry is quicker than exit: the player pressed a key and wants the optic,
+   * whereas coming back out reads better as the view settling than as a snap.
+   */
+  _updateCameraRig(dt, flight) {
+    const camera = this.engine.camera;
+    const settled = this._reconBlend <= 0 && !this.reconActive;
+
+    this.chase.update(dt, flight, flight.crashed ? 0.85 : 0);
+
+    if (settled) {
+      this.evaluation = null;
+      return;
+    }
+
+    this._chasePosition.copy(camera.position);
+    this._chaseQuaternion.copy(camera.quaternion);
+    this._chaseFov = camera.fov;
+
+    this.recon.update(dt, flight);
+    this._reconPosition.copy(camera.position);
+    this._reconQuaternion.copy(camera.quaternion);
+    const reconFov = camera.fov;
+
+    if (this.reconActive) {
+      this.evaluation = this._evaluateBest();
+      this._updateAutoCapture(dt);
+    } else {
+      this.evaluation = null;
+      this._autoDwell = 0;
+      this._autoPeak = 0;
+      this._autoPost = null;
+    }
+
+    const target = this.reconActive ? 1 : 0;
+    const seconds = this.reconActive ? RECON_ENTER_SECONDS : RECON_EXIT_SECONDS;
+    const step = dt / seconds;
+    this._reconBlend = target > this._reconBlend
+      ? Math.min(target, this._reconBlend + step)
+      : Math.max(target, this._reconBlend - step);
+
+    const w = smootherstep(this._reconBlend);
+    camera.position.copy(this._chasePosition).lerp(this._reconPosition, w);
+    camera.quaternion.copy(this._chaseQuaternion).slerp(this._reconQuaternion, w);
+    // Field of view interpolates geometrically, not linearly. A lens racking
+    // from 70 to 17 degrees covers equal *ratios* in equal time; a linear ramp
+    // spends most of its run near the wide end and then lurches.
+    const fov = this._chaseFov * (reconFov / this._chaseFov) ** w;
+    if (Math.abs(camera.fov - fov) > 0.005) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+    camera.updateMatrixWorld();
+  }
+
   /** The post the camera is best placed to photograph right now. */
   _evaluateBest() {
     let best = null;
@@ -661,6 +858,70 @@ export class Game {
     // when nothing is framed.
     if (!best && this.mission.target) return this.recon.evaluate(this.mission.target);
     return best;
+  }
+
+  /**
+   * Work the shutter for the pilot.
+   *
+   * Flying the aircraft, holding a 17-degree lens on a ridge and finding Enter
+   * at the same moment is three jobs; the camera can do the third. It arms once
+   * the framing would actually secure the site and then waits for the *peak*
+   * rather than firing on the first crossing, because `_evaluateBest` drops a
+   * post the instant it is secured — auto-capture gets exactly one plate per
+   * site, and grabbing it the moment the score grazes CAPTURE_THRESHOLD would
+   * fill the contact sheet with USABLE where a pilot flying the same line by
+   * hand would have held two beats longer and come away with EXCELLENT.
+   *
+   * So: hold while the score is still climbing, and release when it turns over,
+   * tops out, or has simply been steady long enough that this framing is
+   * plainly the best on offer. Enter still fires immediately, which is the only
+   * way to keep a deliberately weak frame for the contact sheet.
+   */
+  _updateAutoCapture(dt) {
+    const ev = this.evaluation;
+    // Consumed unconditionally: a press during the shutter cooldown has to be
+    // spent, not buffered into a capture on some later frame.
+    const manual = this.input.consumePress('Enter');
+
+    // The hold belongs to one site, not to the camera. _evaluateBest can swap
+    // which post is being scored between frames — a second site coming into
+    // frame, or the current one being secured — and without this the new post
+    // inherits the previous one's banked dwell and peak: it would be
+    // photographed after a single frame of framing, at a score that was never
+    // its own peak, which is the exact failure the peak-seeking exists to stop.
+    const post = ev?.post ?? null;
+    if (post !== this._autoPost) {
+      this._autoPost = post;
+      this._autoDwell = 0;
+      this._autoPeak = 0;
+    }
+
+    const locked = Boolean(ev) && ev.inFrame && !ev.post.captured && ev.score >= CAPTURE_THRESHOLD;
+    if (locked) {
+      this._autoDwell += dt;
+      this._autoPeak = Math.max(this._autoPeak, ev.score);
+    } else {
+      this._autoDwell = 0;
+      this._autoPeak = 0;
+    }
+
+    if (!ev || this.recon.shutterCooldown > 0) return;
+    if (manual) {
+      this._fireShutter(ev);
+      return;
+    }
+    if (!locked || this._autoDwell < AUTO_CAPTURE_MIN_DWELL) return;
+
+    const turnedOver = ev.score <= this._autoPeak - AUTO_CAPTURE_FALLOFF;
+    const topped = ev.score >= AUTO_CAPTURE_CEILING;
+    if (turnedOver || topped || this._autoDwell >= AUTO_CAPTURE_MAX_DWELL) this._fireShutter(ev);
+  }
+
+  _fireShutter(evaluation) {
+    this._takePhoto(evaluation);
+    this._autoDwell = 0;
+    this._autoPeak = 0;
+    this._autoPost = null;
   }
 
   _takePhoto(evaluation) {
@@ -823,13 +1084,11 @@ export class Game {
     this._cameraDelta.subVectors(this._cameraForwardNow, this._cameraForward);
     this._cameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
     this._cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    const leavingRecon = this._motionWasReconActive && !this.reconActive;
-    if (leavingRecon) {
-      // Recon and chase are a camera cut, not a high-speed pan. Adopt the new
-      // direction before measuring angular velocity on the release frame.
-      this._cameraForward.copy(this._cameraForwardNow);
-      this._cameraDelta.set(0, 0, 0);
-    }
+    // The release frame used to need its angular velocity discarded, because
+    // recon and chase were a hard cut and the measured delta was most of a right
+    // angle in one frame — which the blur read as a whip pan. The transition is
+    // now a bounded eased move, so the delta it produces is real camera motion
+    // and blurring it is the correct answer rather than an artifact.
     const motionInput = this._motionInput ?? (this._motionInput = {});
     motionInput.airspeed = this.flight.airspeed;
     motionInput.angularX = this._cameraDelta.dot(this._cameraRight);
@@ -927,6 +1186,9 @@ export class Game {
     this.sky?.mesh?.removeFromParent();
     this.sky?.dispose?.();
     this.engine.setClouds?.(null);
+    this.cloudField?.mesh?.removeFromParent();
+    this.cloudField?.dispose?.();
+    this.clouds?.dispose?.();
     if (this.engine.scene.environment === this.envMap) this.engine.scene.environment = null;
     this.environment?.dispose?.();
     this.screens?.dispose?.();
@@ -947,6 +1209,9 @@ export class Game {
       bearing = b.bearing;
       range = b.range;
     }
+    // The score reads the same range the navigation cue does, so the music
+    // tightens on exactly the approach the HUD is calling.
+    this.audio.setTension(range, Boolean(target));
 
     const euler = _euler.setFromQuaternion(flight.orientation, 'YXZ');
     const heading = (-euler.y * 180) / Math.PI;

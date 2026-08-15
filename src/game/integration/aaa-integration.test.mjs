@@ -88,9 +88,13 @@ function makeNavigationGame({
   };
 
   const updates = [];
+  const tensions = [];
   const game = Object.create(Game.prototype);
   Object.assign(game, {
     engine: { camera },
+    // _updateHud is where the target range is known, so it is also where the
+    // score is told how close the run in is.
+    audio: { setTension: (range, hasTarget) => tensions.push({ range, hasTarget }) },
     flight: {
       position: flightPosition.clone(),
       velocity: velocity.clone(),
@@ -111,8 +115,27 @@ function makeNavigationGame({
     _navigationEdgeNdc: new THREE.Vector2(),
     hud: { update: (dt, snapshot) => updates.push(snapshot) },
   });
-  return { game, mission, updates, get targetReads() { return targetReads; } };
+  return { game, mission, updates, tensions, get targetReads() { return targetReads; } };
 }
+
+test('the score is told the same target range the navigation cue is drawing', () => {
+  const fixture = makeNavigationGame();
+  fixture.game._updateHud(1 / 60);
+  const cued = fixture.updates.at(-1);
+  const scored = fixture.tensions.at(-1);
+  assert.equal(scored.hasTarget, true);
+  assert.equal(scored.range, cued.targetRange, 'music and HUD must not disagree about the range');
+
+  const done = makeNavigationGame({
+    posts: [{
+      id: 'A', captured: true,
+      position: new THREE.Vector3(0, 0, -1000),
+      aimPoint: new THREE.Vector3(0, 0, -1000),
+    }],
+  });
+  done.game._updateHud(1 / 60);
+  assert.equal(done.tensions.at(-1).hasTarget, false, 'a finished mission must release the tension');
+});
 
 test('water refraction dimensions are bounded and disabled on low tiers', () => {
   assert.equal(typeof GameModule.waterRefractionSize, 'function');
@@ -382,7 +405,7 @@ test('sortie launch uses the explicit throttle reset while pause remains a prese
     reconActive: false,
     terrain: { prime() {} },
     fx: { reset() {} },
-    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    audio: { start() {}, resume() {}, resetEngine() {}, setTension() {}, music: { play() {} } },
     mission: { begin() {} },
     hud: { show() {} },
     engine: { camera: { fov: 58, updateProjectionMatrix() {} } },
@@ -431,7 +454,7 @@ test('a securing exposure advances navigation from A to B exactly once', () => {
       retainShot() {},
       releaseShot() {},
     },
-    audio: { shutter() {}, confirm: () => confirmations.push('secured') },
+    audio: { shutter() {}, setTension() {}, confirm: () => confirmations.push('secured') },
   });
   fixture.game.mission.photosTaken = 0;
   fixture.game.hud.showPhoto = () => {};
@@ -466,8 +489,11 @@ test('Tab remains the target-selection authority consumed by the flight update',
     chase: { update() {} },
     terrain: { update() {} },
     fx: { update() {} },
-    audio: { update() {} },
+    audio: { update() {}, setTension() {} },
     settings: { tier: { terrainBudget: 1 } },
+    // The camera rig runs every frame now, and returns immediately only when
+    // the recon blend has fully settled back onto the chase.
+    _reconBlend: 0,
   });
   fixture.game.mission.update = () => {};
 
@@ -593,7 +619,7 @@ test('recon framing hides navigation and launch clears the prior trend history',
     chase: { baseFov: 58, reset() {} },
     terrain: { prime() {} },
     fx: { reset() {} },
-    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    audio: { start() {}, resume() {}, resetEngine() {}, setTension() {}, music: { play() {} } },
     input: { touchRecon: false, releaseTouch() {} },
   });
   fixture.game.mission.begin = () => {};
@@ -735,7 +761,7 @@ test('launch restores the aircraft and clears the impact presentation', () => {
     terrain: { prime() {} },
     fx: { reset() {}, resetImpact: () => lifecycle.push('impact-reset') },
     aircraft: { setCrashPresentation: (active) => lifecycle.push(`aircraft:${active}`) },
-    audio: { start() {}, resume() {}, resetEngine() {}, music: { play() {} } },
+    audio: { start() {}, resume() {}, resetEngine() {}, setTension() {}, music: { play() {} } },
     mission: { begin() {} },
     hud: { show() {} },
     engine: { camera: { fov: 58, updateProjectionMatrix() {} } },
@@ -826,6 +852,8 @@ test('quality switch requests a terrain rebuild only when grid resolution change
   game.water = { setQuality() {} };
   game.fx = { setQuality() {} };
   game.screens = { setQuality() {} };
+  game.cloudField = { setQuality() {} };
+  game.clouds = { setQuality() {} };
   game._disposeWaterRefraction = () => {};
   let rebuild;
   game._rebuildTerrain = (next, old) => { rebuild = [next, old]; };

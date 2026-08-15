@@ -70,9 +70,6 @@ export class ChaseCamera {
     this._shakeTime = 0;
     this._initialised = false;
     this._fov = this.baseFov;
-    // The FOV value this camera last wrote. NaN until the first update, so the
-    // first frame always counts as a repossession and snaps. See update().
-    this._fovApplied = NaN;
     this._rollLag = 0;
   }
 
@@ -189,23 +186,16 @@ export class ChaseCamera {
     // Speed-linked FOV. Small — 16 degrees over the whole range — because the
     // effect works best when the player never consciously notices it.
     //
-    // The camera is shared, and this class is not always the one holding it:
-    // the game stops calling update() while the recon camera is up and drives
-    // the same PerspectiveCamera down to a zoom step as narrow as 8.5 degrees,
-    // and the title sequence parks it at 42. So `_fov` cannot be trusted as the
-    // camera's state — after any of those it describes a lens nobody is
-    // wearing, and easing from it wrote a 50-degree jump into a single frame on
-    // every recon release.
-    //
-    // Detect the repossession by comparing the camera against the value we last
-    // wrote, and cut rather than ease. Easing from the camera's actual FOV was
-    // the other candidate and is worse in the one place it matters: releasing
-    // recon already hard-cuts the viewpoint 26 m back behind the aircraft, and
-    // sliding a telephoto open over a second and a half on top of that reads as
-    // a lens fault rather than as a transition.
-    const repossessed = this.camera.fov !== this._fovApplied;
+    // `_fov` is authoritative and is never read back from the camera. It used to
+    // be: the game stopped calling update() while the recon camera drove the
+    // same PerspectiveCamera down to an 8.5-degree zoom step, so on release
+    // `_fov` described a lens nobody was wearing, and this class compared the
+    // camera against its own last write to detect the theft and cut. That guard
+    // is gone because the theft is gone — Game now runs both rigs every frame
+    // and blends their poses, so this camera's field of view evolves
+    // continuously whether or not it is the one on screen.
     const targetFov = speedFovTarget(speed, flight.reheat, this.reducedMotion);
-    if (cut || repossessed) this._fov = targetFov;
+    if (cut) this._fov = targetFov;
     else {
       const desiredStep = (targetFov - this._fov) * (1 - Math.exp(-5 * dt));
       const maxStep = MAX_FOV_RATE * Math.max(0, dt);
@@ -215,7 +205,6 @@ export class ChaseCamera {
       this.camera.fov = this._fov;
       this.camera.updateProjectionMatrix();
     }
-    this._fovApplied = this.camera.fov;
 
     this.camera.updateMatrixWorld();
     this._initialised = true;
