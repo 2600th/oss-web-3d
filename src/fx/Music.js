@@ -55,6 +55,7 @@ export class Music {
     this._step = 0;
     this._volume = 1;
     this._duck = 1;
+    this._tension = 0;
     // Live voices, so a cue change can silence what the previous one booked.
     this._voices = new Set();
     this._timeouts = new Set();
@@ -121,6 +122,35 @@ export class Music {
     this._applyGain(0.9);
   }
 
+  /**
+   * How close the player is to the objective, 0 to 1.
+   *
+   * Read by the sortie cue when it books each bar. A score that is identical
+   * two hundred kilometres out and two hundred metres out is wallpaper; this is
+   * what lets the same material tighten as the target comes up without ever
+   * becoming a different piece of music.
+   */
+  setTension(t) {
+    this._tension = Math.max(0, Math.min(1, t || 0));
+  }
+
+  /**
+   * The one moment the score resolves.
+   *
+   * The sortie cue spends the entire flight avoiding the tonic — that is the
+   * whole design of it, and it is why nothing ever feels finished while posts
+   * remain. Securing one plays the resolution it has been withholding: the
+   * fifth falling home, an octave apart. It is four seconds long and it only
+   * works because of everything it does not do for the rest of the sortie.
+   */
+  sting() {
+    if (!this.cue || this.ctx.state !== 'running') return;
+    const when = this.ctx.currentTime + 0.02;
+    this._voice({ voice: 'pluck', note: TONIC + 12 + 7, dur: 2.2, gain: 0.34 }, when);
+    this._voice({ voice: 'pluck', note: TONIC + 12, dur: 4.2, gain: 0.44 }, when + 0.28);
+    this._voice({ voice: 'flute', note: TONIC + 24, dur: 3.4, gain: 0.3 }, when + 0.34);
+  }
+
   play(name) {
     const cue = CUES[name];
     if (!cue || this.cue === cue) return;
@@ -163,7 +193,7 @@ export class Music {
     const until = now + HORIZON;
     let guard = 0;
     while (this._next < until && guard++ < 64) {
-      const events = this.cue.at(this._step);
+      const events = this.cue.at(this._step, this._tension);
       for (const e of events) this._voice(e, this._next + (e.offset ?? 0));
       this._next += this.cue.stepSeconds;
       this._step++;
@@ -454,17 +484,25 @@ const sortie = {
   ducks: true,
   fadeIn: 3.2,
   stepSeconds: 1.6,
-  at(step) {
+  at(step, tension = 0) {
     const out = [];
     const bar = step % 16;
+    const degrees = [4, 2, 5, 3, 6, 2, 4, 1];
     if (bar === 0) {
       out.push({ voice: 'drone', note: TONIC - 12, dur: 26, gain: 0.55 });
       out.push({ voice: 'drone', note: TONIC - 5, dur: 26, gain: 0.32 });
+      // Closing on a post opens a fifth above the drone. A fifth is the least
+      // coloured interval there is, so it thickens the bed without touching
+      // what key the sortie is in: the flight has not become a different piece
+      // of music, only a heavier one. Booked at the bar rather than the moment
+      // the range crosses, so the layer arrives musically instead of popping.
+      if (tension > 0.3) {
+        out.push({ voice: 'drone', note: TONIC + 7, dur: 26, gain: 0.1 + 0.26 * tension });
+      }
     }
     // A phrase every fourth step, wandering the scale, avoiding the tonic so
     // nothing ever feels finished while the sortie is still running.
     if (bar % 4 === 2) {
-      const degrees = [4, 2, 5, 3, 6, 2, 4, 1];
       const d = degrees[(step / 2 | 0) % degrees.length];
       out.push({
         voice: 'pluck',
@@ -481,6 +519,29 @@ const sortie = {
           offset: 0.42,
         });
       }
+    } else if (tension > 0.55 && bar % 2 === 0) {
+      // Halving the cadence is the whole trick. The same phrase, arriving twice
+      // as often and an octave down, reads as urgency without a single new note
+      // being written for it.
+      const d = degrees[(step + 3) % degrees.length];
+      out.push({
+        voice: 'pluck',
+        note: TONIC + BHAIRAVI[d],
+        dur: 1.8,
+        gain: 0.16 + 0.14 * tension,
+      });
+    }
+    // Komal re underneath, only on the final approach. The flat second is the
+    // most unsettled degree in this set, which is why it is held back for the
+    // run in — and why it is never the note the sting resolves onto.
+    if (tension > 0.72 && bar % 8 === 4) {
+      out.push({
+        voice: 'pluck',
+        note: TONIC - 12 + BHAIRAVI[1],
+        dur: 3.2,
+        gain: 0.22,
+        offset: 0.2,
+      });
     }
     return out;
   },
@@ -554,4 +615,82 @@ const ret = {
   },
 };
 
-const CUES = { sortie, loss, return: ret };
+/**
+ * Menu: the theme under the title, the briefing and the pause screen.
+ *
+ * This is the one cue that is allowed to be a tune. The sortie cue avoids
+ * melody on purpose — it has an engine to live under and a long flight to
+ * survive — but a menu is a place the player sits still and reads, and weather
+ * is not enough to hold it.
+ *
+ * Raga Desh, which is where Indian patriotic song has traditionally lived, and
+ * the arrangement is faithful to its movement rather than to the plain major
+ * scale the same seven notes would otherwise give: the ascent is S R M P N S'
+ * with Ga and Dha left out, and the descent comes back down the full
+ * S' N D P M G R S. That asymmetry is the whole character of the raga, and it
+ * is what stops this sounding like a generic anthem in a major key.
+ *
+ * Restraint is deliberate and is not a stylistic preference. The title sequence
+ * carries the dedication, so brass, drums and a fanfare cadence are out — the
+ * brief keeps remembrance away from anything that reads as a scoreboard. This
+ * lifts and arrives instead: pad, flute and pluck, no percussion, resolving
+ * home because a menu should feel settled where the sortie never does.
+ *
+ * A 32-step loop is about 27 seconds, which is long enough not to nag but short
+ * enough that a player who sits on the pause screen hears it come round. The
+ * second pass through hands the ascent to the pluck an octave down and holds
+ * the flute back for the descent, so the repeat is an arrangement change rather
+ * than a rerun.
+ */
+const menu = {
+  level: 0.52,
+  ducks: false,
+  fadeIn: 2.6,
+  stepSeconds: 0.85,
+  at(step) {
+    const out = [];
+    const bar = step % 32;
+    const secondPass = Math.floor(step / 32) % 2 === 1;
+
+    if (bar === 0) {
+      out.push({ voice: 'pad', note: TONIC - 12, dur: 29, gain: 0.58 });
+      out.push({ voice: 'pad', note: TONIC - 5, dur: 29, gain: 0.36 });
+    }
+    // The third opens underneath exactly as the line turns for home, so the
+    // warmth arrives with the descent instead of colouring the climb.
+    if (bar === 16) out.push({ voice: 'pad', note: TONIC - 12 + 4, dur: 15, gain: 0.3 });
+
+    // Aroha S R M P N S', avaroha S' N D P M G R S. -1 is a rest: the phrase
+    // needs two beats of silence at the bottom or the loop has no seam to
+    // breathe through.
+    const line = [0, 1, 3, 4, 6, 7, 6, 5, 4, 3, 4, 2, 1, 0, -1, -1];
+    if (bar % 2 === 0) {
+      const d = line[bar / 2];
+      if (d >= 0) {
+        const note = TONIC + 12 + (d < 7 ? DESH_ISH[d] : 12);
+        const ascending = bar < 12;
+        if (!(secondPass && ascending)) {
+          out.push({ voice: 'flute', note, dur: 1.9, gain: 0.46 });
+        }
+        // The pluck doubles an octave down: quietly under the flute, and out in
+        // front on the second pass where the flute has stepped aside.
+        out.push({
+          voice: 'pluck',
+          note: note - 12,
+          dur: 2.2,
+          gain: secondPass && ascending ? 0.34 : 0.2,
+          offset: 0.08,
+        });
+      }
+    }
+
+    // A tonic pulse on the half-bar. It is the only thing keeping time here,
+    // and it is a plucked string rather than a drum for the same reason the
+    // cadence is not a fanfare.
+    if (bar % 8 === 4) out.push({ voice: 'pluck', note: TONIC - 12, dur: 2.4, gain: 0.22 });
+
+    return out;
+  },
+};
+
+const CUES = { sortie, loss, return: ret, menu };
