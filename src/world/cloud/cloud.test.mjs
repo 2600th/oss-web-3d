@@ -448,6 +448,12 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
   // complete by it — a smoothstep that only starts at the Nyquist stride is
   // still aliasing at the stride where it matters.
   const source = cloudModel.CLOUD_GLSL;
+  assert.match(source, /textureLod\(uCloudDetail,\s*q,\s*0\.0\)/,
+    'cloud erosion inside divergent marches must use explicit base LOD');
+  assert.match(source, /textureLod\(uCloudShape,\s*shapeUvw,\s*0\.0\)/,
+    'cloud shape inside divergent marches must use explicit base LOD');
+  assert.doesNotMatch(source, /texture\(uCloud(?:Detail|Shape),/,
+    'cloud density must not require implicit derivatives inside divergent marches');
   for (const [name, limit] of [['WISPY', CLOUD_NYQUIST.WISPY], ['CROWN', CLOUD_NYQUIST.CROWN]]) {
     const level = name.toLowerCase() + 'Level';
     const pattern = new RegExp(`float ${level} = detailLevel \\* \\(1\\.0 - smoothstep\\(([\\d.]+), ([\\d.]+), stride\\)\\)`);

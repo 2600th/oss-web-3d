@@ -349,7 +349,7 @@ float cloudTypeAt(vec2 xz, float shaped) {
 float cloudErosionStride(vec3 p, float h, float detailLevel, float stride) {
   vec3 windOffset = vec3(uCloudWind.x, 0.0, uCloudWind.y) * uCloudTime * (1.0 + h * 0.35);
   vec3 q = (p + windOffset) / ${CLOUD_NOISE_TILE.DETAIL.toFixed(1)};
-  vec3 detail = texture(uCloudDetail, q).rgb;
+  vec3 detail = textureLod(uCloudDetail, q, 0.0).rgb;
 
   float wispyLevel = detailLevel * (1.0 - smoothstep(${(CLOUD_NYQUIST.WISPY * 0.55).toFixed(1)}, ${CLOUD_NYQUIST.WISPY.toFixed(1)}, stride));
   if (wispyLevel < 0.30) return detail.r;
@@ -431,7 +431,7 @@ float cloudDensityStride(vec3 p, float detailLevel, float stride) {
   // opacity slider.
   vec3 shapeUvw = (p + vec3(uCloudWind.x, 0.0, uCloudWind.y) * uCloudTime) /
     ${CLOUD_NOISE_TILE.SHAPE.toFixed(1)};
-  vec4 shapeSample = texture(uCloudShape, shapeUvw);
+  vec4 shapeSample = textureLod(uCloudShape, shapeUvw, 0.0);
   float lobes = shapeSample.g * 0.625 + shapeSample.b * 0.25 + shapeSample.a * 0.125;
   float silhouette = c_remap(shapeSample.r, lobes - 1.0, 1.0, 0.0, 1.0);
 

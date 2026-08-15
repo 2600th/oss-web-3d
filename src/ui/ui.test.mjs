@@ -3,11 +3,12 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const here = new URL('./', import.meta.url);
-const [hud, screens, css, game] = await Promise.all([
+const [hud, screens, css, game, indexHtml] = await Promise.all([
   readFile(new URL('Hud.js', here), 'utf8'),
   readFile(new URL('Screens.js', here), 'utf8'),
   readFile(new URL('styles.css', here), 'utf8'),
   readFile(new URL('../game/Game.js', here), 'utf8'),
+  readFile(new URL('../../index.html', here), 'utf8'),
 ]);
 
 test('HUD owns the navigation cue lifecycle and navigation CSS stays unfilled and calm', () => {
@@ -293,6 +294,22 @@ test('phone CSS uses the live HUD class names and reserves modal and touch safe 
   );
   assert.match(css, /@media \(pointer: coarse\)[\s\S]*?\.recon-head/);
   assert.match(css, /@media \(pointer: coarse\)[\s\S]*?\.quality/);
+});
+
+test('browser zoom remains available outside active flight controls', () => {
+  assert.match(indexHtml, /content="width=device-width, initial-scale=1, viewport-fit=cover"/);
+  assert.doesNotMatch(indexHtml, /maximum-scale|user-scalable/i);
+  assert.match(css, /#viewport\s*\{[^}]*touch-action:\s*manipulation/s);
+  assert.match(css, /#touch\s*\{[^}]*touch-action:\s*manipulation/s);
+  assert.match(css, /\.touch-zone\s*\{[^}]*touch-action:\s*none/s);
+  assert.match(css, /\.touch-btn\s*\{[^}]*touch-action:\s*none/s);
+});
+
+test('coarse-pointer pause controls retain a 44px touch target', () => {
+  assert.match(
+    css,
+    /@media \(pointer: coarse\)[\s\S]*?\.menu \.segmented button,[\s\S]*?\.menu button\.toggle,[\s\S]*?\.menu \.quality-row button,[\s\S]*?\.menu input\[type='range'\][\s\S]*?min-height:\s*44px/,
+  );
 });
 
 test('390x844 recon zoom controls clear the throttle and each other by at least 8px', () => {

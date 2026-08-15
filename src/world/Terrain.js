@@ -355,7 +355,7 @@ export class Terrain {
         float localHeight(vec2 xz) {
           vec2 idx = (xz - uCenter) / uCell + HALF + 1.0;
           if (min(idx.x, idx.y) < 0.5 || max(idx.x, idx.y) > ${(TEMP_RES - 1).toFixed(1)}) return -1.0e5;
-          return texture(uHeights, (idx + 0.5) * uTexel).r;
+          return textureLod(uHeights, (idx + 0.5) * uTexel, 0.0).r;
         }
 
         float sunVisibility(vec3 origin, vec3 normal, float ndl) {

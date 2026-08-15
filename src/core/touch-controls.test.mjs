@@ -258,6 +258,24 @@ test('disabled controls ignore stick, throttle, Boost, and recon pointers', () =
   controls.dispose();
 });
 
+test('pinch gestures are suppressed only when they start on an active flight control', () => {
+  const { controls } = setup();
+  let backgroundPrevented = false;
+  controls.layer.dispatch('gesturestart', {
+    target: controls.layer,
+    preventDefault() { backgroundPrevented = true; },
+  });
+  assert.equal(backgroundPrevented, false, 'the full-screen touch layer must leave browser zoom available');
+
+  let controlPrevented = false;
+  controls.layer.dispatch('gesturestart', {
+    target: { closest: () => controls.stickZone },
+    preventDefault() { controlPrevented = true; },
+  });
+  assert.equal(controlPrevented, true, 'multi-touch flight input must not trigger browser zoom');
+  controls.dispose();
+});
+
 test('touch CSS switches throttle and Boost without violating phone safe-area lanes', () => {
   const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
   assert.match(css, /#touch\.assisted\s+\.throttle-zone[^}]*display:\s*none/s);
@@ -280,6 +298,14 @@ function assertSeparated(a, b, gap = 8) {
     `${a.name} and ${b.name} need ${gap}px separation, got ${separation(a, b).toFixed(1)}px`);
 }
 
+function assertInside(control, viewport) {
+  assert.ok(
+    control.left >= 0 && control.top >= 0
+      && control.right <= viewport.width && control.bottom <= viewport.height,
+    `${control.name} must stay inside ${viewport.width}x${viewport.height}: ${JSON.stringify(control)}`,
+  );
+}
+
 function lastRuleBody(css, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'gs'))].at(-1)?.[1] ?? '';
@@ -292,7 +318,12 @@ test('390x844 Assisted controls maintain eight-pixel flight and recon safe recta
   const stickMatch = stickBodies.at(-1)?.[1].match(/height:\s*min\((\d+)vh,\s*(\d+)px\)/);
   assert.ok(stickMatch, 'the active coarse-pointer stick height must be explicit');
   const stickHeight = Math.min(viewport.height * Number(stickMatch[1]) / 100, Number(stickMatch[2]));
-  const qualityBottom = Number(lastRuleBody(css, '.quality').match(/bottom:\s*max\((\d+)px/)?.[1]);
+  const qualityBottom = Number(
+    [...css.matchAll(/\.quality\s*\{([^}]*)\}/gs)]
+      .map((match) => match[1])
+      .find((body) => /bottom:\s*max\(272px/.test(body))
+      ?.match(/bottom:\s*max\((\d+)px/)?.[1],
+  );
   assert.ok(Number.isFinite(qualityBottom), 'coarse-pointer quality safe lane must have an explicit bottom');
 
   const stick = rect(0, viewport.height - stickHeight, Math.min(viewport.width * 0.42, 340), stickHeight, 'stick');
@@ -334,5 +365,90 @@ test('390x844 Assisted controls maintain eight-pixel flight and recon safe recta
   }
   for (const control of reconControls) {
     for (const hud of reconHud) assertSeparated(control, hud);
+  }
+});
+
+test('compact portrait and short landscape controls stay visible and clear of HUD lanes', () => {
+  const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(pointer: coarse\) and \(max-height: 700px\) and \(max-aspect-ratio: 3 \/ 4\)/);
+  assert.match(css, /@media \(pointer: coarse\) and \(max-height: 420px\) and \(min-aspect-ratio: 4 \/ 3\)/);
+  assert.match(css, /#touch\.assisted \.recon-btn\s*\{[^}]*right:\s*max\(14px[^}]*bottom:\s*max\(162px/s);
+  assert.match(css, /#touch\.assisted\.recon-open \.recon-btn\s*\{[^}]*bottom:\s*max\(96px/s);
+  const compactStart = css.indexOf('@media (pointer: coarse) and (max-height: 700px)');
+  const landscapeStart = css.indexOf('@media (pointer: coarse) and (max-height: 420px)');
+  const compactCss = css.slice(compactStart, landscapeStart);
+  const landscapeCss = css.slice(landscapeStart);
+  const compactTapeTop = Number(compactCss.match(/\.tape\s*\{[^}]*top:\s*max\((\d+)px/s)?.[1]);
+  const landscapeTapeRight = Number(landscapeCss.match(/\.tape\.right\s*\{[^}]*right:\s*max\((\d+)px/s)?.[1]);
+  assert.ok(Number.isFinite(compactTapeTop));
+  assert.ok(Number.isFinite(landscapeTapeRight));
+
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 360, height: 640 },
+    { width: 375, height: 667 },
+  ]) {
+    const stick = rect(0, viewport.height - Math.min(viewport.height * 0.38, 256),
+      Math.min(viewport.width * 0.42, 340), Math.min(viewport.height * 0.38, 256), 'stick');
+    const boost = rect(viewport.width - 110, viewport.height - 154, 96, 58, 'Boost');
+    const recon = rect(viewport.width - 98, viewport.height - 208, 84, 46, 'Recon');
+    const leftTape = rect(5, compactTapeTop, 56, Math.min(viewport.height * 0.28, 168), 'left HUD tape');
+    const rightTape = rect(viewport.width - 148, compactTapeTop, 56, Math.min(viewport.height * 0.28, 168), 'right HUD tape');
+    const target = rect((viewport.width - Math.min(220, viewport.width * 0.56)) / 2, 88,
+      Math.min(220, viewport.width * 0.56), 58, 'target HUD');
+    const objectives = rect(viewport.width - 110, viewport.height - 46, 96, 38, 'objectives HUD');
+    const normalControls = [stick, boost, recon];
+    const normalHud = [leftTape, rightTape, objectives];
+    for (const control of normalControls) {
+      assertInside(control, viewport);
+      for (const hud of normalHud) assertSeparated(control, hud);
+    }
+    assertSeparated(boost, recon);
+    assertSeparated(target, rightTape);
+
+    const reconOpen = rect(viewport.width - 98, viewport.height - 142, 84, 46, 'Recon open');
+    const shutter = rect(viewport.width - 168, viewport.height - 196, 84, 46, 'Shutter');
+    const zoomOut = rect(viewport.width - 128, viewport.height - 366, 44, 44, 'Zoom out');
+    const zoomIn = rect(viewport.width - 128, viewport.height - 418, 44, 44, 'Zoom in');
+    for (const control of [reconOpen, shutter, zoomOut, zoomIn]) assertInside(control, viewport);
+    assertSeparated(reconOpen, shutter);
+    assertSeparated(zoomOut, zoomIn);
+  }
+
+  for (const viewport of [
+    { width: 568, height: 320 },
+    { width: 667, height: 375 },
+    { width: 844, height: 390 },
+  ]) {
+    const stickWidth = Math.min(viewport.width * 0.42, 340);
+    const stickHeight = Math.min(viewport.height * 0.38, 256);
+    const stick = rect(0, viewport.height - stickHeight, stickWidth, stickHeight, 'stick');
+    const rightTape = rect(viewport.width - landscapeTapeRight - 54, 70,
+      54, Math.min(viewport.height * 0.22, 84), 'right HUD tape');
+    const target = rect((viewport.width - Math.min(220, viewport.width * 0.56)) / 2, 88,
+      Math.min(220, viewport.width * 0.56), 58, 'target HUD');
+    const boost = rect(viewport.width - 110, viewport.height - 154, 96, 58, 'Boost');
+    const recon = rect(viewport.width - 98, viewport.height - 208, 84, 46, 'Recon');
+    for (const control of [stick, boost, recon]) assertInside(control, viewport);
+    assertSeparated(stick, rightTape);
+    assertSeparated(boost, rightTape);
+    assertSeparated(recon, rightTape);
+    assertSeparated(boost, recon);
+    assertSeparated(target, rightTape);
+
+    const rail = [
+      rect(viewport.width - 98, viewport.height - 142, 84, 46, 'Recon open'),
+      rect(viewport.width - 98, viewport.height - 196, 84, 46, 'Shutter'),
+      rect(viewport.width - 58, viewport.height - 248, 44, 44, 'Zoom out'),
+      rect(viewport.width - 58, viewport.height - 300, 44, 44, 'Zoom in'),
+    ];
+    const quality = rect(stickWidth + 8, viewport.height - 48, viewport.width - stickWidth - 128, 34, 'quality HUD');
+    for (let index = 0; index < rail.length; index += 1) {
+      assertInside(rail[index], viewport);
+      assertSeparated(rail[index], rightTape);
+      assertSeparated(rail[index], quality);
+      if (index > 0) assertSeparated(rail[index - 1], rail[index]);
+    }
+    assertSeparated(stick, quality);
   }
 });

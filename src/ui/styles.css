@@ -64,7 +64,7 @@ body {
   width: 100%;
   height: 100%;
   display: block;
-  touch-action: none;
+  touch-action: manipulation;
 }
 
 #ui {
@@ -2097,7 +2097,7 @@ input:focus-visible {
   inset: 0;
   display: none;
   z-index: 40;
-  touch-action: none;
+  touch-action: manipulation;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -2241,6 +2241,13 @@ input:focus-visible {
 @media (pointer: coarse) {
   #hud { font-size: 0.74em; }
 
+  .menu .segmented button,
+  .menu button.toggle,
+  .menu .quality-row button,
+  .menu input[type='range'] {
+    min-height: 44px;
+  }
+
   .stick-zone { height: min(38vh, 256px); }
 
   .tape {
@@ -2304,9 +2311,77 @@ input:focus-visible {
   .photo-pop { right: 92px; }
 }
 
-/* Very short viewports (a phone held in landscape with browser chrome) need
-   the tapes shorter still or they run under the compass. */
-@media (pointer: coarse) and (max-height: 420px) {
-  .tape { height: 52vh; width: 54px; }
+/* Compact portrait phones need the instruments above the stick and the two
+   assisted actions in one right-hand column. Recon drops into Boost's vacated
+   slot when the camera is open. */
+@media (pointer: coarse) and (max-height: 700px) and (max-aspect-ratio: 3 / 4) {
+  .tape {
+    top: max(158px, calc(env(safe-area-inset-top) + 146px));
+    height: min(28vh, 168px);
+    transform: none;
+  }
+  #hud .objectives {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+  }
+  #touch.assisted .recon-btn {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+    bottom: max(162px, calc(env(safe-area-inset-bottom) + 162px));
+  }
+  #touch.assisted.recon-open .recon-btn {
+    bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  }
+}
+
+/* Short landscape phones use a vertical action rail. The HUD occupies the
+   centre lane between the stick and that rail, while the tapes stay above the
+   stick and inboard of the buttons. */
+@media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
+  .tape {
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    width: 54px;
+    height: min(22vh, 84px);
+    transform: none;
+  }
+  .tape.right {
+    right: max(110px, calc(env(safe-area-inset-right) + 110px));
+  }
+
+  #touch.assisted .recon-btn {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+    bottom: max(162px, calc(env(safe-area-inset-bottom) + 162px));
+  }
+  #touch.assisted.recon-open .recon-btn {
+    bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  }
+  .shutter-btn {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+    bottom: max(150px, calc(env(safe-area-inset-bottom) + 150px));
+  }
+  .zoom-out {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+    bottom: max(204px, calc(env(safe-area-inset-bottom) + 204px));
+  }
+  .zoom-in {
+    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+    bottom: max(256px, calc(env(safe-area-inset-bottom) + 256px));
+  }
+
+  .recon-head {
+    right: max(120px, calc(env(safe-area-inset-right) + 120px));
+  }
+  .quality {
+    left: calc(min(42vw, 340px) + 8px);
+    right: max(120px, calc(env(safe-area-inset-right) + 120px));
+    bottom: max(14px, calc(env(safe-area-inset-bottom) + 14px));
+  }
+  .recon-frame-no {
+    right: max(120px, calc(env(safe-area-inset-right) + 120px));
+    bottom: max(56px, calc(env(safe-area-inset-bottom) + 56px));
+  }
+  .recon-reticle {
+    width: min(54vh, 180px);
+    height: min(54vh, 180px);
+  }
+  .photo-pop { right: max(120px, calc(env(safe-area-inset-right) + 120px)); }
   #hud { font-size: 0.68em; }
 }

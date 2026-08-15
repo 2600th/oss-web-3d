@@ -27,6 +27,16 @@ assert.match(materialMethodSource, /fragmentShader:\s*buildTerrainFragmentShader
 assert.doesNotMatch(materialMethodSource, /this\.material\.(?:vertexShader|fragmentShader)\s*=/, 'generated shaders are not assigned after construction');
 assert.doesNotMatch(materialMethodSource, /\/\*\s*glsl\s*\*\/\s*`/, 'material builder carries no obsolete inline GLSL payload');
 
+const localHeightStart = terrainSource.indexOf('float localHeight(vec2 xz)');
+const localHeightEnd = terrainSource.indexOf('float sunVisibility(', localHeightStart);
+assert.ok(localHeightStart >= 0 && localHeightEnd > localHeightStart, 'terrain shadow height lookup is discoverable');
+const localHeightSource = terrainSource.slice(localHeightStart, localHeightEnd);
+assert.match(
+  localHeightSource,
+  /textureLod\(uHeights,\s*\(idx \+ 0\.5\) \* uTexel,\s*0\.0\)/,
+  'terrain shadow march must not require implicit derivatives from divergent control flow',
+);
+
 assert.equal(selectTerrainStorage({ colorFloat: true, floatLinear: true }).mode, 'gpu-linear');
 assert.equal(selectTerrainStorage({ colorFloat: true, floatLinear: false }).mode, 'gpu-manual-linear');
 assert.equal(selectTerrainStorage({ colorFloat: false, floatLinear: false }).mode, 'cpu-manual-linear');

@@ -233,10 +233,12 @@ export class TouchControls {
       this.input.pressTouch('KeyV');
     });
 
-    // Stop iOS from treating a two-finger flight input as a page zoom.
+    // Stop iOS from treating a two-finger flight input as a page zoom, but do
+    // not cancel a pinch that starts on the non-control layer: browser zoom is
+    // an accessibility path and must remain available outside active controls.
     for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
       this._listen(this.layer, ev, (e) => {
-        if (this.enabled) e.preventDefault();
+        if (this.enabled && e.target?.closest?.('.touch-zone, .touch-btn')) e.preventDefault();
       });
     }
   }
