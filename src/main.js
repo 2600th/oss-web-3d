@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Engine } from './core/Engine.js';
 import { Settings, guessTier, isTouchDevice } from './core/Settings.js';
 import { Input } from './core/Input.js';
+import { shouldToggleDebug } from './core/debugPanel.js';
 import { TouchControls } from './core/TouchControls.js';
 import {
   installContextRecovery,
@@ -79,29 +80,56 @@ const game = new Game(engine, settings, input);
 const touch = new TouchControls(input, document.getElementById('ui'));
 game.setTouchControls(touch);
 touch.setEnabled(isTouchDevice());
-// Touch counts as the gesture that unlocks audio, which iOS requires and which
-// the keyboard path would otherwise never receive on a phone.
-if (isTouchDevice()) {
-  const unlock = () => {
-    game.audio.start();
-    game.audio.resume();
-  };
-  window.addEventListener('pointerdown', unlock, { once: true });
-  window.addEventListener('touchend', unlock, { once: true });
-}
+// Any pointer press counts as the gesture that unlocks audio, not just a touch.
+//
+// Game.update only starts the context on `input.anyPress() || input.keys.size`,
+// and Input is fed by keydown and by the touch shims — never by the mouse. This
+// used to be gated on isTouchDevice(), so a desktop player who clicked through
+// the title and the briefing with the mouse had no AudioContext at all: the
+// menu theme, which is precisely the music those two screens exist to carry,
+// stayed silent until they first touched a flight key. The listener is `once`,
+// so on a phone this is still the single tap it always was.
+const unlockAudio = () => {
+  game.audio.start();
+  game.audio.resume();
+};
+window.addEventListener('pointerdown', unlockAudio, { once: true });
+window.addEventListener('touchend', unlockAudio, { once: true });
+// Deliberately not called here. Constructing the AudioContext at boot is legal
+// — it simply starts suspended — and it was tried: Chrome still refused to
+// resume without activation, so the title stayed silent, and the attempt logged
+// "The AudioContext was not allowed to start" on every single cold load. This
+// project buffers console warnings for __audit(), so that is a permanent cost
+// against a benefit that only lands on origins with enough media engagement to
+// be granted autoplay. The gesture path above is what actually starts audio.
 
-const debug = import.meta.env.DEV ? document.createElement('div') : null;
-if (debug) {
-  debug.id = 'debug';
-  document.body.appendChild(debug);
-  if (new URLSearchParams(location.search).has('debug')) debug.classList.add('show');
-}
+/**
+ * One panel, hidden by default, toggled with the tilde key.
+ *
+ * It ships in the production bundle rather than staying behind import.meta.env
+ * .DEV: frame rate, render scale and the auto-selected tier are the first three
+ * things anyone reporting a performance problem is asked for, and telling them
+ * to build from source to read their own frame rate is not an answer. It costs
+ * nothing while hidden -- the frame loop skips the whole text build unless the
+ * `show` class is present -- and `?debug` still forces it on for the screenshot
+ * harness, which cannot press a key before the first frame.
+ */
+const debug = document.createElement('div');
+debug.id = 'debug';
+document.body.appendChild(debug);
+if (new URLSearchParams(location.search).has('debug')) debug.classList.add('show');
+
+const onDebugKey = (event) => {
+  if (shouldToggleDebug(event)) debug.classList.toggle('show');
+};
+window.addEventListener('keydown', onDebugKey);
 
 try {
   await game.load();
 } catch (error) {
   console.error('[boot] load failed', error);
   showBootFailure('Essential game resources failed to load. Check your connection and reload.');
+  window.removeEventListener('keydown', onDebugKey);
   window.removeEventListener('error', onError);
   window.removeEventListener('unhandledrejection', onRejection);
   for (const restore of restoreConsole) restore();
@@ -126,7 +154,7 @@ function frame() {
   game.update(dt);
   engine.render(dt);
 
-  if (debug?.classList.contains('show')) {
+  if (debug.classList.contains('show')) {
     const f = game.flight;
     debug.textContent =
       `${engine.fps.toFixed(0)} fps  scale ${engine.renderScale.toFixed(2)}  ${settings.tierName}\n` +
@@ -155,6 +183,7 @@ installPageLifecycle(() => {
   running = false;
   cancelAnimationFrame(frameId);
   removeContextRecovery();
+  window.removeEventListener('keydown', onDebugKey);
   window.removeEventListener('error', onError);
   window.removeEventListener('unhandledrejection', onRejection);
   for (const restore of restoreConsole) restore();
