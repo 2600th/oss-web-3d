@@ -1,4 +1,16 @@
+import { AIRCRAFT } from './FlightModel.js';
+
 const GRAVITY = 9.80665;
+
+// Auto-throttle remains load-driven at normal speed. Inside this recovery
+// band, airspeed progressively wins and commands full power before the HUD's
+// stall warning can light. Multiples keep the envelope tied to FlightModel's
+// authoritative stall speed instead of duplicating a second speed table.
+const AUTO_THROTTLE_FULL_SPEED = AIRCRAFT.stallSpeed * 1.25;
+const AUTO_THROTTLE_ENTRY_SPEED = AIRCRAFT.stallSpeed * 2.0;
+const AUTO_TURN_MIN_SPEED = AIRCRAFT.stallSpeed * 1.25;
+const AUTO_TURN_ENTRY_SPEED = AIRCRAFT.stallSpeed * 2.0;
+const AUTO_TURN_MIN_AUTHORITY = 0.35;
 
 /**
  * Assisted-flight envelopes.
@@ -130,7 +142,18 @@ export class AssistController {
     // Load factor a coordinated turn at the requested rate demands, capped by
     // the profile's structural/comfort limit, and the bank angle that produces
     // exactly that load. This is the whole turn law.
-    const requestedRate = Math.abs(turn) * profile.turnRate;
+    // Full-power alone cannot protect the high-sensitivity profile indefinitely.
+    // Auto-throttle therefore also unloads only the last part of the turn
+    // envelope as the warning band approaches. Manual throttle remains fully
+    // pilot-owned and receives the selected profile without this protection.
+    const turnProtection = options?.autoThrottle === false
+      ? 1
+      : AUTO_TURN_MIN_AUTHORITY + (1 - AUTO_TURN_MIN_AUTHORITY) * smoothstep(
+        AUTO_TURN_MIN_SPEED,
+        AUTO_TURN_ENTRY_SPEED,
+        speed,
+      );
+    const requestedRate = Math.abs(turn) * profile.turnRate * turnProtection;
     const rateLoad = Math.hypot(1, requestedRate / Math.max(gOverV, 1e-6));
     const turnLoad = Math.min(rateLoad, profile.turnLoad);
     const targetBank = -Math.sign(turn) * Math.acos(clampSigned(1 / turnLoad));
@@ -207,14 +230,22 @@ export class AssistController {
       control.throttle = 1;
     } else {
       // Auto-throttle leans on the engine through a hard turn, but only part of
-      // the way: induced drag still wins, so the aircraft bleeds toward corner
-      // speed and the turn tightens as it does. Cancelling the bleed entirely
-      // would remove the one trade that makes the turn interesting.
-      control.throttle = clampUnit(
+      // the way at ordinary speeds: induced drag still wins, so the aircraft
+      // bleeds energy before the recovery envelope progressively takes over.
+      // Cancelling the bleed entirely would remove the one trade that makes the
+      // turn interesting.
+      const scheduledThrottle = clampUnit(
         0.82 +
           clampSigned(finite(intent?.speed)) * 0.04 +
           Math.min((turnLoad - 1) / 6, 1) * 0.14,
       );
+      const speedRecovery = 1 - smoothstep(
+        AUTO_THROTTLE_FULL_SPEED,
+        AUTO_THROTTLE_ENTRY_SPEED,
+        speed,
+      );
+      const recoveryThrottle = 0.82 + speedRecovery * 0.18;
+      control.throttle = Math.max(scheduledThrottle, recoveryThrottle);
     }
 
     return control;
@@ -273,4 +304,9 @@ function clampUnit(value) {
 
 function clamp(value, min, max) {
   return value < min ? min : value > max ? max : value;
+}
+
+function smoothstep(edge0, edge1, value) {
+  const t = clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
 }

@@ -72,4 +72,3 @@ This is simple but would make ordinary shallow turns use reheat, weaken the spee
 - No option-menu changes; the user selected only feedback items 1 and 3.
 - No global aerodynamic, thrust, stall-warning, sensitivity-profile, touch, or gamepad retuning unless a failing protection test proves a minimal Assisted-only adjustment is necessary.
 - No deployment, push, or pull request in this task.
-

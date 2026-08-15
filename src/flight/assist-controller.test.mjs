@@ -93,6 +93,15 @@ test('a hard turn bleeds energy toward corner speed without decaying to a stall'
   );
 });
 
+test('default Assisted auto-throttle protects a sustained turn without erasing energy loss', () => {
+  const result = run({ seconds: 40, intent: { ...NEUTRAL, turn: 1 } });
+  assert.equal(result.everStalled, false, 'default Assisted turn entered the stall warning');
+  assert.ok(
+    result.flight.airspeed < 230,
+    `Assisted protection erased turn-energy loss at ${result.flight.airspeed.toFixed(0)} m/s`,
+  );
+});
+
 /** The induced-drag term is a feedback loop; it must not be able to run away. */
 test('forty seconds of maximum turn stays numerically bounded', () => {
   const result = run({
@@ -102,6 +111,7 @@ test('forty seconds of maximum turn stays numerically bounded', () => {
   });
   assert.ok(Number.isFinite(result.flight.airspeed), 'airspeed diverged');
   assert.ok(result.maxLoad <= AIRCRAFT.gLimit + 0.5, `peak load was ${result.maxLoad.toFixed(1)} G`);
+  assert.equal(result.everStalled, false, 'high-sensitivity Assisted turn entered the stall warning');
   assert.ok(
     result.flight.airspeed > AIRCRAFT.stallSpeed,
     `airspeed collapsed to ${result.flight.airspeed.toFixed(0)} m/s`,
@@ -364,6 +374,7 @@ function run({ seconds, intent, hz = 60, options = NORMAL }) {
   let maxPitchAttitude = -Infinity;
   let minFlightPathAngle = Infinity;
   let maxFlightPathAngle = -Infinity;
+  let everStalled = false;
 
   // Heading is unwrapped so a turn past 180 degrees still accumulates, and the
   // last second is sampled separately: the interesting figure is the *settled*
@@ -383,6 +394,7 @@ function run({ seconds, intent, hz = 60, options = NORMAL }) {
     maxPitchAttitude = Math.max(maxPitchAttitude, pitchAttitude);
     minFlightPathAngle = Math.min(minFlightPathAngle, flightPathAngle);
     maxFlightPathAngle = Math.max(maxFlightPathAngle, flightPathAngle);
+    everStalled ||= flight.stalling;
 
     const current = heading(flight);
     const delta = Math.atan2(Math.sin(current - previousHeading), Math.cos(current - previousHeading));
@@ -404,6 +416,7 @@ function run({ seconds, intent, hz = 60, options = NORMAL }) {
     maxPitchAttitude,
     minFlightPathAngle,
     maxFlightPathAngle,
+    everStalled,
     steadyTurnRate,
     totalHeadingChange: Math.abs(unwrappedHeading),
     flightPathAngle: Math.asin(clamp(flight.velocity.y / Math.max(flight.velocity.length(), 1), -1, 1)),
