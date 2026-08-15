@@ -116,3 +116,46 @@ test('control setters accept only supported enums and booleans and persist notic
   assert.equal(savedV2.assistedNoticeSeen, true);
   assert.equal('invertPitch' in savedV2, false);
 });
+
+// The opening tier is a starting guess, not a contract with the GPU — the
+// adaptive scaler and the pause menu both override it. What it must not do is
+// open a 2060-class card on the same tier a card twenty times faster gets:
+// measured worst case is 2.89 ms at 1080p on high (19x of headroom before
+// 30 fps) against 1.61 ms on medium (35x). See guessTier's comment.
+test('opening tier separates GPU generations rather than matching on "rtx"', async () => {
+  const { guessTier } = await import('./Settings.js');
+  const desktop = (renderer) => ({
+    getContext: () => ({
+      getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 0x9246 }),
+      getParameter: () => renderer,
+    }),
+  });
+  const savedWindow = globalThis.window;
+  const savedNavigator = globalThis.navigator;
+  globalThis.window = { matchMedia: () => ({ matches: false }), screen: { width: 1920, height: 1080 } };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { maxTouchPoints: 0, hardwareConcurrency: 16 },
+  });
+  try {
+    const at = (name) => guessTier(desktop(name));
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 2080 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce GTX 970, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 3050 Laptop GPU, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, D3D11)'), 'high');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Laptop GPU, D3D11)'), 'high');
+    assert.equal(at('ANGLE (NVIDIA, NVIDIA GeForce RTX 5090, D3D11)'), 'high');
+    assert.equal(at('ANGLE (AMD, AMD Radeon RX 6500 XT, D3D11)'), 'medium');
+    assert.equal(at('ANGLE (AMD, AMD Radeon RX 7900 XTX, D3D11)'), 'high');
+    assert.equal(at('Apple M3 Pro'), 'high');
+    assert.equal(at('ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, D3D11)'), 'medium');
+    // An unreadable string must not fall through to the slowest tier — a masked
+    // renderer is the common case on a perfectly capable desktop.
+    assert.equal(at(''), 'high');
+  } finally {
+    globalThis.window = savedWindow;
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: savedNavigator });
+  }
+});

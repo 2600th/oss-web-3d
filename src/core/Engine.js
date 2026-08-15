@@ -198,18 +198,39 @@ export class Engine {
 
     // A depth-reading effect can be attached after the pass was added. The
     // composer normally allocates its stable depth texture only in addPass(),
-    // so dynamic cloud/shaft hooks must promote it here as well.
-    if (this.radiancePass.needsDepthTexture && this.composer.stableDepthTexture === null) {
+    // so dynamic hooks must promote it here as well.
+    //
+    // The test is "does *any* pass need depth", not "does the radiance pass
+    // need it". It used to name the radiance pass because the clouds lived
+    // there; when they moved out, the output pass still needed depth and no
+    // longer got it, so the stable depth texture stayed null and everything
+    // reading it — soft particles, water refraction — silently lost its input.
+    this.syncDepthTexture();
+  }
+
+  /**
+   * Give the composer a stable depth texture exactly when some pass wants one.
+   *
+   * Called from _buildEffectPass and again every frame, because a pass only
+   * recomputes needsDepthTexture once it has a renderer — at boot it does not,
+   * so the flag read here is still false and a one-shot check misses it
+   * permanently. The scan is nine booleans and it only acts on a transition.
+   */
+  syncDepthTexture() {
+    const wantsDepth = this.composer.passes.some((pass) => pass.needsDepthTexture);
+    const has = this.composer.stableDepthTexture !== null;
+    if (wantsDepth && !has) {
       this.composer.createDepthTexture();
       for (const pass of this.composer.passes) {
         pass.setDepthTexture(this.composer.stableDepthTexture);
       }
-    } else if (
-      this.composer.stableDepthTexture !== null
-      && !this.composer.passes.some((pass) => pass.needsDepthTexture)
-    ) {
-      this.composer.deleteDepthTexture();
+      return true;
     }
+    if (!wantsDepth && has) {
+      this.composer.deleteDepthTexture();
+      return true;
+    }
+    return false;
   }
 
   _initializePostEffect(effect) {
@@ -433,6 +454,16 @@ export class Engine {
   render(dt) {
     this._adapt(dt);
     configureFinalOutput(this.composer.passes, this.finishPass, null);
+    // A pass only recomputes needsDepthTexture inside recompile(), and
+    // _buildEffectPass skips that at boot because the passes have no renderer
+    // yet. So the very first frame is the earliest point the flags can be
+    // trusted; rebuild once there, or every depth-reading effect in the chain
+    // spends the session reading a texture that was never allocated.
+    if (!this._postSettled && this.composer.passes.some((pass) => pass.renderer)) {
+      this._postSettled = true;
+      this._buildEffectPass();
+    }
+    this.syncDepthTexture();
     this.composer.render(dt);
   }
 
