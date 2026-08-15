@@ -11,6 +11,32 @@ import * as cloudModel from '../clouds.glsl.js';
 
 const { CLOUD_CONSTANTS } = cloudModel;
 
+/** Mirrors SEARCH_GROWTH and REFINE_RATIO in integrateCloud. */
+const SEARCH_GROWTH = 1.9;
+const REFINE_RATIO = 0.22;
+
+/**
+ * How far a tier's *search* pass reaches from a horizon ray (tNear = 0).
+ *
+ * This is the worst case that matters for coverage: a ray crossing entirely
+ * clear air spends its whole budget on search strides, and if that cannot cross
+ * the tier's own march range the deck stops partway out and ends on an arc.
+ * A ray that finds cloud spends the remainder refining and terminates on
+ * transmittance instead, so it needs less reach, not more.
+ */
+function searchReach(steps, stepMin, stepAngle, stepMax) {
+  let t = 0;
+  for (let i = 0; i < steps; i++) {
+    t += Math.min(Math.max(t * stepAngle * SEARCH_GROWTH, stepMin), stepMax);
+  }
+  return t;
+}
+
+/** The sampling stride at a given distance — what erosion detail is judged against. */
+function refineStride(t, stepMin, stepAngle, stepMax) {
+  return Math.min(Math.max(t * stepAngle * SEARCH_GROWTH, stepMin), stepMax) * REFINE_RATIO;
+}
+
 function sampleOpeningFrustum(start, heading, rayCount, nearDistance, farDistance) {
   const forward = new THREE.Vector2(-Math.sin(heading), -Math.cos(heading));
   const right = new THREE.Vector2(-forward.y, forward.x);
@@ -287,9 +313,28 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
     env.uniforms.uCloudTop.value >= CLOUD_CONSTANTS.TOP,
     `runtime environment must publish the tested route ceiling: ${env.uniforms.uCloudTop.value}`,
   );
+  /**
+   * Extinction is asserted through the opacity it produces, not as a number.
+   *
+   * The previous band (0.0012-0.0018) is what allowed the deck to disappear:
+   * measured live by rendering the frame with and without the cloud composite,
+   * clouds changed 0.03% of pixels at cruise and needed a 20x gain before they
+   * covered the frame. A ceiling chosen to prevent an opaque wall had instead
+   * made the clouds invisible, and nothing in the suite could tell, because
+   * nothing tested what the number *does*.
+   *
+   * So: a hero core has to actually be a cloud, and a bank shoulder has to
+   * actually transmit. Those are the two failure modes, and both are alpha.
+   */
+  const extinction = env.uniforms.uCloudDensity.value;
+  const alphaOver = (metres, shaped) => 1 - Math.exp(-extinction * shaped * metres);
   assert.ok(
-    env.uniforms.uCloudDensity.value >= 0.0012 && env.uniforms.uCloudDensity.value <= 0.0018,
-    `broad banks must remain translucent while hero cores stay dense: ${env.uniforms.uCloudDensity.value}`,
+    alphaOver(1200, 0.95) >= 0.9,
+    `a hero core must read as solid cloud, not haze: alpha ${alphaOver(1200, 0.95).toFixed(3)}`,
+  );
+  assert.ok(
+    alphaOver(350, 0.30) <= 0.75,
+    `a bank shoulder must still transmit terrain and sky: alpha ${alphaOver(350, 0.3).toFixed(3)}`,
   );
   clouds.dispose();
 }
@@ -330,11 +375,116 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
     /reconstructHistoryNeighbor/,
     'inactive rejected cells must use validated spatial history rather than black pinholes',
   );
+  // Erosion is band-limited by the stride actually being taken, which is the
+  // only honest measure of what frequency a sample can carry. It is no longer
+  // flattened into one scalar here — see the per-octave Nyquist block below.
+  // The near-field stride must never be derived from the march span. That is
+  // the defect that erased the cloud you were flying through: along a
+  // near-horizontal ray inside the deck the span saturates at uMarchRange, and
+  // a span/uSteps floor then made the stride 197 m from the camera outward, so
+  // nothing within two hundred metres of the aircraft was ever sampled.
+  assert.doesNotMatch(
+    CLOUD_MARCH_FRAGMENT,
+    /span\s*\/\s*float\(uSteps\)/,
+    'the near-field stride must not be derived from the total march span',
+  );
   assert.match(
     CLOUD_MARCH_FRAGMENT,
-    /detailAtDistance/,
-    'erosion detail must be band-limited by ray distance and march footprint',
+    /float search = clamp\(t \* uStepAngle \* SEARCH_GROWTH, uStepMin, uStepMax\)/,
+    'the search stride must be distance-proportional and floored on uStepMin alone',
   );
+  assert.match(
+    CLOUD_MARCH_FRAGMENT,
+    /float stepLength = search \* REFINE_RATIO/,
+    'the sampling stride must be a fixed fraction of the search stride',
+  );
+  // Two-level marching: hunt with cheap density, sample with the real thing.
+  assert.match(
+    CLOUD_MARCH_FRAGMENT,
+    /if \(!refining\) \{[\s\S]{0,400}cloudDensityLod\(p, 0\.0\)/,
+    'the search pass must use low-frequency density, not the eroded field',
+  );
+  assert.match(
+    CLOUD_MARCH_FRAGMENT,
+    /t = max\(t - search \* BACKUP, tNear\)/,
+    'a hit must rewind so the lit rim is not stepped over',
+  );
+  assert.match(
+    CLOUD_MARCH_FRAGMENT,
+    /if \(clearRun > CLEAR_RUN_EXIT\) refining = false/,
+    'the march must return to the wide stride once past a cloud',
+  );
+}
+
+// The rewind must be shorter than the clear run that ends refinement, or the
+// march drops back to searching before it ever reaches the boundary it found,
+// and the cloud is detected and abandoned on every approach.
+{
+  const backup = Number(/const float BACKUP = ([\d.]+)/.exec(CLOUD_MARCH_FRAGMENT)[1]);
+  const clearRunExit = Number(/const int CLEAR_RUN_EXIT = (\d+)/.exec(CLOUD_MARCH_FRAGMENT)[1]);
+  const refineStepsToRegainRewind = backup / REFINE_RATIO;
+  assert.ok(
+    clearRunExit > refineStepsToRegainRewind,
+    `clear run ${clearRunExit} must exceed the ${refineStepsToRegainRewind.toFixed(1)} refine steps the rewind costs`,
+  );
+}
+
+// Every erosion octave must be gone before the sampling stride can alias it.
+// This is the contract that stops the cloud flicker, so it is checked against
+// the octave frequencies the shader actually builds rather than against
+// hand-copied numbers.
+{
+  const { CLOUD_NYQUIST } = cloudModel;
+  const expected = (multiplier, octaves) =>
+    1 / (CLOUD_CONSTANTS.DETAIL_SCALE * multiplier * 2.13 ** (octaves - 1)) / 2;
+  assert.ok(Math.abs(CLOUD_NYQUIST.WISPY - expected(1.15, 2)) < 1e-6);
+  assert.ok(Math.abs(CLOUD_NYQUIST.CROWN - expected(1.78, 3)) < 1e-6);
+  assert.ok(
+    CLOUD_NYQUIST.CROWN < CLOUD_NYQUIST.WISPY && CLOUD_NYQUIST.WISPY < CLOUD_NYQUIST.BROAD,
+    'finer octaves must carry tighter stride limits',
+  );
+
+  // The shader must gate each octave on its own limit, and the fade must be
+  // complete by it — a smoothstep that only starts at the Nyquist stride is
+  // still aliasing at the stride where it matters.
+  const source = cloudModel.CLOUD_GLSL;
+  for (const [name, limit] of [['WISPY', CLOUD_NYQUIST.WISPY], ['CROWN', CLOUD_NYQUIST.CROWN]]) {
+    const level = name.toLowerCase() + 'Level';
+    const pattern = new RegExp(`float ${level} = detailLevel \\* \\(1\\.0 - smoothstep\\(([\\d.]+), ([\\d.]+), stride\\)\\)`);
+    const found = pattern.exec(source);
+    assert.ok(found, `${name} octave must be faded against the sampling stride`);
+    assert.ok(
+      Number(found[2]) <= limit + 0.05,
+      `${name} fade completes at ${found[2]} m but aliases beyond ${limit.toFixed(0)} m`,
+    );
+    assert.ok(Number(found[1]) < Number(found[2]), `${name} fade must ramp, not switch`);
+  }
+
+  // And the march must hand the stride over rather than pre-flattening it into
+  // one scalar, which cannot band-limit three octaves at once.
+  assert.match(
+    CLOUD_MARCH_FRAGMENT,
+    /cloudDensityStride\(p, uDetailLevel, stepLength\)/,
+    'the march must pass its stride to the density function',
+  );
+}
+
+// At every tier, the stride the march actually uses where cloud is first met
+// must be fine enough to carry the crown octave near the aircraft. This is the
+// "can you see the cloud you are flying through" contract, in numbers.
+{
+  const { CLOUD_NYQUIST } = cloudModel;
+  const budget = new CloudVolume(environment(), camera());
+  for (const name of ['medium', 'high']) {
+    budget.setQuality({ name });
+    const u = budget._marchUniforms;
+    const near = refineStride(0, u.uStepMin.value, u.uStepAngle.value, u.uStepMax.value);
+    assert.ok(
+      near <= CLOUD_NYQUIST.CROWN,
+      `${name} samples cloud at the camera every ${near.toFixed(0)} m, past the ${CLOUD_NYQUIST.CROWN.toFixed(0)} m crown limit`,
+    );
+  }
+  budget.dispose();
 }
 
 {
@@ -347,24 +497,60 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
   assert.equal(clouds._temporalTargets[0].textures[0].type, THREE.HalfFloatType);
   assert.equal(clouds._marchUniforms.uRadianceRange.value, 1);
   clouds.setQuality({ name: 'high' });
-  assert.deepEqual([clouds._temporalTargets[0].width, clouds._temporalTargets[0].height], [768, 432]);
-  assert.equal(clouds._marchUniforms.uSteps.value, 38);
-  assert.ok(clouds._marchUniforms.uTemporalAlpha.value <= 0.26, 'high tier needs stable active-sample accumulation');
+  assert.deepEqual([clouds._temporalTargets[0].width, clouds._temporalTargets[0].height], [960, 540]);
+  assert.equal(clouds._marchUniforms.uSteps.value, 112);
+  assert.equal(
+    clouds._marchUniforms.uCheckerPeriod.value,
+    1,
+    'high tier must march every pixel every frame; the checkerboard was the stipple',
+  );
   assert.equal(clouds.uniforms.get('uCloudStrength').value, 1);
   clouds.setQuality({ name: 'low' });
   assert.deepEqual(
     [clouds._temporalTargets[0].width, clouds._temporalTargets[0].height],
-    [576, 324],
+    [615, 346],
     'low tier needs enough spatial support to avoid a blotchy one-in-nine veil',
   );
-  assert.equal(clouds._marchUniforms.uCheckerPeriod.value, 2, 'low tier must refresh every cell within four frames');
-  assert.ok(
-    clouds.uniforms.get('uCloudStrength').value <= 0.45,
-    'reduced-resolution low clouds must stay translucent instead of becoming a noisy horizon wall',
-  );
+  assert.equal(clouds._marchUniforms.uCheckerPeriod.value, 1, 'low tier can afford every pixel too now');
   clouds.setQuality({ name: 'phone' });
-  assert.ok(clouds.uniforms.get('uCloudStrength').value <= 0.25);
+  assert.ok(clouds.uniforms.get('uCloudStrength').value <= 0.45);
   clouds.dispose();
+
+  // The march budget must be ordered by tier in every dimension that costs
+  // time, and each tier's stride schedule must be able to cross its own march
+  // range within its own step count — otherwise the deck simply stops partway
+  // out and ends on an arc.
+  {
+    const budget = new CloudVolume(environment(), camera());
+    let previous = null;
+    for (const name of ['phone', 'low', 'medium', 'high']) {
+      budget.setQuality({ name });
+      const u = budget._marchUniforms;
+      const reach = searchReach(
+        u.uSteps.value,
+        u.uStepMin.value,
+        u.uStepAngle.value,
+        u.uStepMax.value,
+      );
+      assert.ok(
+        reach >= u.uMarchRange.value,
+        `${name} steps reach only ${Math.round(reach)} m of its ${u.uMarchRange.value} m march range`,
+      );
+      const current = {
+        steps: u.uSteps.value,
+        light: u.uLightSteps.value,
+        march: u.uMarchRange.value,
+        scale: budget._resolutionScale,
+      };
+      if (previous) {
+        for (const key of Object.keys(current)) {
+          assert.ok(current[key] >= previous[key], `${name} ${key} regressed below the tier below it`);
+        }
+      }
+      previous = current;
+    }
+    budget.dispose();
+  }
 }
 
 {
@@ -377,7 +563,7 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
   assert.ok(clouds.uniforms.has('uCloudWarmup'), 'compositor needs an early-history visibility ramp');
   clouds.update(fakeRenderer, null, 1 / 60);
   const firstFrame = clouds.uniforms.get('uCloudWarmup').value;
-  assert.ok(firstFrame > 0 && firstFrame < 0.25, `first checker frame must remain subdued: ${firstFrame}`);
+  assert.ok(firstFrame > 0 && firstFrame < 0.25, `the deck must not step into view: ${firstFrame}`);
   for (let frame = 1; frame < 7; frame++) clouds.update(fakeRenderer, null, 1 / 60);
   assert.equal(clouds.uniforms.get('uCloudWarmup').value, 1, 'clouds must reach full visibility after history fills');
   clouds.dispose();
@@ -436,15 +622,15 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
   assert.deepEqual(report.resources, [
     {
       name: 'temporal-history',
-      width: 768,
-      height: 432,
+      width: 960,
+      height: 540,
       channels: 4,
       bytesPerChannel: 2,
       layers: 1,
       samples: 1,
       attachments: 2,
       history: 2,
-      bytes: 10616832,
+      bytes: 16588800,
     },
     {
       name: 'cloud-shadow',
@@ -459,8 +645,88 @@ function renderer({ halfFloat = true, throwOnRender = 0 } = {}) {
       bytes: 262144,
     },
   ]);
-  assert.equal(report.totalBytes, 10878976);
+  assert.equal(report.totalBytes, 16850944);
+  // The march resolution rose from 0.40 to 0.50 of the drawing buffer, which is
+  // what the history targets cost. Budget, not an exact figure, because the
+  // scale is a tuning knob: 24 MiB at 1080p high leaves the rest of the
+  // renderer the room it needs on a 6 GB mobile part.
+  assert.ok(report.totalBytes <= 24 * 1024 * 1024, `high cloud memory: ${report.totalBytes}`);
+
+  clouds.setQuality({ name: 'phone' });
+  const phoneReport = clouds.getResourceReport();
+  assert.ok(
+    phoneReport.totalBytes <= 8 * 1024 * 1024,
+    `phone cloud memory: ${phoneReport.totalBytes}`,
+  );
   clouds.dispose();
 }
 
+// The sun march scales with transmittance, and its reach does not.
+//
+// Measured on the reference GPU at the worst-case pose (low in a valley, where
+// the march crosses the deck edge-on): each sun step was about nine per cent of
+// the entire frame, and making the budget follow transmittance took that pose
+// from 17.9 ms to 10.4 ms — a 42% frame saving, which is what moved high tier
+// from failing the 30 fps floor on a 2060-class GPU to clearing it.
+//
+// The reach compensation is the half that is easy to delete by accident. A
+// shorter march reports less cloud between the sample and the sun, so without
+// it the saving arrives as a deck that lights up from the inside. Measured
+// against a full-budget build with the cloud clock pinned, the mean signed
+// difference is -0.03 of 255 — no bias — where dropping the compensation would
+// show up as a systematic positive.
+{
+  const source = CLOUD_MARCH_FRAGMENT;
+  assert.match(
+    source,
+    /int lightBudget = max\(2, int\(ceil\(float\(uLightSteps\) \* \(0\.35 \+ 0\.65 \* transmittance\)\)\)\)/,
+    'the sun march budget must follow transmittance, with a floor that keeps a gradient',
+  );
+  assert.match(
+    source,
+    /float reach = \(pow\(1\.45, float\(budget\)\) - 1\.0\) \/ 0\.45/,
+    'a reduced budget must still cross the slab, or the deck brightens from within',
+  );
+
+  // The compensated first step times the geometric sum is the same distance at
+  // every budget — that invariant is the whole point of the formula.
+  const covered = (budget) => {
+    const reach = (Math.pow(1.45, budget) - 1) / 0.45;
+    const first = 0.13 * (12.02 / reach);
+    return first * reach;
+  };
+  const full = covered(5);
+  for (const budget of [2, 3, 4, 5, 6]) {
+    assert.ok(
+      Math.abs(covered(budget) - full) < 1e-9,
+      `budget ${budget} must cover the same span as the full march`,
+    );
+  }
+}
+
 console.log('cloud R6 projected-frustum and temporal contracts passed');
+
+// The shadow march must sample (x, height, z).
+//
+// vec3(vec2, float) builds (x, z, y), which put the marching height into the z
+// slot and the world z into the height slot — so cloudDensityLod tested a
+// coordinate that ranges over the whole world against a 3.4 km slab, rejected
+// nearly every sample, and returned a shadow map that was uniformly full sun.
+// It went unnoticed while the volumetric march did its own shading; once the
+// billboards took over, this map became the only cloud shadow in the scene.
+{
+  const shadow = cloudRenderer.CLOUD_SHADOW_FRAGMENT;
+  assert.ok(shadow, 'the shadow pass must be inspectable');
+  assert.doesNotMatch(
+    shadow,
+    /cloudDensityLod\(vec3\([a-zA-Z]+ \+ [a-zA-Z]+, y\)/,
+    'the shadow march must not build its sample with vec3(vec2, float)',
+  );
+  assert.match(
+    shadow,
+    /cloudDensityLod\(vec3\(sampleXz\.x, y, sampleXz\.y\)/,
+    'the shadow march must sample (x, height, z)',
+  );
+}
+
+console.log('cloud shadow orientation contract passed');

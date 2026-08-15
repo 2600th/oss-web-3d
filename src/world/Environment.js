@@ -41,6 +41,12 @@ export class Environment {
       uCloudDensity: { value: 0.0042 },
       uCloudWind: { value: new THREE.Vector2(3.8, 1.6) },
       uCloudTime: { value: 0 },
+      // The Perlin-Worley volumes the density field reads. Owned and filled in
+      // by CloudVolume once it has a renderer; declared here because the
+      // terrain spreads these uniforms into its own material and compiles the
+      // same density code for its cloud shadows.
+      uCloudShape: { value: null },
+      uCloudDetail: { value: null },
       uCameraPos: { value: new THREE.Vector3() },
     };
 

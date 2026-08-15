@@ -16,7 +16,12 @@
  */
 
 export const CLOUD_CONSTANTS = {
-  BASE: 4600, // cloud base, metres
+  // Cloud base, metres. Raised from 4600 because at that height the deck sat
+  // among the ridges rather than above them: cloud and snowfield merged into
+  // one white mass and the layer read as more mountain instead of as sky. 5200
+  // clears most of the range while still leaving three kilometres of vertical
+  // room under the 8600 ceiling for towers to build in.
+  BASE: 5200,
   TOP: 8600, // sparse convective crowns rise above the 7.5 km opening route
   COVERAGE_SCALE: 0.00055,
   DETAIL_SCALE: 0.00082,
@@ -25,6 +30,35 @@ export const CLOUD_CONSTANTS = {
   ERODE: 0.42,
   DENSITY: 0.0042,
 };
+
+/**
+ * Half the wavelength of each erosion octave, in metres — the coarsest stride
+ * that can still carry it without aliasing.
+ *
+ * Derived, not chosen. cloudErosionStride builds each octave from DETAIL_SCALE
+ * times its own frequency multiplier, and c_fbm's lacunarity is 2.13, so the
+ * finest frequency an octave contains is scale * multiplier * 2.13^(octaves-1)
+ * and its wavelength is the reciprocal. Sampling coarser than half of that
+ * returns noise instead of shape, which is what the cloud flicker was.
+ */
+const erosionNyquist = (multiplier, octaves) =>
+  1 / (CLOUD_CONSTANTS.DETAIL_SCALE * multiplier * 2.13 ** (octaves - 1)) / 2;
+
+export const CLOUD_NYQUIST = Object.freeze({
+  BROAD: erosionNyquist(0.62, 2),
+  WISPY: erosionNyquist(1.15, 2),
+  CROWN: erosionNyquist(1.78, 3),
+});
+
+/**
+ * World metres one wrap of each noise volume covers.
+ *
+ * Mirrors CLOUD_NOISE in CloudNoise.js, kept here so the shader can be built
+ * without importing the renderer. The detail tile is what the crown Nyquist
+ * limit above is really describing now: 620 m across 32 texels is a 19 m texel,
+ * and the finest Worley octave in it has cells about 39 m wide.
+ */
+export const CLOUD_NOISE_TILE = Object.freeze({ SHAPE: 9000, DETAIL: 620 });
 
 export const OPENING_CLOUD_CORRIDOR = Object.freeze({
   x: 21000,
@@ -113,9 +147,11 @@ export function evaluateCloudColumn(x, z, time = 0, windX = 1, windZ = 0) {
   const az = (z + windZ * time) * 0.00082;
   const billow = noiseCpu(ax * 0.78, az * 0.78, 18.4);
   const towerCell = noiseCpu(ax * 1.62 + 6.2, az * 1.62 - 4.1, 31.7);
-  const crown = noiseCpu(ax * 2.45 - 11.8, az * 2.45 + 7.3, 46.2);
-  const tower = smoothCpu(0.35, 0.68, towerCell) * smoothCpu(0.18, 0.60, billow) * shaped;
-  const topFraction = Math.max(0, Math.min(1, 0.24 + 0.38 * shaped + 0.50 * tower + 0.09 * crown * shaped));
+  const tower = smoothCpu(0.30, 0.62, towerCell) * smoothCpu(0.14, 0.52, billow) * shaped;
+  // Mirrors cloudTypeAt and the height where cloudHeightGradient closes: a flat
+  // sheet stops about a third of the way up the slab, a full tower fills it.
+  const type = Math.max(0, Math.min(1, (0.18 + 0.82 * (tower / Math.max(shaped, 1e-6))) * shaped));
+  const topFraction = mixCpu(0.34, 1.0, type);
   return {
     coverage,
     shaped,
@@ -132,6 +168,8 @@ uniform float uCloudDensity;
 uniform vec2 uCloudWind;
 uniform float uCloudTime;
 uniform float uDetailLevel;
+uniform highp sampler3D uCloudShape;
+uniform highp sampler3D uCloudDetail;
 
 float openingCorridorFactor(vec2 xz) {
   const vec2 origin = vec2(${OPENING_CLOUD_CORRIDOR.x.toFixed(1)}, ${OPENING_CLOUD_CORRIDOR.z.toFixed(1)});
@@ -197,6 +235,11 @@ float c_ridge(float n) {
   return r * r;
 }
 
+/** Rescale a value from one range onto another, clamped. */
+float c_remap(float v, float lo, float hi, float outLo, float outHi) {
+  return outLo + clamp((v - lo) / max(hi - lo, 1e-5), 0.0, 1.0) * (outHi - outLo);
+}
+
 /**
  * Coverage: how much cloud exists over this ground position, 0..1.
  *
@@ -236,30 +279,93 @@ float cloudBaseAt(vec2 xz, float shaped) {
   return uCloudBase + 55.0 + 360.0 * mix(valley, shelf, 0.32) * (0.38 + 0.62 * shaped);
 }
 
-/** Vertical silhouette with a soft variable base and rounded crown. */
+/**
+ * Vertical silhouette with a soft variable base and rounded crown.
+ *
+ * The crown used to start falling at h = 0.46, so more than half of every
+ * cloud's own height was a thinning tail and its visible top sat far below the
+ * top cloudTopAt reported. Flying at deck height therefore put the aircraft in
+ * the wafer rather than among the towers. Holding the body to 0.62 and letting
+ * it fall from there gives a cumulus the flat-ish shoulder and rounded cap it
+ * should have, and makes the top surface mean what it says.
+ */
 float cloudProfile(float h) {
-  float softBase = smoothstep(0.0, 0.13, h);
-  float roundedTop = 1.0 - smoothstep(0.46, 1.0, h);
+  float softBase = smoothstep(0.0, 0.11, h);
+  float roundedTop = 1.0 - smoothstep(0.62, 1.0, h);
   return softBase * roundedTop;
 }
 
 /**
- * Height-aware erosion following the production weather-volume model: broad
- * wispy cuts dominate the lower flanks, while smaller ridges carve cauliflower
- * crowns. detailLevel is a quality control, not a density control, so changing
- * tiers preserves the cloud bank rather than popping it in and out.
+ * Vertical extent by cloud type, over the whole slab.
+ *
+ * This replaced a per-column ceiling, and the reason matters. cloudTopAt gives
+ * each ground position one top height and the density function cut everything
+ * above it; that is a height field, and a height field whose value saturates
+ * wherever coverage saturates produces mesas — flat tops at exactly the ceiling
+ * with vertical walls between them, which is what the deck looked like from
+ * above. Here the slab is a fixed box and the *gradient* decides how much of it
+ * a column fills, so the actual top surface is carved by the 3D shape noise and
+ * varies continuously. Type comes from coverage: thin sheets where there is
+ * little cloud, towering cumulus where there is a lot.
  */
-float cloudErosion(vec3 p, float h, float detailLevel) {
-  vec3 windOffset = vec3(uCloudWind.x, 0.12, uCloudWind.y) * uCloudTime;
-  vec3 q = (p + windOffset) * ${CLOUD_CONSTANTS.DETAIL_SCALE.toFixed(6)};
-  float broad = c_fbm(q * vec3(0.62, 0.44, 0.62), 2);
-  if (detailLevel < 0.30) return broad;
-  float wispy = c_ridge(c_fbm(q * vec3(1.15, 0.30, 1.15) + vec3(-3.2, 8.0, 5.4), 2));
-  if (detailLevel < 0.60) return mix(broad, wispy, detailLevel * 0.72);
-  float crown = c_ridge(c_fbm(q * 1.78 + vec3(7.1, 2.8, -4.6), 3));
+float cloudHeightGradient(float h, float type) {
+  float stratus = c_remap(h, 0.0, 0.09, 0.0, 1.0) * c_remap(h, 0.17, 0.34, 1.0, 0.0);
+  float cumulus = c_remap(h, 0.0, 0.13, 0.0, 1.0) * c_remap(h, 0.58, 1.0, 1.0, 0.0);
+  return mix(stratus, cumulus, clamp(type, 0.0, 1.0));
+}
+
+/**
+ * Cloud type: how tall this column builds, 0 flat sheet to 1 full tower.
+ *
+ * Coverage alone is the wrong input. Tying height to coverage makes every
+ * covered column tower to the ceiling, and a deck where every cloud is three
+ * kilometres tall is a wall, not weather. A separate, sparser tower field keeps
+ * most of the deck low and lets a few build — the range of cloud heights is
+ * what reads as a sky, more than their average.
+ */
+float cloudTypeAt(vec2 xz, float shaped) {
+  vec2 advected = (xz + uCloudWind * uCloudTime) * 0.00082;
+  float billow = c_noise(vec3(advected * 0.78, 18.4));
+  float towerCell = c_noise(vec3(advected * 1.62 + vec2(6.2, -4.1), 31.7));
+  float tower = smoothstep(0.30, 0.62, towerCell) * smoothstep(0.14, 0.52, billow);
+  return clamp((0.18 + 0.82 * tower) * shaped, 0.0, 1.0);
+}
+
+/**
+ * Height-aware erosion, now read from the 3D detail volume.
+ *
+ * Three Worley octaves live in the texture's channels, so this picks the finest
+ * one the sampling stride can carry and blends toward it. Nyquist still governs
+ * which octaves are allowed — a stride coarser than half an octave's wavelength
+ * returns noise instead of shape, which is what the cloud flicker was — but the
+ * octaves themselves now cost one fetch between them instead of three fBm
+ * chains, and hardware trilinear filtering band-limits within an octave for
+ * free. Pass stride 0 to ask for everything.
+ *
+ * The wind offset shears with height: a cloud's top is dragged downwind of its
+ * base, and that lean is a strong part of reading a deck as weather rather than
+ * as geometry.
+ */
+float cloudErosionStride(vec3 p, float h, float detailLevel, float stride) {
+  vec3 windOffset = vec3(uCloudWind.x, 0.0, uCloudWind.y) * uCloudTime * (1.0 + h * 0.35);
+  vec3 q = (p + windOffset) / ${CLOUD_NOISE_TILE.DETAIL.toFixed(1)};
+  vec3 detail = texture(uCloudDetail, q).rgb;
+
+  float wispyLevel = detailLevel * (1.0 - smoothstep(${(CLOUD_NYQUIST.WISPY * 0.55).toFixed(1)}, ${CLOUD_NYQUIST.WISPY.toFixed(1)}, stride));
+  if (wispyLevel < 0.30) return detail.r;
+
+  float crownLevel = detailLevel * (1.0 - smoothstep(${(CLOUD_NYQUIST.CROWN * 0.55).toFixed(1)}, ${CLOUD_NYQUIST.CROWN.toFixed(1)}, stride));
+  if (crownLevel < 0.60) return mix(detail.r, detail.g, wispyLevel * 0.72);
+
+  // Low flanks get the broad cuts, crowns get the fine cauliflower — the same
+  // vertical typing the procedural version had, but now it is a channel pick.
   float verticalType = smoothstep(0.24, 0.78, h);
-  float full = mix(mix(broad, wispy, 0.52), mix(broad, crown, 0.64), verticalType);
-  return mix(broad, full, clamp(detailLevel, 0.0, 1.0));
+  float fine = mix(detail.g, detail.b, verticalType);
+  return mix(mix(detail.r, detail.g, wispyLevel * 0.72), fine, crownLevel);
+}
+
+float cloudErosion(vec3 p, float h, float detailLevel) {
+  return cloudErosionStride(p, h, detailLevel, 0.0);
 }
 
 /**
@@ -276,9 +382,17 @@ float cloudTopAt(vec2 xz, float shaped) {
   float billow = c_noise(vec3(advected * 0.78, 18.4));
   float towerCell = c_noise(vec3(advected * 1.62 + vec2(6.2, -4.1), 31.7));
   float crown = c_noise(vec3(advected * 2.45 + vec2(-11.8, 7.3), 46.2));
-  float tower = smoothstep(0.35, 0.68, towerCell) * smoothstep(0.18, 0.60, billow) * shaped;
+  // Two multiplied smoothsteps with narrow windows almost never both fire, so
+  // towers were rare and the deck read as a sheet. Widening them, and shifting
+  // the height budget from the constant term into the tower term, is what puts
+  // a silhouette on the skyline instead of a horizon line: the *range* of cloud
+  // heights matters more than their average. That range is also what keeps the
+  // opening vista readable — thin cloud now sits well below the route while
+  // hero towers still reach the ceiling, so the banks separate instead of
+  // merging into one shelf.
+  float tower = smoothstep(0.30, 0.62, towerCell) * smoothstep(0.14, 0.52, billow) * shaped;
   float topShape = clamp(
-    0.24 + 0.38 * shaped + 0.50 * tower + 0.09 * crown * shaped,
+    0.08 + 0.34 * shaped + 0.62 * tower + 0.11 * crown * shaped,
     0.0,
     1.0
   );
@@ -292,7 +406,7 @@ float cloudTopAt(vec2 xz, float shaped) {
  * costs a lot and changes almost nothing — a standard economy in production
  * cloud renderers.
  */
-float cloudDensityLod(vec3 p, float detailLevel) {
+float cloudDensityStride(vec3 p, float detailLevel, float stride) {
   if (p.y < uCloudBase || p.y > uCloudTop) return 0.0;
 
   float cov = cloudCoverage(p.xz);
@@ -301,15 +415,32 @@ float cloudDensityLod(vec3 p, float detailLevel) {
 
   float baseHeight = cloudBaseAt(p.xz, shaped);
   if (p.y < baseHeight) return 0.0;
-  float top = cloudTopAt(p.xz, shaped);
-  float h = (p.y - baseHeight) / max(top - baseHeight, 1.0);
+  // Normalised over the slab, not over a per-column top. See cloudHeightGradient.
+  float h = (p.y - baseHeight) / max(uCloudTop - baseHeight, 1.0);
   if (h > 1.0) return 0.0;
 
-  float base = shaped * cloudProfile(h);
+  // Base shape from the Perlin-Worley volume.
+  //
+  // Both remaps below are the published Nubis form and neither is arbitrary.
+  // The first widens the Perlin-Worley channel by the Worley octaves rather
+  // than subtracting them: subtracting exposes the cell boundaries, and Worley
+  // cells are polyhedra, which is why an earlier attempt here produced clouds
+  // with flat vertical faces meeting at angles. The second lets coverage decide
+  // how much of the cloud's own silhouette survives instead of scaling it, so a
+  // thinning bank dissolves into wisps rather than fading uniformly like an
+  // opacity slider.
+  vec3 shapeUvw = (p + vec3(uCloudWind.x, 0.0, uCloudWind.y) * uCloudTime) /
+    ${CLOUD_NOISE_TILE.SHAPE.toFixed(1)};
+  vec4 shapeSample = texture(uCloudShape, shapeUvw);
+  float lobes = shapeSample.g * 0.625 + shapeSample.b * 0.25 + shapeSample.a * 0.125;
+  float silhouette = c_remap(shapeSample.r, lobes - 1.0, 1.0, 0.0, 1.0);
+
+  float type = cloudTypeAt(p.xz, shaped);
+  float base = c_remap(silhouette * cloudHeightGradient(h, type), 1.0 - shaped, 1.0, 0.0, 1.0);
   if (base <= 0.002) return 0.0;
 
   if (detailLevel > 0.0) {
-    float erosion = cloudErosion(p, h, detailLevel);
+    float erosion = cloudErosionStride(p, h, detailLevel, stride);
     // Subtractive, scaled by (1 - base): eats the boundary, spares the core.
     // Weighted toward the top, because that is where a cumulus is lumpy — the
     // base of a deck is comparatively flat.
@@ -318,6 +449,11 @@ float cloudDensityLod(vec3 p, float detailLevel) {
       0.0, 1.0);
   }
   return base * uCloudDensity;
+}
+
+/** Full-detail density. Terrain shadows and the CPU mirror want everything. */
+float cloudDensityLod(vec3 p, float detailLevel) {
+  return cloudDensityStride(p, detailLevel, 0.0);
 }
 
 // Backward-compatible shared contract used by terrain materials. The visible
