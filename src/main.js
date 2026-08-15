@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { inject } from '@vercel/analytics';
 import { Engine } from './core/Engine.js';
 import { Settings, guessTier, isTouchDevice } from './core/Settings.js';
 import { Input } from './core/Input.js';
@@ -14,6 +15,9 @@ import { Game } from './game/Game.js';
 import { configureTerrain } from './world/Terrain.js';
 import { terrainHeight } from './world/heightfield.js';
 import { TERRAIN_NOISE_GLSL } from './world/terrainNoise.glsl.js';
+
+// Initialize Vercel Web Analytics
+inject();
 
 /**
  * Diagnostic log, installed before anything else runs.
