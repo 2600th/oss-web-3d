@@ -517,7 +517,11 @@ export class Game {
     this._disposeControlLifecycle();
     this._onControlBlur = () => this._resetFlightControls();
     this._onControlVisibility = () => {
-      if (visibilityTarget?.hidden) this._resetFlightControls();
+      const hidden = Boolean(visibilityTarget?.hidden);
+      if (hidden) this._resetFlightControls();
+      // The frame loop stops when the tab hides, so every continuous audio bed
+      // would otherwise hold its last gain forever.
+      this.audio?.setHidden(hidden);
     };
     if (target?.addEventListener) {
       this._controlLifecycleTarget = target;

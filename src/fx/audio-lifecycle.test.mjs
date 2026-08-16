@@ -393,3 +393,34 @@ const flying = (extra = {}) => ({
 }
 
 console.log('audio lifecycle contracts passed');
+
+{
+  // requestAnimationFrame stops when the tab hides, so update() stops and every
+  // continuous bed holds its last gain. Backgrounding at cruise left a jet at
+  // full power in a tab nobody was watching.
+  const scheduled = [];
+  const audio = Object.create(Audio.prototype);
+  audio.ready = true;
+  audio.settings = { masterVolume: 0.8 };
+  audio.ctx = { currentTime: 4 };
+  audio.master = {
+    gain: {
+      cancelScheduledValues() {},
+      setTargetAtTime(value) { scheduled.push(value); },
+    },
+  };
+
+  audio.setVolume(0.7);
+  assert.deepEqual(scheduled, [0.7], 'a visible tab takes the requested volume');
+
+  audio.setHidden(true);
+  assert.equal(scheduled.at(-1), 0, 'hiding the tab silences the master bus');
+
+  audio.setVolume(0.5);
+  assert.equal(scheduled.at(-1), 0, 'a volume change while hidden must not unmute the tab');
+
+  audio.setHidden(false);
+  assert.equal(scheduled.at(-1), 0.5, 'returning restores the most recent requested volume');
+}
+
+console.log('audio visibility contracts passed');

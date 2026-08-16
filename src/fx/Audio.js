@@ -312,7 +312,29 @@ export class Audio {
 
   setVolume(v) {
     if (!this.ready) return;
+    this._volume = v;
+    if (this._hidden) return;
     this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  }
+
+  /**
+   * Silence everything while the tab is hidden.
+   *
+   * update() is driven by requestAnimationFrame, which stops when the tab goes
+   * away — so the engine, reheat and airflow beds hold whatever gain they had
+   * at that instant, indefinitely. Backgrounding at cruise left a jet running
+   * at full power in a tab nobody was looking at.
+   *
+   * Ducking the master rather than suspending the context keeps the music
+   * scheduler's lookahead intact, so a returning player does not land in the
+   * middle of a bar that was booked before they left.
+   */
+  setHidden(hidden) {
+    this._hidden = Boolean(hidden);
+    if (!this.ready) return;
+    const target = this._hidden ? 0 : (this._volume ?? this.settings.masterVolume ?? 0.8);
+    this.master.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.master.gain.setTargetAtTime(target, this.ctx.currentTime, 0.06);
   }
 
   /**
