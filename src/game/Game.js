@@ -20,6 +20,7 @@ import { NavigationHintTracker } from './NavigationHint.js';
 import { Leaderboard } from './Leaderboard.js';
 import { terrainVisibility } from './TerrainVisibility.js';
 import { resolveSeed, sortieLabel, sortieParams } from './sortieParams.js';
+import { ACQUISITION_SCORE } from './acquisition.js';
 import { acceptsLaunchKey } from './sortieState.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
@@ -939,6 +940,14 @@ export class Game {
       if (post.captured) continue;
       const ev = this.recon.evaluate(post, flightState);
       if (!ev.inFrame) continue;
+      // First unobstructed sighting confirms the position, and the HUD switches
+      // from a sector and a range band to the precise solution. See
+      // acquisition.js — the briefing's "positions are unconfirmed" was never
+      // true of the instrument.
+      if (!post.acquired && ev.visibility > 0 && ev.score >= ACQUISITION_SCORE) {
+        post.acquired = true;
+        this.screens.showNotice?.(`${post.callsign} ACQUIRED — POSITION CONFIRMED`);
+      }
       if (!best || ev.score > best.score) best = ev;
     }
     // Fall back to the steering target so the overlay can explain itself even

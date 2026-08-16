@@ -2434,3 +2434,12 @@ input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .agl-readout { transition: none; }
 }
+
+/* An approximate cue reads as an estimate, not an instrument reading: the
+   position has not been seen yet, and the HUD should not pretend otherwise. */
+.target .range.approximate,
+.target .bearing.approximate {
+  font-style: italic;
+  opacity: 0.82;
+  letter-spacing: 0.14em;
+}

@@ -1,5 +1,6 @@
 import { CAPTURE_THRESHOLD, gradeFor, ZOOM_STEPS, apertureFor } from '../game/ReconCamera.js';
 import { NavigationCue } from './NavigationCue.js';
+import { targetCue } from '../game/acquisition.js';
 
 /**
  * In-flight instrumentation and the photography overlay.
@@ -494,18 +495,24 @@ export class Hud {
 
     if (s.target) {
       set(this.targetName, s.target.callsign);
-      set(
-        this.targetRange,
-        s.targetRange > 1000
-          ? `${(s.targetRange / 1000).toFixed(1)} KM`
-          : `${Math.round(s.targetRange)} M`,
-      );
-      set(this.targetBearing, `BRG ${String(Math.round(s.targetBearing)).padStart(3, '0')}°`);
+      // Sector and range band until the position has actually been seen; the
+      // precise solution after that. See acquisition.js.
+      const cue = targetCue({
+        acquired: Boolean(s.target.acquired),
+        bearingDeg: s.targetBearing,
+        rangeMetres: s.targetRange,
+      });
+      set(this.targetRange, cue.range);
+      set(this.targetBearing, cue.bearing);
+      toggle(this.targetRange, 'approximate', !cue.precise);
+      toggle(this.targetBearing, 'approximate', !cue.precise);
       toggle(this.targetName, 'complete', false);
     } else {
       set(this.targetName, 'ALL OBJECTIVES');
       set(this.targetRange, 'COMPLETE');
       set(this.targetBearing, 'RETURN TO BASE');
+      toggle(this.targetRange, 'approximate', false);
+      toggle(this.targetBearing, 'approximate', false);
       toggle(this.targetName, 'complete', true);
     }
 

@@ -377,6 +377,11 @@ export class ObservationPost {
     this.callsign = POST_NAMES[index % POST_NAMES.length];
     this.position = position.clone();
     this.captured = false;
+    // Set the first time the pilot has this position in frame and unobstructed.
+    // Until then the HUD gives a sector and a range band rather than an exact
+    // solution, because the briefing says these positions are unconfirmed and
+    // the whole point of how the camp is built is that it can be found by eye.
+    this.acquired = false;
     this.bestScore = 0;
     this.photo = null;
 
