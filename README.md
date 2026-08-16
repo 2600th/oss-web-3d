@@ -83,6 +83,13 @@ one you last used.
 | `Esc` | Pause |
 | `` ` `` | Diagnostics panel (frame rate, render scale, detected tier) |
 
+On a touch device the left half of the screen below the instruments is a virtual
+stick, and every action sits in one column against the right edge: **BOOST** at
+the thumb, **RECON** above it. Opening the optic hands Recon the bottom slot and
+stacks **SHOOT** and the **−** / **+** zoom pair above it, so the button you are
+about to press is always in the same place. The layout has portrait and landscape
+breakpoints and honours `env(safe-area-inset-*)`.
+
 ![Sortie briefing, named by its seed](docs/screenshots/02-briefing.jpg)
 
 ---
@@ -320,15 +327,16 @@ Tests are plain `node:test` suites next to the code they cover:
 node --test "src/**/*.test.mjs"
 ```
 
-254 tests currently pass, alongside `npm run check` and `npm run build`.
+271 tests currently pass, alongside `npm run check` and `npm run build`.
 
 A sortie is described entirely by one seed: where in the world it happens, the
 sun elevation and azimuth, and the cloud coverage. Everyone flying on a given
 UTC day gets the same one, which is what makes the fastest-sortie board
 comparable. `?seed=N` pins a specific sortie for sharing or debugging.
 
-A runtime harness is exposed on `window` in every build, which is how the
-screenshots above were captured:
+A development harness is exposed on `window` under `npm run dev`, which is how
+the screenshots above were captured. It is inside `if (import.meta.env.DEV)` and
+does not ship — none of these names appear anywhere in `dist/`:
 
 | Hook | Purpose |
 | --- | --- |
@@ -347,6 +355,44 @@ screenshots above were captured:
 ---
 
 ## Changelog
+
+### August 2026 — the touch interface
+
+Reported from an iPhone, and all one defect: the phone layout stated its geometry
+five times in five places and the copies had drifted apart.
+
+**One action column.** Boost was 96×58 at one inset, Recon 84×46 at another,
+Shoot 84×46 at a third, and the zoom buttons were 172px above the shutter,
+floating unattached in the middle of the photograph. They are now one rail
+declared once — one width, one right edge, one pitch — and each button names a
+whole slot. The zoom pair splits a single slot, so the column has one left edge
+from top to bottom.
+
+**The optic tells the truth about where to aim.** `ReconCamera` scores framing as
+`1 − hypot(ndc)/0.72`, so the best photograph is made on the optical axis — the
+centre of the viewport, which is where the reticle is drawn. The phone gate had
+independent top and bottom insets of 18% and 36%, putting the reticle 62px below
+the middle of its own frame. There is one inset now and the two cannot disagree.
+The quality bar and exposure counter moved above the gate to pay for it: a
+phone's lower third is the stick field and the action column, and a gate low
+enough to leave a clear band under it would be about 60px tall.
+
+**The instruments are a pair again.** The airspeed tape sat against the bezel
+while the altitude tape sat 92px inboard, and the readouts were sized to their
+own minimum rather than to the tape, so a five-figure altitude overhung it. Both
+now take one inset, the readouts are the tape's width, and the radar altimeter
+stacks above the altitude tape instead of overflowing its plate at both ends.
+
+**The portrait breakpoint moved from 700px to 880px**, because the layout it
+replaces stops working at about 836px — which is most large phones once the
+browser chrome is hidden, and all of them installed to the home screen.
+
+The layout tests are why none of this was caught: they hardcoded every rectangle
+and asserted only 8px separations, so a scattered layout passed cleanly. They now
+derive from the same tokens the stylesheet uses and check alignment as well as
+clearance, across six portrait sizes and three landscape ones, in both control
+modes. That rewrite immediately found a second bug — in landscape Direct mode the
+throttle strip ran straight through the altitude tape.
 
 ### August 2026 — audit remediation
 
