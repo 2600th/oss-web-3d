@@ -328,8 +328,13 @@ export class Aircraft {
       depthTest: true,
       toneMapped: false,
     });
+    // TorusGeometry is already built in the XY plane, revolving about Z — which
+    // is the exhaust axis, so the ring encircles the nozzle as authored. It used
+    // to carry a rotateX(PI/2) borrowed from plume() above, where the rotation
+    // *is* needed because CylinderGeometry's axis is Y. On a torus it tipped the
+    // ring a quarter turn onto the Y axis, so the burner wore a flat horizontal
+    // halo instead of a ring around the jet pipe.
     this.nozzleGlow = new THREE.Mesh(new THREE.TorusGeometry(0.43, 0.055, 8, 24), nozzleMaterial);
-    this.nozzleGlow.rotateX(Math.PI / 2);
     this.nozzleGlow.position.z = 0.03;
     this.exhaust.add(this.nozzleGlow);
 

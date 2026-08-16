@@ -118,4 +118,24 @@ console.log('exhaust plume contracts passed');
   );
 }
 
+{
+  // The nozzle ring encircles the jet pipe, so its axis is the exhaust axis.
+  //
+  // TorusGeometry is authored in the XY plane revolving about Z, which is
+  // already correct here. It used to carry a rotateX(PI/2) copied from the
+  // plume frusta — where the rotation is needed, because CylinderGeometry's
+  // axis is Y — and that quarter turn laid the ring flat, so the afterburner
+  // wore a horizontal halo instead of a ring around the nozzle.
+  const start = source.indexOf('this.nozzleGlow = new THREE.Mesh');
+  const end = source.indexOf('this.exhaust.add(this.nozzleGlow)', start);
+  assert.ok(start >= 0 && end > start, 'nozzle glow construction is discoverable');
+  const block = source.slice(start, end);
+  assert.doesNotMatch(
+    block,
+    /nozzleGlow\.rotate/,
+    'the nozzle ring must not be rotated off the exhaust axis',
+  );
+  assert.match(block, /TorusGeometry/, 'the ring is still a torus');
+}
+
 console.log('exhaust ownership contracts passed');
