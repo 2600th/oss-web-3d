@@ -449,16 +449,34 @@ export class ReconCamera {
   }
 }
 
+/**
+ * Grade bands.
+ *
+ * These were 0.78 / 0.62 / 0.46 / 0.25 against a score that a naive scripted
+ * approach already drove to 0.983 — three of its four terms pinned at exactly
+ * 1.0 — so EXCELLENT was not a judgement, it was the default. The shipped
+ * record card showed four of five plates excellent for exactly that reason.
+ *
+ * With the tightened terms and the energy term added, a well-flown pass lands
+ * around 0.95 and the same framing flown high and slow lands around 0.80. The
+ * top band now sits between those two, so the grade finally distinguishes a
+ * photograph taken on a proper run from one taken while loitering.
+ */
 export function gradeFor(score) {
-  if (score >= 0.78) return 'EXCELLENT';
-  if (score >= 0.62) return 'GOOD';
-  if (score >= 0.46) return 'USABLE';
-  if (score >= 0.25) return 'POOR';
+  if (score >= 0.88) return 'EXCELLENT';
+  if (score >= 0.72) return 'GOOD';
+  if (score >= 0.52) return 'USABLE';
+  if (score >= 0.30) return 'POOR';
   return 'UNUSABLE';
 }
 
-/** Minimum score that counts an objective as photographed. */
-export const CAPTURE_THRESHOLD = 0.46;
+/**
+ * Minimum score that counts an objective as photographed.
+ *
+ * Held at USABLE, as before — a sortie should not be unwinnable because the
+ * grades got stricter. What changed is what USABLE now means.
+ */
+export const CAPTURE_THRESHOLD = 0.52;
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
