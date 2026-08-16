@@ -27,6 +27,26 @@ import {
 /** performance.now() where it exists; the fallback keeps jsdom-less tests happy. */
 const now = () => (globalThis.performance?.now?.() ?? Date.now());
 
+/**
+ * Crop a record-card plate toward the objective it was taken of.
+ *
+ * A plate is about 200 px wide on the contact sheet, and an observation post at
+ * a kilometre through a 16:9 frame is a handful of pixels — so five photographs
+ * of a camp read as five empty snowfields, and the payoff of the whole sortie is
+ * illegible. The capture records where the objective sat in the frame; this
+ * zooms about that point.
+ *
+ * The zoom is modest and the origin is clamped away from the very edge, because
+ * the plate is meant to read as a developed photograph, not a crop tool.
+ */
+function framePlate(img, shot) {
+  const uv = shot?.targetUv;
+  if (!uv || !Number.isFinite(uv.x) || !Number.isFinite(uv.y)) return;
+  const clamp = (v) => Math.max(0.18, Math.min(0.82, v));
+  img.style.transform = 'scale(1.9)';
+  img.style.transformOrigin = `${(clamp(uv.x) * 100).toFixed(1)}% ${(clamp(uv.y) * 100).toFixed(1)}%`;
+}
+
 const el = (tag, className, parent, text) => {
   const node = document.createElement(tag);
   if (tag === 'button') node.type = 'button';
@@ -998,6 +1018,7 @@ export class Screens {
       const img = el('img', '', window_);
       img.src = shot.dataUrl;
       img.alt = `Reconnaissance photograph of ${post.callsign}`;
+      framePlate(img, shot);
     } else {
       const wait = el('div', 'plate-wet', window_, 'DEVELOPING');
       shot.ready?.then(() => {
@@ -1010,6 +1031,7 @@ export class Screens {
         const img = el('img', '', window_);
         img.src = shot.dataUrl;
         img.alt = `Reconnaissance photograph of ${post.callsign}`;
+        framePlate(img, shot);
       });
     }
 

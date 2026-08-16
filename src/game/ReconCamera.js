@@ -61,6 +61,7 @@ const _toTarget = new THREE.Vector3();
 const _viewDir = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _euler = new THREE.Euler();
+const _capNdc = new THREE.Vector3();
 
 export class ReconCamera {
   constructor(camera) {
@@ -150,6 +151,22 @@ export class ReconCamera {
       this.camera.updateProjectionMatrix();
     }
     this.camera.updateMatrixWorld();
+  }
+
+  /**
+   * Where the objective sat in the captured frame, in [0,1] screen coordinates.
+   *
+   * Computed here from the evaluation's own post rather than read off the _ndc
+   * scratch, which belongs to whichever post evaluate() looked at last.
+   */
+  _targetUv(evaluation) {
+    const aim = evaluation?.post?.aimPoint;
+    if (!aim) return { x: 0.5, y: 0.5 };
+    _capNdc.copy(aim).project(this.camera);
+    return {
+      x: THREE.MathUtils.clamp(_capNdc.x * 0.5 + 0.5, 0, 1),
+      y: THREE.MathUtils.clamp(0.5 - _capNdc.y * 0.5, 0, 1),
+    };
   }
 
   /**
@@ -287,6 +304,13 @@ export class ReconCamera {
       bearing: (((Math.atan2(_viewDir.x, -_viewDir.z) * 180) / Math.PI) + 360) % 360,
       altitude: this.camera.position.y,
       aperture: this.aperture,
+      // Where the objective sat in the frame, in [0,1] screen coordinates.
+      //
+      // On the record card each plate is about 200 px wide, and an observation
+      // post at a kilometre through a 16:9 frame is a handful of pixels — so
+      // five photographs of a camp read as five empty snowfields. The debrief
+      // uses this to crop toward what the sortie was actually for.
+      targetUv: this._targetUv(evaluation),
       timestamp: Date.now(),
     };
     const pixels = new Uint8Array(CAPTURE_W * CAPTURE_H * 4);
