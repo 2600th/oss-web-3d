@@ -100,12 +100,20 @@ const productionProbe = evaluateTerrainMaterial({
 assert.ok(Math.abs(productionProbe.geology - 0.696373584310663) < 1e-12);
 assert.ok(Math.abs(productionProbe.mineral - 0.688093393637056) < 1e-12);
 assert.ok(Math.abs(productionProbe.roughness - 0.6920015234364671) < 1e-12);
+// These moved again with the lighting rebalance. Direct sun went from a 0.22
+// scale (0.33 at uSunIntensity 1.5) to 0.62, the visibility floor from 0.30 to
+// 0.06, the cloud-shadow floor from 0.52 to 0.34, and the fixed per-material sky
+// fill now scales with sun height instead of being constant. Geology, mineral
+// and roughness are untouched above because classification is not lighting.
+//
+// The direction of the change is the point: red rose against blue from 0.52 to
+// 0.63 of the blue channel, which is the measured cyan cast coming out.
 assert.deepEqual(
   productionProbe.litColor.map((value) => Number(value.toFixed(12))),
-  [0.218709580617, 0.282737549407, 0.418527698031],
+  [0.245938590447, 0.292574840545, 0.389641878667],
   'CPU lighting must match the deployed shadow/sun/ambient/specular equation',
 );
-assert.ok(Math.abs(productionProbe.lightingProxy - 0.27892925197264085) < 1e-12);
+assert.ok(Math.abs(productionProbe.lightingProxy - 0.289668213926515) < 1e-12);
 
 // Numeric material contract: broad continuous accumulation, bounded albedo,
 // and no threshold-sized jumps over a 30 m flight-camera step.
@@ -470,3 +478,45 @@ assert.equal((lowActive.match(/terrainSample\(/g) ?? []).length, 2, 'low tier mu
 }
 
 console.log('terrain material numeric and shader contracts passed');
+
+{
+  // Lighting balance. The shipped constants scaled direct sun by 0.22 (0.33 at
+  // uSunIntensity 1.5) while snow carried a flat +vec3(0.185, 0.245, 0.365) of
+  // sky fill on top of atm_skyIrradiance. The blue term therefore matched or
+  // beat the sun on every fragment, which is why measured frame means came back
+  // at 105/133/160 and nothing in a sunlit snowfield ever reached white.
+  const sunHigh = [0.42, 0.72, 0.55];
+  const lit = evaluateTerrainMaterial({
+    x: 21000, z: 6000, height: terrainHeight(21000, 6000), cell: 64, nextCell: 128, morph: 0.46,
+    storedShadow: 1, cloudShadow: 1, sunDirection: sunHigh, viewDirection: [0, 1, 0],
+  });
+  const shadowed = evaluateTerrainMaterial({
+    x: 21000, z: 6000, height: terrainHeight(21000, 6000), cell: 64, nextCell: 128, morph: 0.46,
+    storedShadow: 0, cloudShadow: 1, sunDirection: sunHigh, viewDirection: [0, 1, 0],
+  });
+
+  const stops = Math.log2(lit.lightingProxy / shadowed.lightingProxy);
+  assert.ok(
+    stops > 1.5,
+    `a cast shadow must read as a real shadow: got ${stops.toFixed(2)} stops, want > 1.5. ` +
+    'Floors of 0.30 and 0.42 capped snow shadow contrast near 0.6 EV, which is what made ' +
+    'ridgelines read as smooth clay despite a correct ray-marched shadow bake.',
+  );
+
+  // Sky fill has to fall with the sun, or a low sun leaves the scene lit almost
+  // entirely by blue and the cyan cast survives every other correction.
+  const low = evaluateTerrainMaterial({
+    x: 21000, z: 6000, height: terrainHeight(21000, 6000), cell: 64, nextCell: 128, morph: 0.46,
+    storedShadow: 1, cloudShadow: 1, sunDirection: [0.9, 0.19, 0.39], viewDirection: [0, 1, 0],
+  });
+  const high = evaluateTerrainMaterial({
+    x: 21000, z: 6000, height: terrainHeight(21000, 6000), cell: 64, nextCell: 128, morph: 0.46,
+    storedShadow: 1, cloudShadow: 1, sunDirection: [0.42, 0.9, 0.12], viewDirection: [0, 1, 0],
+  });
+  assert.ok(
+    low.ambientLuma < high.ambientLuma,
+    `sky fill must fall with the sun: low ${low.ambientLuma} should be under high ${high.ambientLuma}`,
+  );
+}
+
+console.log('terrain lighting balance contracts passed');

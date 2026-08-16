@@ -208,6 +208,49 @@ function terrainFrameAtRadius(x, z, cell, radius, focusX, focusZ) {
  */
 const CLASSIFY_LEVEL = 4;
 const CLASSIFY_CELL = 64;
+
+/**
+ * Lighting balance, shared by the shader and its JS mirror.
+ *
+ * The direct scale was 0.22 with a 1.25 ceiling, which at uSunIntensity 1.5 put
+ * the sun at 0.33 — while snow alone carried a flat vec3(0.185, 0.245, 0.365)
+ * of sky fill on top of atm_skyIrradiance. Blue matched or beat the sun on every
+ * fragment, so a sunlit snowfield measured meanRGB 105/133/160 and never reached
+ * white. The shadow floors were the other half: 0.30 on visibility and 0.42 on
+ * the low-tier direct term capped cast-shadow contrast at half a stop, which is
+ * why correct ray-marched shadows still read as smooth clay.
+ *
+ * These are the numbers the tests assert against; change them here, not inline.
+ */
+const DIRECT_SUN_SCALE = 0.62;
+const DIRECT_SUN_CEILING = 2.4;
+const SHADOW_FLOOR = 0.06;
+const CLOUD_SHADOW_FLOOR = 0.34;
+const LOW_TIER_SHADOW_FLOOR = 0.12;
+
+/**
+ * How much sky fill survives where the sun cannot reach.
+ *
+ * Ambient was previously never occluded at all, so a shadowed face still
+ * received the full sky term and cast shadows could not exceed about half a
+ * stop no matter what the direct floors were set to. The baked term is sun
+ * visibility rather than sky visibility, but in terrain with this much relief
+ * the two correlate strongly — ground the sun cannot see is usually ground
+ * inside a valley or behind a ridge, which sees less sky as well. Using it as a
+ * weak occlusion proxy is far closer to right than treating the sky as
+ * unobstructed everywhere.
+ */
+const AMBIENT_OCCLUSION_FLOOR = 0.55;
+
+/**
+ * How much of the fixed per-material sky fill survives at a given sun height.
+ *
+ * The fill used to be constant, so dropping the sun produced a scene lit almost
+ * entirely by blue. Real snow is warm-white in sun and blue only in shadow.
+ */
+function skyFill(sunY) {
+  return 0.35 + 0.65 * clamp01(sunY * 1.6);
+}
 const SLOPE_RADIUS = 96;
 const CURVATURE_RADIUS = 288;
 
@@ -343,11 +386,12 @@ export function evaluateTerrainMaterial({
     const sun = normalize3(sunDirection);
     const ndl = frame.normal[0] * sun[0] + frame.normal[1] * sun[1] + frame.normal[2] * sun[2];
     const wrapped = clamp01(ndl * 0.55 + 0.45) ** 2.1;
-    const direct = wrapped * mix(0.42, 1, clamp01(storedShadow)) * (0.64 + 0.36 * snow);
+    const direct = wrapped * mix(LOW_TIER_SHADOW_FLOOR, 1, clamp01(storedShadow)) * (0.64 + 0.36 * snow);
+    const lowFill = skyFill(sun[1]);
     const ambient = [0.39, 0.42, 0.48].map((value, i) => (
-      value + ([0.32, 0.40, 0.55][i] - value) * snow
+      (value + ([0.32, 0.40, 0.55][i] - value) * snow) * lowFill
     ));
-    const directScale = Math.min(Math.max(sunIntensity, 0) * 0.22, 1.25);
+    const directScale = Math.min(Math.max(sunIntensity, 0) * DIRECT_SUN_SCALE, DIRECT_SUN_CEILING);
     const lit = albedo.map((value, i) => value * (ambient[i] + sunColor[i] * directScale * direct));
     return {
       height,
@@ -413,7 +457,8 @@ export function evaluateTerrainMaterial({
   const specular = 0.04 * rockWeight + 0.025 * scree + 0.42 * ice + 0.12 * snow;
   const sun = normalize3(sunDirection);
   const view = normalize3(viewDirection);
-  const visibility = mix(0.3, 1, clamp01(storedShadow)) * mix(0.52, 1, clamp01(cloudShadow));
+  const visibility = mix(SHADOW_FLOOR, 1, clamp01(storedShadow))
+    * mix(CLOUD_SHADOW_FLOOR, 1, clamp01(cloudShadow));
   const ndl = dot3(frame.normal, sun);
   const wrappedMaterial = snow * 0.18 + ice * 0.1;
   let direct = mix(
@@ -423,14 +468,17 @@ export function evaluateTerrainMaterial({
   ) * visibility;
   direct *= rockWeight * 0.82 + scree * 0.92 + ice * 0.86 + snow;
   const ambientWeight = rockWeight * 0.25 + scree * 0.29 + ice * 0.39 + snow * 0.43;
+  const fill = skyFill(sun[1]);
+  const occlusion = mix(AMBIENT_OCCLUSION_FLOOR, 1, clamp01(storedShadow));
   const ambient = skyIrradiance.map((value, i) => (
-    value * ambientWeight +
-    [0.105, 0.115, 0.135][i] * rockWeight +
-    [0.135, 0.115, 0.095][i] * scree +
-    [0.075, 0.165, 0.275][i] * ice +
-    [0.185, 0.245, 0.365][i] * snow
+    (value * ambientWeight +
+      ([0.105, 0.115, 0.135][i] * rockWeight +
+        [0.135, 0.115, 0.095][i] * scree +
+        [0.075, 0.165, 0.275][i] * ice +
+        [0.185, 0.245, 0.365][i] * snow) * fill) * occlusion
   ));
-  const directScale = Math.min(Math.max(sunIntensity, 0) * 0.22, 1.25);
+  const ambientLuma = ambient[0] * 0.2126 + ambient[1] * 0.7152 + ambient[2] * 0.0722;
+  const directScale = Math.min(Math.max(sunIntensity, 0) * DIRECT_SUN_SCALE, DIRECT_SUN_CEILING);
   const litColor = albedo.map((value, i) => (
     value * (ambient[i] + sunColor[i] * directScale * direct)
   ));
@@ -457,6 +505,7 @@ export function evaluateTerrainMaterial({
     normal: frame.normal,
     litColor,
     lightingProxy,
+    ambientLuma,
     detailWeight: terrainDetailWeight(distance),
     luminance: albedo[0] * 0.2126 + albedo[1] * 0.7152 + albedo[2] * 0.0722,
   };
@@ -674,11 +723,13 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         vec3 rock = mix(vec3(0.060, 0.064, 0.074), vec3(0.190, 0.133, 0.082), geology);
         vec3 albedo = mix(rock, vec3(0.74, 0.79, 0.875), snow);
         float wrapped = pow(clamp(dot(N, uSunDir) * 0.55 + 0.45, 0.0, 1.0), 2.1);
-        float direct = wrapped * mix(0.42, 1.0, stored.a) * mix(0.64, 1.0, snow);
+        float direct = wrapped * mix(${LOW_TIER_SHADOW_FLOOR}, 1.0, stored.a) * mix(0.64, 1.0, snow);
         // Low-tier terrain still needs enough blue-sky fill to keep opposing
-        // ridge faces readable after tone mapping.
-        vec3 ambient = mix(vec3(0.39, 0.42, 0.48), vec3(0.32, 0.40, 0.55), snow);
-        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * 0.22, 1.25) * direct);
+        // ridge faces readable after tone mapping — but it has to fall with the
+        // sun, or a low sun lights the scene almost entirely in blue.
+        float lowFill = 0.35 + 0.65 * clamp(uSunDir.y * 1.6, 0.0, 1.0);
+        vec3 ambient = mix(vec3(0.39, 0.42, 0.48), vec3(0.32, 0.40, 0.55), snow) * lowFill;
+        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * ${DIRECT_SUN_SCALE}, ${DIRECT_SUN_CEILING}) * direct);
       #else
         // Lighting normal, straight from the heightmap.
         //
@@ -801,17 +852,25 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
           float ridge = 1.0 - smoothstep(0.08 + ridgeAA, 0.34 + ridgeAA, abs(fract(sastrugiCoord) - 0.5) * 2.0);
           albedo *= 1.0 + ridge * snow * normalFade * 0.022;
         #endif
-        float visibility = mix(0.30, 1.0, stored.a) * mix(0.52, 1.0, cloudShadowAt(vWorld, uSunDir));
+        float visibility = mix(${SHADOW_FLOOR}, 1.0, stored.a)
+          * mix(${CLOUD_SHADOW_FLOOR}, 1.0, cloudShadowAt(vWorld, uSunDir));
         float ndl = dot(N, uSunDir);
         float wrappedMaterial = snow * 0.18 + ice * 0.10;
         float direct = mix(max(ndl, 0.0), pow(clamp(ndl * 0.5 + 0.5, 0.0, 1.0), 2.7), wrappedMaterial) * visibility;
         direct *= rockWeight * 0.82 + scree * 0.92 + ice * 0.86 + snow;
+        // Fixed sky fill, scaled by sun height. Constant fill meant a low sun
+        // produced a scene lit almost entirely by blue; real snow is warm-white
+        // in sun and blue only where the sun cannot reach it.
+        float fill = 0.35 + 0.65 * clamp(uSunDir.y * 1.6, 0.0, 1.0);
         vec3 ambient = atm_skyIrradiance(N) * (rockWeight * 0.25 + scree * 0.29 + ice * 0.39 + snow * 0.43);
-        ambient += vec3(0.105, 0.115, 0.135) * rockWeight;
-        ambient += vec3(0.135, 0.115, 0.095) * scree;
-        ambient += vec3(0.075, 0.165, 0.275) * ice;
-        ambient += vec3(0.185, 0.245, 0.365) * snow;
-        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * 0.22, 1.25) * direct);
+        ambient += vec3(0.105, 0.115, 0.135) * rockWeight * fill;
+        ambient += vec3(0.135, 0.115, 0.095) * scree * fill;
+        ambient += vec3(0.075, 0.165, 0.275) * ice * fill;
+        ambient += vec3(0.185, 0.245, 0.365) * snow * fill;
+        // Sky fill is occluded too. Leaving it unoccluded capped cast-shadow
+        // contrast near half a stop however deep the direct floors went.
+        ambient *= mix(${AMBIENT_OCCLUSION_FLOOR}, 1.0, stored.a);
+        vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * ${DIRECT_SUN_SCALE}, ${DIRECT_SUN_CEILING}) * direct);
         vec3 H = normalize(uSunDir + V);
         float specPower = mix(24.0, 150.0, 1.0 - roughness);
         float materialGlint = pow(max(dot(N, H), 0.0), specPower) * specularStrength * visibility;

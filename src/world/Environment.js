@@ -11,16 +11,24 @@ import * as THREE from 'three';
  */
 export class Environment {
   constructor() {
-    // Sun elevation ~46 degrees, coming from the south-east.
-    this.sunAzimuth = THREE.MathUtils.degToRad(128);
-    this.sunElevation = THREE.MathUtils.degToRad(46);
+    // Mid-morning rather than late morning, from the south-east.
+    //
+    // 46 degrees was too high for the terrain to show its own relief: the
+    // clipmap bakes a real ray-marched shadow per heightmap texel, and a sun
+    // that steep casts almost nothing for it to record, so ridgelines read as
+    // smooth clay. Dropping it is the single largest visual change available
+    // here and it costs no new rendering work.
+    this.sunAzimuth = THREE.MathUtils.degToRad(122);
+    this.sunElevation = THREE.MathUtils.degToRad(24);
 
     this.sunDir = new THREE.Vector3();
     this._updateSunDir();
 
     this.uniforms = {
       uSunDir: { value: this.sunDir },
-      uSunColor: { value: new THREE.Color(1.0, 0.94, 0.84) },
+      // Warmer, to match the lower sun. Snow lit by a low sun is warm-white;
+      // only its shadows are blue.
+      uSunColor: { value: new THREE.Color(1.0, 0.88, 0.74) },
       // Deep, dark zenith. At 7 km there is a third of the atmosphere overhead
       // and the sky really is close to navy — and without that depth, white
       // cloud over white mountain has nothing to read against.
@@ -57,7 +65,10 @@ export class Environment {
 
     // Cold sky bounce. Snow fields throw a lot of light back up, hence the
     // relatively strong ground colour.
-    this.hemiLight = new THREE.HemisphereLight(0x9dc4ff, 0xcfe0f0, 1.05);
+    // Cut back with the sun. At 1.05 this alone put more blue on the airframe
+    // than the sun put warm light, which is the aircraft-side half of the cyan
+    // cast the terrain shader carried.
+    this.hemiLight = new THREE.HemisphereLight(0x9dc4ff, 0xcfe0f0, 0.62);
   }
 
   _updateSunDir() {
