@@ -1001,16 +1001,42 @@ export class Game {
       this._autoPeak = 0;
     }
 
-    if (!ev || this.recon.shutterCooldown > 0) return;
+    if (this.recon.shutterCooldown > 0) return;
     if (manual) {
-      this._fireShutter(ev);
+      // The manual shutter may re-shoot a position that is already secured.
+      // Auto-capture deliberately will not — captured posts stay out of
+      // _evaluateBest so that flying past a finished site while lining up the
+      // next one cannot steal the overlay — but a pilot who thinks they can do
+      // better than one auto-fired frame should be allowed to try, and
+      // _takePhoto only replaces the plate when the new score actually beats
+      // the stored one.
+      const shot = ev ?? this._evaluateSecured();
+      if (shot) this._fireShutter(shot);
       return;
     }
+    if (!ev) return;
     if (!locked || this._autoDwell < AUTO_CAPTURE_MIN_DWELL) return;
 
     const turnedOver = ev.score <= this._autoPeak - AUTO_CAPTURE_FALLOFF;
     const topped = ev.score >= AUTO_CAPTURE_CEILING;
     if (turnedOver || topped || this._autoDwell >= AUTO_CAPTURE_MAX_DWELL) this._fireShutter(ev);
+  }
+
+  /**
+   * The best framed position among those already secured.
+   *
+   * Only consulted by the manual shutter, so re-shooting stays an explicit act.
+   */
+  _evaluateSecured() {
+    let best = null;
+    const flightState = this._flightStateForScoring();
+    for (const post of this.mission.posts) {
+      if (!post.captured) continue;
+      const ev = this.recon.evaluate(post, flightState);
+      if (!ev.inFrame) continue;
+      if (!best || ev.score > best.score) best = ev;
+    }
+    return best;
   }
 
   _fireShutter(evaluation) {
@@ -1029,11 +1055,18 @@ export class Game {
     this.mission.photosTaken++;
 
     const post = evaluation.post;
-    if (evaluation.score > post.bestScore) {
+    const improved = evaluation.score > post.bestScore;
+    if (improved) {
+      const replacing = post.captured && Boolean(post.photo);
       if (post.photo) this.recon.releaseShot(post.photo);
       post.bestScore = evaluation.score;
       post.photo = shot;
       this.recon.retainShot(shot);
+      // Say so when a re-shoot actually beat the stored plate, or the player
+      // has no way to know whether the second run was worth flying.
+      if (replacing) {
+        this.screens.showNotice?.(`${post.callsign} — IMAGERY IMPROVED`);
+      }
     }
     // Fire the confirmation on the *transition*, not on the state. Testing
     // post.captured after the fact replayed the objective-secured cue on every
