@@ -706,11 +706,21 @@ test('mission restart releases every retained best plate before disposing the ol
   game.launch = () => {};
   let navigationResets = 0;
   game.navigationHint = { reset: () => navigationResets++ };
+  // restart() re-reads the sortie so a tab left open across a UTC day boundary
+  // does not keep flying yesterday's world. A pinned seed re-resolves to itself,
+  // so nothing here should be re-primed.
+  game.sortie = { seed: 4242, origin: { x: 21000, z: 6000 } };
+  let reprimed = 0;
+  game.terrain = { prime: () => reprimed++ };
+  game.environment = { setSun() {}, uniforms: { uCloudCoverage: { value: 0 } } };
+  globalThis.location ??= { search: '?seed=4242' };
 
   game.restart();
   assert.deepEqual(released, photos);
   assert.equal(oldDisposed, true);
   assert.equal(navigationResets, 1);
+  assert.equal(game.sortie.seed, 4242, 'a pinned seed survives a restart');
+  assert.equal(reprimed, 0, 'an unchanged sortie must not re-prime the clipmap');
   game.mission.dispose();
 });
 
