@@ -154,9 +154,14 @@ function frame() {
   engine.timer.update();
   // Bound the step: returning from a background tab hands back a delta of
   // several seconds, which would teleport the aircraft through a mountain.
-  const dt = Math.min(engine.timer.getDelta(), 0.1);
+  const rawDt = engine.timer.getDelta();
+  const dt = Math.min(rawDt, 0.1);
   game.update(dt);
-  engine.render(dt);
+  // The renderer gets both: the clamped step for anything time-integrated, and
+  // the raw one so the adaptive scaler can tell a genuinely slow frame from a
+  // browser that simply did not call us. Clamping before _adapt made its
+  // occlusion guard unreachable.
+  engine.render(dt, rawDt);
 
   if (debug.classList.contains('show')) {
     const f = game.flight;

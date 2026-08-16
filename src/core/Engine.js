@@ -471,8 +471,16 @@ export class Engine {
     }
   }
 
-  render(dt) {
-    this._adapt(dt);
+  /**
+   * @param {number} dt      clamped step, used for anything time-integrated
+   * @param {number} [rawDt] unclamped wall time since the last frame. The
+   *   scaler needs this: the caller clamps `dt` to 0.1 s so a tab switch cannot
+   *   teleport the aircraft through a mountain, and that clamp sat *below*
+   *   `_adapt`'s 0.25 s spike guard, so the guard could never fire and an
+   *   occluded window still dragged render scale to its floor.
+   */
+  render(dt, rawDt = dt) {
+    this._adapt(rawDt);
     configureFinalOutput(this.composer.passes, this.finishPass, null);
     // A pass only recomputes needsDepthTexture inside recompile(), and
     // _buildEffectPass skips that at boot because the passes have no renderer

@@ -105,4 +105,23 @@ test('the floor still leaves a usable share of the pixels', () => {
   assert.ok(share > 0.33, `floor keeps ${(share * 100).toFixed(0)}% of the pixels`);
 });
 
+
+test('render forwards the unclamped frame time to the scaler', () => {
+  // The guard above only works if _adapt actually receives the long sample.
+  // main.js clamps dt to 0.1 s so a tab switch cannot teleport the aircraft
+  // through a mountain, and that clamp used to be applied *before* render() —
+  // so _adapt never saw a value above 0.1 and its 0.25 s spike guard was dead
+  // code. Every test here called _adapt directly, so the suite passed while the
+  // shipped path was broken. This is the case that was missing.
+  const engine = Object.create(Engine.prototype);
+  const seen = [];
+  engine._adapt = (value) => { seen.push(value); };
+  engine.finishPass = {};
+  engine.composer = { passes: [], render() {}, stableDepthTexture: null };
+  engine.syncDepthTexture = () => false;
+  engine._postSettled = true;
+  Engine.prototype.render.call(engine, 0.1, 1.0);
+  assert.deepEqual(seen, [1.0], 'the scaler must see the raw delta, not the simulation clamp');
+});
+
 console.log('adaptive scale contracts passed');
