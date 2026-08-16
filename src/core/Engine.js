@@ -358,8 +358,9 @@ export class Engine {
     setPassEnabled(this.motionPass, desktop && (this.motionEffect.amount ?? amount) > 0);
   }
 
-  setHeatDistortion(amount) {
+  setHeatDistortion(amount, centre = null) {
     if ('amount' in this.heatDistortion) this.heatDistortion.amount = amount;
+    if (centre) this.heatDistortion.setCentre?.(centre.x, centre.y);
     const desktop = this.settings.tier.name === 'medium' || this.settings.tier.name === 'high';
     setPassEnabled(this.heatPass, desktop && (this.heatDistortion.amount ?? amount) > 0);
   }

@@ -21,6 +21,7 @@ import { Leaderboard } from './Leaderboard.js';
 import { terrainVisibility } from './TerrainVisibility.js';
 import { resolveSeed, sortieLabel, sortieParams } from './sortieParams.js';
 import { ACQUISITION_SCORE } from './acquisition.js';
+import { REHEAT_THRESHOLD } from '../flight/burner.js';
 import { acceptsLaunchKey } from './sortieState.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
@@ -78,6 +79,9 @@ const AUTO_CAPTURE_FALLOFF = 0.012;
  * for a seed that somehow resolves to nothing.
  */
 const FALLBACK_ORIGIN = new THREE.Vector3(21000, 0, 6000);
+
+/** Scratch for projecting the nozzle into screen space each frame. */
+const _heatNdc = new THREE.Vector3();
 
 /** Ease with zero first *and* second derivative at both ends, so no visible kick. */
 function smootherstep(t) {
@@ -1236,10 +1240,21 @@ export class Game {
     this.engine.setMotionBlur(motionProfile);
 
     const reheat = this.state === 'flying'
-      ? THREE.MathUtils.clamp((this.flight.throttleSmoothed - 0.84) / 0.16, 0, 1)
+      ? THREE.MathUtils.clamp(
+        (this.flight.throttleSmoothed - REHEAT_THRESHOLD) / (1 - REHEAT_THRESHOLD), 0, 1)
       : 0;
     const crashHeat = this._postCrashImpulse * 0.34 * (this._reducedMotion ? 0.2 : 1);
-    this.engine.setHeatDistortion(Math.min(0.72, reheat * 0.38 + crashHeat));
+    // Project the nozzle so the shimmer sits on the exhaust rather than on a
+    // fixed point in the frame. The airframe can legitimately be absent — a
+    // failed model load is survivable — in which case the effect keeps its
+    // previous centre.
+    let heatCentre = null;
+    const nozzle = this.aircraft?.nozzlePosition;
+    if (nozzle) {
+      _heatNdc.copy(nozzle).project(this.engine.camera);
+      heatCentre = { x: _heatNdc.x * 0.5 + 0.5, y: 0.5 - _heatNdc.y * 0.5 };
+    }
+    this.engine.setHeatDistortion(Math.min(0.72, reheat * 0.38 + crashHeat), heatCentre);
     this.engine.setLensArtifacts(
       0.055 + sunVisibility * 0.12,
       0.055 + sunVisibility * 0.075 + speedMotion * 0.08,
