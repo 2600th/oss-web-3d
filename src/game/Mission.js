@@ -98,9 +98,18 @@ export class Mission {
     this.failReason = reason;
   }
 
-  update(dt, aircraftPosition) {
+  /**
+   * @param {number} dt      wall seconds since the last frame
+   * @param {THREE.Vector3} aircraftPosition
+   * @param {number} [simDt] seconds the flight model actually integrated this
+   *   frame. The fixed-step loop caps at MAX_STEPS and drops the remainder, so
+   *   below about 20 fps the aircraft flies less far than the wall clock says.
+   *   Ranking sorties on wall time made leaderboard entries incomparable across
+   *   hardware — a slower machine covered less ground per recorded second.
+   */
+  update(dt, aircraftPosition, simDt = dt) {
     if (this.state !== 'active') return;
-    this.elapsed += dt;
+    this.elapsed += simDt;
     this.distanceFlown += this._lastPosition.distanceTo(aircraftPosition);
     this._lastPosition.copy(aircraftPosition);
 

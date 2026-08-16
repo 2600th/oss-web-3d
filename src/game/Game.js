@@ -693,9 +693,12 @@ export class Game {
       steps++;
     }
     if (steps === MAX_STEPS) this.accumulator = 0;
+    // What the flight model actually integrated, which is less than `dt` once
+    // the step cap bites. The sortie clock is ranked, so it follows this.
+    const simDt = steps * PHYSICS_STEP;
 
     this.aircraft.update(dt, flight);
-    this.mission.update(dt, flight.position);
+    this.mission.update(dt, flight.position, simDt);
 
     // Terrain proximity, measured against the ground actually ahead.
     //

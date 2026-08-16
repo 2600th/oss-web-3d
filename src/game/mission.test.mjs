@@ -48,3 +48,29 @@ for (const [x, z] of [[21000, 6000], [-180000, 220000], [420000, -390000], [0, 0
 }
 
 console.log('mission target identity contracts passed');
+
+{
+  // The sortie clock is what the leaderboard ranks, so it must count time the
+  // flight model actually integrated. The fixed-step loop caps at MAX_STEPS and
+  // discards the remainder, so below ~20 fps the aircraft flies less far than
+  // the wall clock says and two machines produce incomparable times.
+  const mission = Object.create(Mission.prototype);
+  mission.state = 'active';
+  mission.elapsed = 0;
+  mission.distanceFlown = 0;
+  mission.bestApproach = Infinity;
+  mission.posts = [];
+  mission._lastPosition = new THREE.Vector3();
+
+  const at = new THREE.Vector3(0, 0, 0);
+  mission.update(0.5, at, 0.05);
+  assert.equal(mission.elapsed, 0.05, 'the clock counts simulated seconds, not the 0.5 s the browser took');
+
+  mission.update(1 / 60, at);
+  assert.ok(
+    Math.abs(mission.elapsed - (0.05 + 1 / 60)) < 1e-9,
+    'omitting the simulated delta keeps the old wall-clock behaviour for callers that do not track it',
+  );
+}
+
+console.log('mission clock contracts passed');
