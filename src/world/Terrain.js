@@ -448,6 +448,9 @@ export class Terrain {
         uCenters: { value: this.centerArray },
         uCells: { value: this.cells },
         uDetailFade: { value: 1.0 },
+        // tan(defaultHalfFov) / tan(currentHalfFov); see the detail fade in
+        // material.glsl.js. 1 unzoomed, about 4 in the recon optic.
+        uZoomScale: { value: 1.0 },
       },
       vertexShader: buildTerrainVertexShader({
         levels: TERRAIN_LEVELS,
@@ -688,6 +691,22 @@ export class Terrain {
     }
 
     return { level, samples: n, maxError, meanError: sumError / n, worst };
+  }
+
+  /**
+   * How much narrower the current field of view is than the default.
+   *
+   * Procedural surface detail fades on world distance, which is right for the
+   * chase camera and wrong for the recon optic: at a quarter of the field, a
+   * ridge 4 km away subtends what a ridge 1 km away does, and fading its detail
+   * anyway made the one photograph the sortie exists to take the least detailed
+   * view in the game. Clamped, because the geometric clipmap resolution is
+   * fixed at construction and there is no point promising detail the mesh
+   * cannot carry.
+   */
+  setZoomScale(scale) {
+    const clamped = Math.min(4, Math.max(1, Number.isFinite(scale) ? scale : 1));
+    this.material.uniforms.uZoomScale.value = clamped;
   }
 
   setQuality(tier) {

@@ -602,6 +602,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
     uniform vec2 uCenters[${levels}];
     uniform float uCells[${levels}];
     uniform float uDetailFade;
+    uniform float uZoomScale;
     uniform float uTime;
     uniform vec2 uWind;
     uniform vec3 uCameraPos;
@@ -818,7 +819,13 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
 
         // Anti-aliased continuous strata give the dark shale and warm granite
         // directional structure without discrete contour lines or point noise.
-        float detailDistanceFade = 1.0 - smoothstep(4800.0, 7200.0, distanceToCamera);
+        // Detail fades by *apparent* size, not world distance. The recon optic
+        // narrows to a quarter of the normal field, so ground 4 km away fills
+        // the frame the way ground 1 km away does unzoomed — and fading its
+        // detail on a fixed world distance is what left the payoff shot, the
+        // one image the whole sortie exists to produce, looking flatter than
+        // any view the player gets for free.
+        float detailDistanceFade = 1.0 - smoothstep(4800.0 * uZoomScale, 7200.0 * uZoomScale, distanceToCamera);
         float strataCoord = surfaceHeight * 0.0105 + dot(vWorld.xz, vec2(0.0027, 0.0014)) + geology * 2.7;
         float strataFilter = 1.0 - smoothstep(0.18, 0.88, fwidth(strataCoord));
         float strata = sin(strataCoord) * strataFilter * detailDistanceFade;

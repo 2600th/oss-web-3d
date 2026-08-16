@@ -772,6 +772,11 @@ export class Game {
 
     this._updateCameraRig(dt, flight);
 
+    // Surface detail has to survive the optic. See Terrain.setZoomScale.
+    const halfFov = THREE.MathUtils.degToRad(this.engine.camera.fov) * 0.5;
+    this.terrain.setZoomScale(
+      Math.tan(THREE.MathUtils.degToRad(this.chase.baseFov) * 0.5) / Math.tan(halfFov),
+    );
     this.terrain.update(this._terrainFocus(flight), this.settings.tier.terrainBudget);
     // aircraft.update ran above, so the nozzle it publishes is this frame's.
     this.fx.update(dt, flight, this.engine.camera.position, this.engine.camera, this.aircraft);

@@ -486,8 +486,10 @@ test('Tab remains the target-selection authority consumed by the flight update',
     },
     accumulator: 0,
     aircraft: { update() {} },
-    chase: { update() {} },
-    terrain: { update() {} },
+    // baseFov and setZoomScale: surface detail fades on world distance, so the
+    // flight update tells the terrain how much narrower the optic currently is.
+    chase: { update() {}, baseFov: 58 },
+    terrain: { update() {}, setZoomScale() {} },
     fx: { update() {} },
     audio: { update() {}, setTension() {} },
     settings: { tier: { terrainBudget: 1 } },
