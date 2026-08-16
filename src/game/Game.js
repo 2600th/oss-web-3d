@@ -511,10 +511,21 @@ export class Game {
     this.settings.setTier(tier);
     this.engine.applySettings();
     // The new tier's post chain may want depth where the old one did not, or
-    // the other way round; either way the scene's own need is unchanged and has
-    // to be re-asserted before anything reads the texture.
+    // the other way round; either way the scene's own need is re-asserted here.
+    //
+    // Order matters when the need is going away: syncDepthTexture() frees the
+    // texture during the next render(), which lands after this frame's
+    // _syncSceneDepth(), so the FX materials would spend a frame sampling a
+    // disposed texture. Unbinding first makes that impossible.
+    const wantsDepth = this.settings.tier.name !== 'phone';
+    if (!wantsDepth) {
+      this._sceneDepthTexture = null;
+      this.cloudField.setDepthTexture(null);
+      this.clouds.setDepthTexture(null);
+      setSceneDepth(null, this._waterDrawingSize.x, this._waterDrawingSize.y);
+    }
     this._applySceneDepthRequirement();
-    this._syncSceneDepth();
+    if (wantsDepth) this._syncSceneDepth();
     if (this.settings.tier.terrainRes !== previousResolution) {
       this._rebuildTerrain(this.settings.tier.terrainRes, previousResolution);
     } else {

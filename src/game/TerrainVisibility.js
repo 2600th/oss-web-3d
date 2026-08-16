@@ -41,9 +41,13 @@ export function terrainVisibility(from, to, heightAt = terrainHeight) {
   // Sample spacing is held near constant in metres rather than splitting every
   // sight line into the same 30 pieces. A fixed count meant spacing grew with
   // range — 200 m apart at 6 km — so the march stepped clean over any ridge
-  // narrower than that and reported a blocked objective as clear. Only one or
-  // two of these run per frame (the current target, and posts actually in the
-  // recon frame), so the extra samples are affordable.
+  // narrower than that and reported a blocked objective as clear.
+  //
+  // Cost: up to one call per uncaptured post that is actually inside the recon
+  // frame — five in the worst case, and only while the optic is up — plus one
+  // for the HUD's current target. At the 128-sample cap that is roughly three
+  // times the old fixed 31, against a correctness bug that awarded impossible
+  // photographs, so the trade is worth making; but it is not "one or two".
   const steps = Math.min(128, Math.max(30, Math.ceil((span * (last - first)) / SAMPLE_SPACING)));
   let clearance = Infinity;
 

@@ -131,8 +131,11 @@ const lookFragment = /* glsl */ `
     c = mix(vec3(luma), c, uSaturation);
 
     // A small toe lift keeps the deepest shadow from clipping to pure black now
-    // that terrain shadows are genuinely dark.
-    c = c * (1.0 - uLift) + uLift * c * c * (3.0 - 2.0 * c);
+    // that terrain shadows are genuinely dark. This was written as a mix toward
+    // smoothstep(c), which is an S-curve: it *darkened* the bottom end, exactly
+    // the opposite of the stated intent, and compounded the deeper shadow
+    // floors rather than protecting them.
+    c += uLift * 0.06 * (1.0 - c);
 
     outputColor = vec4(clamp(c, 0.0, 1.0), inputColor.a);
   }
