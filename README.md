@@ -285,6 +285,11 @@ node --test "src/**/*.test.mjs"
 
 250 tests currently pass, alongside `npm run check` and `npm run build`.
 
+A sortie is described entirely by one seed: where in the world it happens, the
+sun elevation and azimuth, and the cloud coverage. Everyone flying on a given
+UTC day gets the same one, which is what makes the fastest-sortie board
+comparable. `?seed=N` pins a specific sortie for sharing or debugging.
+
 A runtime harness is exposed on `window` in every build, which is how the
 screenshots above were captured:
 

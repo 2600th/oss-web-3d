@@ -534,8 +534,18 @@ body {
   /* Sunlit snow is the brightest background a HUD can sit on, and thin
      instrument-green type disappears against it. A tight dark halo restores
      contrast everywhere without resorting to opaque panels, which would block
-     the view the pilot is trying to read the ground through. */
-  text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
+     the view the pilot is trying to read the ground through.
+
+     The third, wider stop was added after the lighting rebalance: with snow no
+     longer held down by a blue cast and the frame now reaching much brighter
+     highlights, the 3 px halo alone stopped carrying the dimmest elements —
+     the objective count and the tape labels, which use --instrument-dim. It is
+     soft and low-opacity on purpose, so it reads as depth rather than as an
+     outline. */
+  text-shadow:
+    0 0 3px rgba(3, 6, 10, 0.95),
+    0 1px 2px rgba(3, 6, 10, 0.8),
+    0 0 9px rgba(3, 6, 10, 0.55);
 }
 #hud.show {
   opacity: 1;
