@@ -59,11 +59,13 @@ export const ATM = {
   // separation for the bloom and flare to key off.
   sunDiscRadiance: 2200.0,
 
-  // Local environment model for atm_skyIrradiance. A surface in this world is
-  // never alone under an empty sky: it sits inside a bowl of high-albedo snow
+  // SPECIFIED BUT NOT WIRED. Neither of the two constants below is read by
+  // atm_skyIrradiance or by any other shader — grep returns only this file. The
+  // model they describe is sound and worth building: a surface in this world is
+  // never alone under an empty sky, it sits inside a bowl of high-albedo snow
   // and rock, and the bounce off that bowl is most of the light a shadowed
-  // slope receives. Ignoring it is what makes procedural snow shadows read as
-  // dead grey holes.
+  // slope receives. Until it is wired, shadow fill comes from the sky term and
+  // the occlusion factor in terrain/material.glsl.js instead.
   terrainAlbedo: [0.6, 0.62, 0.66],
   // Cosine-weighted fraction of the hemisphere occupied by terrain for an
   // up-facing normal. Mountains, not a plain, hence 0.22 rather than ~0.05.

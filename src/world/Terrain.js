@@ -15,7 +15,9 @@ import {
  * LEVELS concentric square grids centred on the aircraft. Level 0 is a solid
  * block; levels 1..N-1 are hollow rings whose hole is exactly the footprint of
  * the level inside them. Each level's cell size doubles, so the whole stack is
- * a fixed 250k triangles regardless of how far you can see.
+ * a fixed triangle count regardless of how far you can see — about 1.03M on
+ * the desktop default and 585k on medium, measured with __audit(). (The figure
+ * here read 250k, which was four times under what the high tier submits.)
  *
  * Elevation
  * ---------

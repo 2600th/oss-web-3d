@@ -78,6 +78,8 @@ export const AIRCRAFT = {
   yawAgility: 2.8,
 
   // Aerodynamic damping — the airframe resists rotation more at speed.
+  // UNUSED. Kept only so the tuning table reads completely; the model damps
+  // rates through the exponential blends in update(), not through this.
   rateDamping: 2.1,
 
   stallSpeed: 92,
