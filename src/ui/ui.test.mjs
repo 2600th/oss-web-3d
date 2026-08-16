@@ -885,3 +885,25 @@ test('a pointer press on the layer opens the gate, and the prompt click does too
     assert.equal(screensInstance.t1.style.opacity, '1', `${release} must start the cards`);
   }
 });
+
+{
+  // The tape tick pool was a fixed 26. ALT steps 250 m at 0.062 px/m, so 26
+  // ticks span about 400 px and the altitude tape ran out of graduations on any
+  // viewport taller than roughly 1000 px — the tape simply stopped part way up.
+  const neededFor = (height, step, pixelsPerUnit) =>
+    Math.ceil(height / (step * pixelsPerUnit)) + 2;
+
+  assert.ok(neededFor(320, 250, 0.062) <= 26, 'the original 26 was right for a short tape');
+  assert.ok(neededFor(1200, 250, 0.062) > 26, 'a tall viewport genuinely needs more than 26');
+
+  for (const viewportHeight of [720, 1080, 1440, 2160]) {
+    const tapeHeight = Math.round(viewportHeight * 0.62);
+    const count = neededFor(tapeHeight, 250, 0.062);
+    assert.ok(
+      (count - 2) * 250 * 0.062 >= tapeHeight,
+      `pool of ${count} must span a ${tapeHeight}px tape`,
+    );
+  }
+}
+
+console.log('hud tape tick pool contracts passed');

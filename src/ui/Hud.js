@@ -166,8 +166,28 @@ export class Hud {
     this.altTape = make('right', 'ALT', 'M', 250, 2, 0.062);
   }
 
+  /**
+   * Extend a tape's tick pool to span the height it just measured.
+   *
+   * The pool was a fixed 26. ALT steps 250 m at 0.062 px/m — 15.5 px a tick —
+   * so 26 ticks cover about 400 px and the tape visibly ran out of graduations
+   * on any viewport taller than roughly 1000 px. Growing here rather than at
+   * construction keeps the file's rule that tape geometry is measured, not
+   * assumed, and it reuses the ResizeObserver that already invalidates height.
+   * Ticks are only ever added, so this settles after the first frame at a size.
+   */
+  _growTicks(t) {
+    const needed = Math.ceil(t.height / (t.step * t.pixelsPerUnit)) + 2;
+    for (let i = t.ticks.length; i < needed; i++) {
+      t.ticks.push(el('div', 'tape-tick', t.strip));
+    }
+  }
+
   _updateTape(t, value) {
-    if (!t.height) t.height = t.tape.clientHeight || 320;
+    if (!t.height) {
+      t.height = t.tape.clientHeight || 320;
+      this._growTicks(t);
+    }
     const half = t.height / 2;
     const range = half / t.pixelsPerUnit;
     const first = Math.ceil((value - range) / t.step) * t.step;
