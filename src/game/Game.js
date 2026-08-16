@@ -19,6 +19,7 @@ import { ReconCamera, CAPTURE_THRESHOLD } from './ReconCamera.js';
 import { NavigationHintTracker } from './NavigationHint.js';
 import { Leaderboard } from './Leaderboard.js';
 import { terrainVisibility } from './TerrainVisibility.js';
+import { resolveSeed, sortieLabel, sortieParams } from './sortieParams.js';
 import { acceptsLaunchKey } from './sortieState.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
@@ -68,7 +69,14 @@ const AUTO_CAPTURE_MAX_DWELL = 1.4;
 const AUTO_CAPTURE_CEILING = 0.86;
 const AUTO_CAPTURE_FALLOFF = 0.012;
 
-const START = new THREE.Vector3(21000, 0, 6000);
+/**
+ * The sortie used to open here, always. START was a constant and findPostSites
+ * is a pure deterministic search, so every sortie anyone flew was the same five
+ * posts in the same places in the same order — in a world that is infinite and
+ * deterministic and cost nothing to move around in. Kept only as the fallback
+ * for a seed that somehow resolves to nothing.
+ */
+const FALLBACK_ORIGIN = new THREE.Vector3(21000, 0, 6000);
 
 /** Ease with zero first *and* second derivative at both ends, so no visible kick. */
 function smootherstep(t) {
@@ -105,12 +113,22 @@ export class Game {
     this.settings = settings;
     this.input = input;
 
+    // One seed decides where the sortie is and what the light is doing. `?seed=N`
+    // pins one for sharing or debugging; otherwise everyone flying today gets
+    // the same world, which is the only thing that makes a shared fastest-sortie
+    // board comparable.
+    this.sortie = sortieParams(resolveSeed(globalThis.location?.search ?? ''));
+
     this.state = 'loading';
     this.accumulator = 0;
     this.crashTimer = 0;
     this.cinematicTime = 0;
 
     this.environment = new Environment();
+    // The sortie's hour of the morning and its weather, before anything bakes
+    // an environment map or primes a clipmap against the default sun.
+    this.environment.setSun(this.sortie.sunElevationDeg, this.sortie.sunAzimuthDeg);
+    this.environment.uniforms.uCloudCoverage.value = this.sortie.cloudCoverage;
     this.environment.addTo(engine.scene);
 
     this.sky = new Sky(this.environment);
@@ -368,14 +386,16 @@ export class Game {
   }
 
   _startPosition() {
-    const p = START.clone();
+    const { x, z } = this.sortie?.origin ?? { x: FALLBACK_ORIGIN.x, z: FALLBACK_ORIGIN.z };
+    const p = new THREE.Vector3(x, 0, z);
     p.y = terrainHeight(p.x, p.z) + 1500;
     return p;
   }
 
   _setupCinematic() {
-    this.cinematicCentre = new THREE.Vector3(21000, 0, 6000);
-    this.cinematicCentre.y = terrainHeight(21000, 6000) + 2100;
+    const { x, z } = this.sortie?.origin ?? { x: FALLBACK_ORIGIN.x, z: FALLBACK_ORIGIN.z };
+    this.cinematicCentre = new THREE.Vector3(x, 0, z);
+    this.cinematicCentre.y = terrainHeight(x, z) + 2100;
     this.cinematicTime = 0;
     this._updateCinematic(0);
   }

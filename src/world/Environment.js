@@ -71,6 +71,35 @@ export class Environment {
     this.hemiLight = new THREE.HemisphereLight(0x9dc4ff, 0xcfe0f0, 0.62);
   }
 
+  /**
+   * Move the sun, in degrees.
+   *
+   * Everything shares these uniform objects, so terrain, sky, clouds and the
+   * aircraft's PBR materials all follow with no per-frame plumbing. The
+   * transmittance and multiple-scattering LUTs are parameterised by sun zenith
+   * rather than baked against a fixed sun, so they do not need rebuilding at
+   * all; the sky-view and aerial LUTs already regenerate on their own cadence.
+   *
+   * Colour and intensity travel with elevation because a low sun really is
+   * warmer and weaker, and because leaving them fixed is what made a lowered
+   * sun look like a bug rather than an hour of the day.
+   */
+  setSun(elevationDeg, azimuthDeg) {
+    this.sunElevation = THREE.MathUtils.degToRad(elevationDeg);
+    this.sunAzimuth = THREE.MathUtils.degToRad(azimuthDeg);
+    this._updateSunDir();
+    this.sunLight.position.copy(this.sunDir).multiplyScalar(1000);
+
+    const t = THREE.MathUtils.clamp((elevationDeg - 8) / 34, 0, 1);
+    this.uniforms.uSunColor.value.setRGB(1.0, 0.78 + 0.14 * t, 0.58 + 0.24 * t);
+    this.uniforms.uSunIntensity.value = 1.15 + 0.5 * t;
+    this.sunLight.color.copy(this.uniforms.uSunColor.value);
+    this.sunLight.intensity = this.uniforms.uSunIntensity.value;
+    // Sky bounce falls off with the sun rather than staying at its noon value,
+    // which is half of why the world used to read blue at any hour.
+    this.hemiLight.intensity = 0.38 + 0.30 * t;
+  }
+
   _updateSunDir() {
     const ce = Math.cos(this.sunElevation);
     this.sunDir
