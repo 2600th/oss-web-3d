@@ -88,3 +88,34 @@ test('the burner is a visible event and its diamonds sit inside the flame', () =
 });
 
 console.log('exhaust plume contracts passed');
+
+{
+  // A failed airframe load hides the exhaust — and it has to stay hidden.
+  //
+  // Recording the decision once was a no-op for the whole flight it was written
+  // for: setCrashPresentation(false) runs on every launch and every restart and
+  // used to set exhaust.visible unconditionally, and update() re-armed
+  // burnerActive on every non-crashed frame. Both now defer to _exhaustAllowed.
+  assert.match(
+    source,
+    /this\._exhaustAllowed = Boolean\(visible\);/,
+    'setExhaustVisible must record the decision, not just apply it',
+  );
+  assert.match(
+    source,
+    /this\.exhaust\.visible = !this\._crashPresentation && this\._exhaustAllowed;/,
+    'setCrashPresentation must not resurrect a disowned exhaust',
+  );
+  assert.match(
+    source,
+    /this\.burnerActive = this\._exhaustAllowed;/,
+    'update must not re-arm the burner for an airframe that never loaded',
+  );
+  assert.doesNotMatch(
+    source,
+    /^\s*this\.burnerActive = true;\s*$/m,
+    'no unconditional burnerActive assignment may remain',
+  );
+}
+
+console.log('exhaust ownership contracts passed');

@@ -28,7 +28,14 @@ function fakeStore({ failReads = false, failWrites = false, seed = {} } = {}) {
   };
 }
 
-const run = (name, seconds, at = 1000) => ({ name, seconds, grade: 'GOOD', objectives: '5/5', at });
+// Rows carry the seed they were flown on. The sortie became seeded, and the
+// daily seed moves the origin anywhere on a 40-240 km annulus — measured across
+// eight consecutive days, route length ran 63-109 km — so a board of bare
+// seconds was ranking pilots on different courses. A row without a seed is no
+// longer a row.
+const SEED = 20315;
+const run = (name, seconds, at = 1000, seed = SEED) =>
+  ({ name, seconds, seed, grade: 'GOOD', objectives: '5/5', at });
 
 test('callsigns are normalised, and unusable ones are rejected rather than replaced', () => {
   assert.equal(sanitiseName('raven'), 'RAVEN');
@@ -121,7 +128,7 @@ test('submitting persists the board and remembers the callsign', () => {
   assert.equal(board.lastName(), '');
   assert.equal(board.best(), null);
 
-  const result = board.submit({ name: 'raven', seconds: 372, grade: 'GOOD', objectives: '5/5', at: 7 });
+  const result = board.submit({ name: 'raven', seconds: 372, seed: SEED, grade: 'GOOD', objectives: '5/5', at: 7 });
   assert.equal(result.rank, 1);
   assert.equal(result.improved, true);
 
@@ -134,7 +141,7 @@ test('submitting persists the board and remembers the callsign', () => {
 test('a submission with an unusable callsign or time changes nothing', () => {
   const store = fakeStore();
   const board = new Leaderboard(store);
-  board.submit({ name: 'RAVEN', seconds: 300, at: 1 });
+  board.submit({ name: 'RAVEN', seconds: 300, seed: SEED, at: 1 });
 
   for (const bad of [
     { name: 'x', seconds: 100, at: 2 },
@@ -176,4 +183,32 @@ test('a corrupt or hostile store degrades to an empty board, never an exception'
 test('the stored callsign is sanitised on the way out, not trusted', () => {
   const board = new Leaderboard(fakeStore({ seed: { [LAST_NAME_KEY]: '  <bad>  ' } }));
   assert.equal(board.lastName(), '');
+});
+
+test('a board belongs to one seed, and other seeds survive a submission', () => {
+  // Seeding the sortie moved the course: the daily seed puts the origin
+  // anywhere on a 40-240 km annulus, and eight consecutive days measured
+  // 63-109 km of route. Ranking bare seconds across that compares pilots who
+  // flew different flights, and a pinned ?seed=N would let the shortest course
+  // anyone can find be farmed onto the same all-time list.
+  const store = new Map();
+  const board = new Leaderboard({
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, v),
+  });
+
+  board.submit({ name: 'RAVEN', seconds: 300, seed: 1, at: 1 });
+  board.submit({ name: 'MERLIN', seconds: 200, seed: 2, at: 2 });
+
+  assert.deepEqual(board.read(1).map((r) => r.name), ['RAVEN'], 'seed 1 sees only seed 1');
+  assert.deepEqual(board.read(2).map((r) => r.name), ['MERLIN'], 'seed 2 sees only seed 2');
+
+  // A faster time on another course must not displace this one.
+  const result = board.submit({ name: 'KESTREL', seconds: 10, seed: 2, at: 3 });
+  assert.equal(result.rank, 1);
+  assert.deepEqual(board.read(1).map((r) => r.name), ['RAVEN'], "yesterday's board is untouched");
+  assert.deepEqual(board.read(2).map((r) => r.name), ['KESTREL', 'MERLIN']);
+
+  // A row with no seed cannot be compared to anything, so it is not a row.
+  assert.equal(board.submit({ name: 'GHOST', seconds: 1, at: 4 }).rank, null);
 });

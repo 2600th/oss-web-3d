@@ -14,7 +14,19 @@
  * places with their own attempts.
  */
 
-export const LEADERBOARD_KEY = 'safed-sagar.leaderboard.v1';
+/**
+ * Bumped to v2 when the sortie became seeded.
+ *
+ * Every row now carries the seed it was flown on, and the board is scoped to
+ * one seed at a time. Without that, seeding the world quietly broke the board:
+ * the daily seed moves the origin anywhere on a 40-240 km annulus, and eight
+ * consecutive days measured 63-109 km of route with legs from 7 to 41 km — so
+ * an all-time list of bare seconds was ranking pilots on different courses. A
+ * pinned `?seed=N` made it worse, because the shortest course anyone could find
+ * could be farmed onto the same list. v1 rows have no seed and are dropped
+ * rather than silently mixed in.
+ */
+export const LEADERBOARD_KEY = 'safed-sagar.leaderboard.v2';
 export const LAST_NAME_KEY = 'safed-sagar.leaderboard.name';
 export const MAX_ENTRIES = 10;
 export const NAME_MIN = 3;
@@ -111,7 +123,9 @@ function isEntry(row) {
   return Boolean(row)
     && typeof row.name === 'string'
     && Number.isFinite(row.seconds)
-    && row.seconds > 0;
+    && row.seconds > 0
+    // A row without a seed cannot be compared to anything, so it is not a row.
+    && Number.isFinite(row.seed);
 }
 
 /**
@@ -126,13 +140,19 @@ export class Leaderboard {
     this.store = store;
   }
 
-  /** @returns {Array} ranked rows, best first */
-  read() {
+  /**
+   * @param {number} [seed] only rows flown on this sortie. Omit for every row.
+   * @returns {Array} ranked rows, best first
+   */
+  read(seed) {
     const raw = this._get(LEADERBOARD_KEY);
     if (!raw) return [];
     try {
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? rank(parsed.filter(isEntry)).slice(0, MAX_ENTRIES) : [];
+      if (!Array.isArray(parsed)) return [];
+      const rows = parsed.filter(isEntry)
+        .filter((row) => seed === undefined || row.seed === seed);
+      return rank(rows).slice(0, MAX_ENTRIES);
     } catch {
       return [];
     }
@@ -143,24 +163,43 @@ export class Leaderboard {
     return sanitiseName(this._get(LAST_NAME_KEY) ?? '') ?? '';
   }
 
+  /** Every stored row, unfiltered and unranked. Used to preserve other seeds. */
+  _readRaw() {
+    const raw = this._get(LEADERBOARD_KEY);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter(isEntry) : [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * @param {{name: string, seconds: number, grade?: string, objectives?: string, at: number}} entry
+   * @param {{name: string, seconds: number, seed: number, grade?: string, objectives?: string, at: number}} entry
    * @returns {{entries: Array, rank: number|null, improved: boolean}}
+   *   `entries` are the rows for this entry's seed only.
    */
   submit(entry) {
     const name = sanitiseName(entry?.name);
-    if (!name || !Number.isFinite(entry.seconds) || entry.seconds <= 0) {
-      return { entries: this.read(), rank: null, improved: false };
+    const seed = Number.isFinite(entry?.seed) ? entry.seed : null;
+    if (!name || seed === null || !Number.isFinite(entry.seconds) || entry.seconds <= 0) {
+      return { entries: this.read(seed ?? undefined), rank: null, improved: false };
     }
     const row = {
       name,
       seconds: entry.seconds,
+      seed,
       grade: entry.grade ?? '',
       objectives: entry.objectives ?? '',
       at: Number.isFinite(entry.at) ? entry.at : 0,
     };
-    const result = insertEntry(this.read(), row);
-    this._set(LEADERBOARD_KEY, JSON.stringify(result.entries));
+    const all = this._readRaw();
+    // Rank within this seed; every other seed's rows are carried through
+    // untouched, so yesterday's board still exists tomorrow.
+    const others = all.filter((r) => r.seed !== seed);
+    const result = insertEntry(rank(all.filter((r) => r.seed === seed)), row);
+    this._set(LEADERBOARD_KEY, JSON.stringify([...others, ...result.entries]));
     this._set(LAST_NAME_KEY, name);
     return result;
   }

@@ -81,6 +81,8 @@ export class Aircraft {
     /** World-space nozzle, republished every update for the particle envelope. */
     this.nozzlePosition = new THREE.Vector3();
     this.burnerActive = false;
+    /** False once the airframe has failed to load; see setExhaustVisible. */
+    this._exhaustAllowed = true;
 
     this._buildExhaust();
   }
@@ -94,8 +96,34 @@ export class Aircraft {
    * the sortie was flown by a disembodied afterburner.
    */
   setExhaustVisible(visible) {
+    // Recorded rather than applied once. setCrashPresentation(false) runs on
+    // every launch and restart and sets exhaust.visible unconditionally, and
+    // update() sets burnerActive = true on every non-crashed frame — so writing
+    // the flags here only held until the player pressed Launch, which made this
+    // a no-op for the entire flight it exists to fix.
+    this._exhaustAllowed = Boolean(visible);
     this.burnerActive = this.burnerActive && visible;
     if (this.exhaust) this.exhaust.visible = Boolean(visible);
+  }
+
+  /**
+   * Re-point the airframe's materials at a freshly baked environment map.
+   *
+   * Needed when the sortie's sun moves — a new daily seed on a restart — since
+   * the map is baked once at construction and the PBR materials hold it.
+   */
+  setEnvMap(envMap) {
+    if (!envMap || envMap === this._envMap) return;
+    this._envMap = envMap;
+    this.model.traverse((child) => {
+      if (!child.isMesh) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const m of materials) {
+        if (!m) continue;
+        m.envMap = envMap;
+        m.needsUpdate = true;
+      }
+    });
   }
 
   async load(url = './models/mig21.glb', envMap = null) {
@@ -353,7 +381,7 @@ export class Aircraft {
     // load(), and duplicating that arithmetic in another file is how the plume
     // and its particles end up in two different places.
     this.exhaust.getWorldPosition(this.nozzlePosition);
-    this.burnerActive = true;
+    this.burnerActive = this._exhaustAllowed;
 
     // Lengths are the original ones. Lighting the burner should be dramatic,
     // and the plank the plume used to render as was a shading bug, not a length
@@ -386,7 +414,7 @@ export class Aircraft {
   setCrashPresentation(active) {
     this._crashPresentation = Boolean(active);
     this.model.visible = !this._crashPresentation;
-    this.exhaust.visible = !this._crashPresentation;
+    this.exhaust.visible = !this._crashPresentation && this._exhaustAllowed;
   }
 
   addTo(scene) {

@@ -921,9 +921,15 @@ export class Screens {
       total,
       seconds: mission.elapsed,
     });
-    this._boardRun = rankable
+    // The seed the sortie was flown on. The board is scoped to it: the daily
+    // seed moves the course, so a list of bare seconds would be comparing
+    // pilots who flew different routes.
+    const seed = Number.isFinite(mission.seed) ? mission.seed : this._boardSeed ?? null;
+    this._boardSeed = seed;
+    this._boardRun = rankable && seed !== null
       ? {
         seconds: mission.elapsed,
+        seed,
         grade,
         objectives: `${mission.captured}/${total}`,
         at: Date.now(),
@@ -931,7 +937,7 @@ export class Screens {
       : null;
     this._boardName = null;
     this.boardName.value = this._board.lastName();
-    this._renderBoard(this._board.read(), {
+    this._renderBoard(this._board.read(seed ?? undefined), {
       rank: null,
       improved: false,
       recorded: false,

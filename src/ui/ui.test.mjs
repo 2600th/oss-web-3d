@@ -610,9 +610,11 @@ function buildBoard(store = memoryStore()) {
   return instance;
 }
 
-const sortie = (captured, total, elapsed) => ({
+// The board is scoped to the sortie's seed, so a mission has to carry one.
+const sortie = (captured, total, elapsed, seed = 4242) => ({
   captured,
   elapsed,
+  seed,
   posts: Array.from({ length: total }, (_, i) => ({ callsign: `P${i}`, captured: i < captured })),
 });
 
@@ -646,8 +648,8 @@ test('the board is hidden entirely when no store was configured', () => withDom(
 
 test('recording a time ranks it, marks the row, and retires the form', () => withDom(() => {
   const board = buildBoard();
-  board._board.submit({ name: 'KESTREL', seconds: 298, grade: 'EXCELLENT', at: 1 });
-  board._board.submit({ name: 'MERLIN', seconds: 512, grade: 'GOOD', at: 2 });
+  board._board.submit({ name: 'KESTREL', seconds: 298, seed: 4242, grade: 'EXCELLENT', at: 1 });
+  board._board.submit({ name: 'MERLIN', seconds: 512, seed: 4242, grade: 'GOOD', at: 2 });
 
   board._showBoardFor(sortie(5, 5, 372), 'GOOD');
   assert.deepEqual(rowsOf(board).map((r) => r.text), [

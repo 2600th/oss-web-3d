@@ -22,10 +22,16 @@ const SEARCH_MIN_RANGE = 7000;
 const SEARCH_MAX_RANGE = 27000;
 
 export class Mission {
-  constructor(scene, origin, postCount = 5) {
+  constructor(scene, origin, postCount = 5, seed = null) {
     this.scene = scene;
     this.origin = origin.clone();
     this.postCount = postCount;
+    /**
+     * The sortie seed. The leaderboard scopes its board to this, because the
+     * daily seed moves the course — across eight consecutive days the route
+     * measured 63-109 km — so ranking bare seconds compares different flights.
+     */
+    this.seed = Number.isFinite(seed) ? seed : null;
     this.posts = [];
 
     this.state = 'briefing'; // briefing | active | complete | failed

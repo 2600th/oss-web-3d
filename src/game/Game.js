@@ -333,7 +333,7 @@ export class Game {
     }
     this.screens.setProgress(0.75, 'Preparing reconnaissance sites');
 
-    this.mission = new Mission(this.engine.scene, this.flight.position, 5);
+    this.mission = new Mission(this.engine.scene, this.flight.position, 5, this.sortie.seed);
     this.screens.setTargets(this.mission.posts);
     this.hud.setObjectiveCount(this.mission.posts.length);
     this.screens.setQuality(this.settings.tierName);
@@ -476,10 +476,18 @@ export class Game {
       this.sortie = next;
       this.environment.setSun(next.sunElevationDeg, next.sunAzimuthDeg);
       this.environment.uniforms.uCloudCoverage.value = next.cloudCoverage;
+      // Terrain, sky and water read the shared uniforms and follow the new sun
+      // on their own; the airframe's PBR materials read scene.environment,
+      // which is baked once. Without this a tab that crosses UTC midnight on
+      // the debrief flies the new world lit by yesterday's image.
+      this.envMap?.dispose?.();
+      this.envMap = this.sky.bakeEnvironment(this.engine.renderer, this.environment);
+      this.engine.scene.environment = this.envMap;
+      this.aircraft?.setEnvMap?.(this.envMap);
       this.terrain.prime(this._startPosition());
     }
     this.mission.dispose();
-    this.mission = new Mission(this.engine.scene, this._startPosition(), 5);
+    this.mission = new Mission(this.engine.scene, this._startPosition(), 5, this.sortie.seed);
     this.screens.setTargets(this.mission.posts);
     this.hud.setObjectiveCount(this.mission.posts.length);
     this.launch();
