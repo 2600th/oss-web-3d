@@ -49,13 +49,31 @@ if (import.meta.env.DEV) {
     };
   }
 }
+/**
+ * Fail loudly during boot, quietly afterwards.
+ *
+ * These handlers live for the whole session, and both used to raise the
+ * full-screen boot-failure overlay unconditionally. That overlay is opaque,
+ * covers the canvas and the UI, and offers only a Reload button — while nothing
+ * underneath stops: the frame loop, the flight model, the audio graph and the
+ * whole post chain keep running behind it. So one stray rejected promise or an
+ * extension-injected `Script error.` at minute twenty of a healthy sortie
+ * destroyed the sortie and left the machine rendering frames nobody could see.
+ *
+ * After boot has succeeded there is almost never anything the player can do
+ * about a stray error, and the sortie is usually still perfectly flyable, so it
+ * is logged and the flight continues.
+ */
+let booted = false;
 const onError = (e) => {
   if (import.meta.env.DEV) __log.push({ level: 'error', text: String(e.message) });
-  showBootFailure('The experience encountered an error. Reload to try again.');
+  if (!booted) showBootFailure('The experience encountered an error. Reload to try again.');
+  else console.error('[runtime]', e.message);
 };
 const onRejection = (e) => {
   if (import.meta.env.DEV) __log.push({ level: 'error', text: `unhandled rejection: ${String(e.reason)}` });
-  showBootFailure('The experience could not continue. Reload to try again.');
+  if (!booted) showBootFailure('The experience could not continue. Reload to try again.');
+  else console.error('[runtime] unhandled rejection', e.reason);
 };
 window.addEventListener('error', onError);
 window.addEventListener('unhandledrejection', onRejection);
@@ -177,7 +195,10 @@ function frame() {
   frameId = requestAnimationFrame(frame);
 }
 frameId = requestAnimationFrame(frame);
-void game.begin().catch((error) => {
+void game.begin().then(() => {
+  // From here a stray error is a nuisance, not a reason to end the sortie.
+  booted = true;
+}).catch((error) => {
   console.error('[boot] start failed', error);
   showBootFailure('The sortie could not start. Reload to try again.');
 });
@@ -185,7 +206,15 @@ void game.begin().catch((error) => {
 let disposeDevResources = () => {};
 const removeContextRecovery = installContextRecovery(
   canvas,
-  () => showBootFailure('Graphics context lost. Waiting for recovery…'),
+  () => {
+    // Stop the loop as well as saying so. Without this the simulation and the
+    // ranked sortie clock kept advancing behind the overlay against a dead
+    // context, so a player who lost the context for ten seconds came back to a
+    // sortie that had flown itself into a mountain.
+    running = false;
+    cancelAnimationFrame(frameId);
+    showBootFailure('Graphics context lost. Waiting for recovery…');
+  },
   () => showBootFailure('Graphics context restored. Reload to resume safely.'),
 );
 installPageLifecycle(() => {

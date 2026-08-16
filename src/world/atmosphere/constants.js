@@ -180,7 +180,22 @@ export function luminance(rgb) {
  * zenith sky at ~0.02, the exposure constant in the post stack -- hangs off
  * this one number, so it is computed, not typed.
  */
+/**
+ * Memoised because this is a 512-step CPU ray march (opticalDepthToSpace) and
+ * the atmosphere LUT called it once per frame for the whole session. It depends
+ * only on the sun's height, which changes once per sortie — so it was
+ * recomputing a constant sixty times a second on the main thread.
+ *
+ * A one-entry cache is enough: the argument is the same value every frame until
+ * the sun moves, and then it is the same new value every frame after that.
+ */
+let _toaCacheKey = NaN;
+let _toaCacheValue = 0;
+
 export function sunToaIrradiance(sunUpCosine) {
+  if (sunUpCosine === _toaCacheKey) return _toaCacheValue;
   const t = sunTransmittance(4500, sunUpCosine);
-  return Math.PI / Math.max(luminance(t), 1e-4);
+  _toaCacheKey = sunUpCosine;
+  _toaCacheValue = Math.PI / Math.max(luminance(t), 1e-4);
+  return _toaCacheValue;
 }
