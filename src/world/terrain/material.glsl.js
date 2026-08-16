@@ -243,6 +243,22 @@ const LOW_TIER_SHADOW_FLOOR = 0.12;
 const AMBIENT_OCCLUSION_FLOOR = 0.55;
 
 /**
+ * Snow albedo, shared by the shader and its JS mirror.
+ *
+ * These were (0.72, 0.80, 0.91) and (0.74, 0.79, 0.875) — a 26% blue bias built
+ * into the material itself, which then sat under blue sky fill and a blue
+ * hemisphere light. Snow's real reflectance is close to flat across the visible
+ * band; the blue everyone sees in a snowfield comes from the *light*, not from
+ * the snow. Encoding it twice is what drove the measured frame mean to
+ * 105/133/160 with red 52% under blue.
+ *
+ * Kept marginally cool so shadowed snow still reads cold once the sky fill is
+ * occluded, but nothing like the original bias.
+ */
+const SNOW_ALBEDO = [0.86, 0.875, 0.90];
+const SNOW_ALBEDO_LOW = [0.85, 0.862, 0.885];
+
+/**
  * How much of the fixed per-material sky fill survives at a given sun height.
  *
  * The fill used to be constant, so dropping the sun produced a scene lit almost
@@ -381,7 +397,7 @@ export function evaluateTerrainMaterial({
     const rockColor = [0.06, 0.064, 0.074].map((value, i) => (
       value + ([0.19, 0.133, 0.082][i] - value) * geology
     ));
-    const snowColor = [0.74, 0.79, 0.875];
+    const snowColor = SNOW_ALBEDO_LOW;
     const albedo = rockColor.map((value, i) => value + (snowColor[i] - value) * snow);
     const sun = normalize3(sunDirection);
     const ndl = frame.normal[0] * sun[0] + frame.normal[1] * sun[1] + frame.normal[2] * sun[2];
@@ -448,7 +464,7 @@ export function evaluateTerrainMaterial({
   const iceDark = [0.105, 0.315, 0.52];
   const iceLight = [0.22, 0.50, 0.68];
   const iceColor = iceDark.map((v, i) => v + (iceLight[i] - v) * mineral);
-  const snowColor = [0.72, 0.80, 0.91];
+  const snowColor = SNOW_ALBEDO;
   const albedo = rockColor.map((v, i) => (
     v * rockWeight + screeColor[i] * scree + iceColor[i] * ice + snowColor[i] * snow
   ));
@@ -721,7 +737,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         float snow = smoothstep(snowLine - 620.0, snowLine + 720.0, surfaceHeight) * (1.0 - smoothstep(0.10, 0.40, slope));
         snow = smoothstep(0.03, 0.97, snow) * 0.84;
         vec3 rock = mix(vec3(0.060, 0.064, 0.074), vec3(0.190, 0.133, 0.082), geology);
-        vec3 albedo = mix(rock, vec3(0.74, 0.79, 0.875), snow);
+        vec3 albedo = mix(rock, vec3(${SNOW_ALBEDO_LOW.join(", ")}), snow);
         float wrapped = pow(clamp(dot(N, uSunDir) * 0.55 + 0.45, 0.0, 1.0), 2.1);
         float direct = wrapped * mix(${LOW_TIER_SHADOW_FLOOR}, 1.0, stored.a) * mix(0.64, 1.0, snow);
         // Low-tier terrain still needs enough blue-sky fill to keep opposing
@@ -816,7 +832,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         vec3 screeColor = mix(vec3(0.205, 0.145, 0.090), vec3(0.305, 0.225, 0.140), mineral);
         screeColor *= 1.0 + strata * 0.07;
         vec3 iceColor = mix(vec3(0.105, 0.315, 0.520), vec3(0.220, 0.500, 0.680), mineral);
-        vec3 snowColor = vec3(0.720, 0.800, 0.910);
+        vec3 snowColor = vec3(${SNOW_ALBEDO.join(", ")});
         vec3 albedo = rock * rockWeight + screeColor * scree + iceColor * ice + snowColor * snow;
         float iceRoughness = mix(0.22, 0.36, mineral);
         float roughness = 0.86 * rockWeight + 0.96 * scree + iceRoughness * ice + 0.66 * snow;

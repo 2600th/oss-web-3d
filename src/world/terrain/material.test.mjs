@@ -106,14 +106,17 @@ assert.ok(Math.abs(productionProbe.roughness - 0.6920015234364671) < 1e-12);
 // fill now scales with sun height instead of being constant. Geology, mineral
 // and roughness are untouched above because classification is not lighting.
 //
+// Snow albedo was also corrected: it carried a 26% blue bias of its own
+// ((0.72, 0.80, 0.91)) on top of blue sky fill, encoding the cast twice.
+//
 // The direction of the change is the point: red rose against blue from 0.52 to
-// 0.63 of the blue channel, which is the measured cyan cast coming out.
+// 0.75 of the blue channel, which is the measured cyan cast coming out.
 assert.deepEqual(
   productionProbe.litColor.map((value) => Number(value.toFixed(12))),
-  [0.245938590447, 0.292574840545, 0.389641878667],
+  [0.290509453397, 0.319050019246, 0.385430216218],
   'CPU lighting must match the deployed shadow/sun/ambient/specular equation',
 );
-assert.ok(Math.abs(productionProbe.lightingProxy - 0.289668213926515) < 1e-12);
+assert.ok(Math.abs(productionProbe.lightingProxy - 0.3177749451679565) < 1e-12);
 
 // Numeric material contract: broad continuous accumulation, bounded albedo,
 // and no threshold-sized jumps over a 30 m flight-camera step.

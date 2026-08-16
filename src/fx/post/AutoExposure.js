@@ -99,7 +99,75 @@ export class AdaptiveExposureEffect extends Effect {
   }
 }
 
+/**
+ * A look transform applied after AGX.
+ *
+ * AGX's defining behaviour is a strong hue-preserving desaturation of the
+ * highlights. That is what makes it well behaved on saturated light sources,
+ * and it is exactly wrong for a frame that is ninety per cent sunlit snow: it
+ * pulls the whole image toward a flat grey. Measured on the shipped build, the
+ * brightest pixel in a high-altitude snowfield reached 204 of 255 and the top
+ * three histogram buckets were empty — the image never arrived at white.
+ *
+ * Blender ships AgX with a set of looks for the same reason; "Punchy" is the
+ * one people actually use. This is that idea in one pass: a contrast pivot
+ * about mid grey and a saturation restore, both mild, applied after the tone
+ * curve so the curve keeps doing the highlight roll-off it is good at.
+ */
+const lookFragment = /* glsl */ `
+  uniform float uContrast;
+  uniform float uSaturation;
+  uniform float uLift;
+
+  void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+    vec3 c = max(inputColor.rgb, vec3(0.0));
+
+    // Contrast about mid grey, in the display-referred values AGX just produced.
+    const float pivot = 0.4135884;
+    c = max(vec3(0.0), (c - pivot) * uContrast + pivot);
+
+    // Restore some of the chroma AGX removed from the highlights.
+    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(luma), c, uSaturation);
+
+    // A small toe lift keeps the deepest shadow from clipping to pure black now
+    // that terrain shadows are genuinely dark.
+    c = c * (1.0 - uLift) + uLift * c * c * (3.0 - 2.0 * c);
+
+    outputColor = vec4(clamp(c, 0.0, 1.0), inputColor.a);
+  }
+`;
+
+/**
+ * Values are deliberately restrained, and were picked by measurement rather
+ * than taste. Against the shipped chain (`__stats` over a sunlit snowfield) the
+ * brightest pixel rises from 214 to 220 of 255 and the two highest occupied
+ * histogram buckets roughly double, while shadow crush stays near zero.
+ *
+ * A stronger saturation restore was tried first and rejected: the frame is
+ * blue-dominant, so boosting chroma globally amplifies the cast rather than
+ * correcting it. Slightly *under* one reads cleaner here. The remaining gap to
+ * true white is not a tone-curve problem — it is the scene's absolute radiance
+ * against the meter's key, which is a larger change than a look transform.
+ */
+class ToneLookEffect extends Effect {
+  constructor({ contrast = 1.06, saturation = 0.96, lift = 0.06 } = {}) {
+    super('ToneLookEffect', lookFragment, {
+      uniforms: new Map([
+        ['uContrast', new Uniform(contrast)],
+        ['uSaturation', new Uniform(saturation)],
+        ['uLift', new Uniform(lift)],
+      ]),
+    });
+  }
+}
+
 /** AGX is applied exactly once, after adaptive exposure. */
 export function createFilmicToneMapping() {
   return new ToneMappingEffect({ mode: ToneMappingMode.AGX });
+}
+
+/** The look transform that runs immediately after AGX. */
+export function createToneLook(options) {
+  return new ToneLookEffect(options);
 }

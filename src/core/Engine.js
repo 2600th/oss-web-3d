@@ -11,7 +11,7 @@ import {
 import { DitherEffect } from './DitherEffect.js';
 import { CinematicGradeEffect } from '../fx/post/CinematicGradeEffect.js';
 import { LensEdgeEffect } from '../fx/post/LensEdgeEffect.js';
-import { AdaptiveExposureEffect, createFilmicToneMapping } from '../fx/post/AutoExposure.js';
+import { AdaptiveExposureEffect, createFilmicToneMapping, createToneLook } from '../fx/post/AutoExposure.js';
 import {
   configureFinalOutput,
   normalizeRenderOptions,
@@ -79,6 +79,8 @@ export class Engine {
 
     this.exposure = new AdaptiveExposureEffect();
     this.toneMapping = createFilmicToneMapping();
+    // Runs immediately after AGX, in the same pass. See createToneLook.
+    this.toneLook = createToneLook();
     this.autoExposure = this.exposure;
     this.grade = new CinematicGradeEffect();
     this.lensEdge = new LensEdgeEffect();
@@ -100,7 +102,7 @@ export class Engine {
     this.heatPass = new EffectPass(this.camera, this.heatDistortion);
     this.shaftPass = new EffectPass(this.camera, this.sunShafts);
     this.bloomPass = new EffectPass(this.camera, this.bloom);
-    this.tonePass = new EffectPass(this.camera, this.exposure, this.toneMapping);
+    this.tonePass = new EffectPass(this.camera, this.exposure, this.toneMapping, this.toneLook);
     this.lensPass = new EffectPass(this.camera, this.lensEdge);
     this.finishPass = new OutputEffectPass(this.camera, this.grade, this.smaa, this.dither);
     this.composer.addPass(this.radiancePass);
@@ -126,6 +128,7 @@ export class Engine {
       this.bloom,
       this.exposure,
       this.toneMapping,
+      this.toneLook,
       this.lensEdge,
       this.grade,
       this.smaa,
@@ -176,7 +179,7 @@ export class Engine {
     this.heatPass.setEffects([this.heatDistortion]);
     this.shaftPass.setEffects([this.sunShafts]);
     this.bloomPass.setEffects([this.bloom]);
-    this.tonePass.setEffects([this.exposure, this.toneMapping]);
+    this.tonePass.setEffects([this.exposure, this.toneMapping, this.toneLook]);
     this.lensPass.setEffects([this.lensEdge]);
     this.finishPass.setEffects(tier.smaa
       ? [this.grade, this.smaa, this.dither]
@@ -232,7 +235,13 @@ export class Engine {
     const next = Boolean(required);
     if (this._sceneWantsDepth === next) return false;
     this._sceneWantsDepth = next;
-    return this.syncDepthTexture();
+    // Only record the requirement. Allocating here would create the depth
+    // texture from whatever size the composer happens to hold at the moment the
+    // Game is constructed, which is before the first render sizes it — that
+    // produced a zero-dimension glTexStorage2D and then an incomplete
+    // framebuffer on every blit. syncDepthTexture() already runs every frame
+    // from render() for exactly this reason; let it do the allocation.
+    return true;
   }
 
   syncDepthTexture() {
