@@ -40,6 +40,42 @@
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 
   --track: 0.14em;
+
+  /*
+   * The touch action rail, described once.
+   *
+   * Every on-screen action — Boost, Recon, Shoot, and the zoom pair — is one
+   * column against the right edge: one width, one right edge, one vertical
+   * pitch. It used to be five independent rules with five different numbers
+   * (96x58 at 14px, 84x46 at 84px, 84x46 at 126px, 44x44 at 374px) and the
+   * result on a phone was a scatter rather than a control column: Shoot and
+   * Recon in different columns at different sizes, and the zoom buttons
+   * floating unattached in the middle of the photograph.
+   *
+   * The zoom pair is two half-width buttons filling exactly one slot, so the
+   * column has a single left edge from top to bottom:
+   *   (--act-w - --act-gap) / 2 = 44px, the minimum comfortable touch target.
+   *
+   * --act-lane is the width the HUD and the recon readouts have to leave clear
+   * for that column. Only ever consumed inside a coarse-pointer block; there is
+   * no rail on a desktop.
+   */
+  --act-w: 96px;
+  --act-h: 52px;
+  --act-gap: 8px;
+  --act-pitch: calc(var(--act-h) + var(--act-gap));
+  --act-edge: max(14px, calc(env(safe-area-inset-right) + 14px));
+  --act-right: var(--act-edge);
+  --act-bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  --act-lane: calc(var(--act-right) + var(--act-w) + var(--act-gap));
+  /* The lane the HUD instruments leave along both edges. Wide enough for the
+     58px throttle strip, which is the only control that shares a horizontal
+     band with a tape. */
+  --hud-lane: 80px;
+  /* The smallest margin any HUD element keeps from the bezel — the same 14px
+     --act-edge and --tape-inset floor at, named so the navigation cue's
+     placement bounds can floor at it too. */
+  --hud-margin: 14px;
 }
 
 * {
@@ -563,7 +599,12 @@ body {
   text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
 }
 
-/* Airspeed and altitude tapes */
+/* Airspeed and altitude tapes.
+   One inset drives both, and the radar altimeter above the right-hand tape
+   reads the same variable — they are a matched pair of instruments and the eye
+   notices immediately when they are not. A breakpoint that has to move one of
+   them changes --tape-inset and the others follow. */
+#hud { --tape-inset: 4.5vw; }
 .tape {
   position: absolute;
   top: 50%;
@@ -576,11 +617,11 @@ body {
   overflow: hidden;
 }
 .tape.left {
-  left: 4.5vw;
+  left: var(--tape-inset);
   border-right: 1px solid var(--rule);
 }
 .tape.right {
-  right: 4.5vw;
+  right: var(--tape-inset);
   border-left: 1px solid var(--rule);
 }
 
@@ -836,14 +877,19 @@ body {
 }
 
 /* Objective navigation stays line-only so it cannot hide terrain detail. */
+/* The cue's placement bounds, read back through getComputedStyle.
+   A floor of --hud-margin as well as the notch inset: on a phone with no notch
+   every env() here resolves to zero, and the placement search will happily park
+   the cue flush against the bezel — which is where it sat, with the chevron
+   2.8px from the edge, while every other instrument kept a 14px margin. */
 .navigation-safe-area {
   position: absolute;
   inset: 0;
   padding:
-    env(safe-area-inset-top)
-    env(safe-area-inset-right)
-    env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+    max(var(--hud-margin), env(safe-area-inset-top))
+    max(var(--hud-margin), env(safe-area-inset-right))
+    max(var(--hud-margin), env(safe-area-inset-bottom))
+    max(var(--hud-margin), env(safe-area-inset-left));
   visibility: hidden;
   pointer-events: none;
 }
@@ -1080,13 +1126,20 @@ body {
  * its own numbers. They drifted: the coarse-pointer block moved the readouts to
  * pixel offsets that clear the touch buttons but left the gate on percentages,
  * so on a phone "FRAME THE OBJECTIVE" and the exposure counter sat *inside* the
- * photograph. A breakpoint now moves the gate by setting these three values and
+ * photograph. A breakpoint now moves the gate by setting these values and
  * everything else follows.
+ *
+ * There is one vertical inset, not two, and that is a correctness constraint
+ * rather than tidiness. ReconCamera scores framing as `1 - hypot(ndc)/0.72`:
+ * the optimum is the optical axis, which is the centre of the viewport, which
+ * is where the reticle is drawn. A gate with different top and bottom insets
+ * is therefore not concentric with the thing it is asking the pilot to aim —
+ * the phone layout had 18%/36%, which put the reticle 62px below the middle of
+ * the frame and made the overlay lie about where a good photograph is made.
  */
 #recon {
   --gate-x: 16%;
-  --gate-top: 20%;
-  --gate-bottom: 20%;
+  --gate-y: 20%;
   /* Clearances for the satellites, measured out from the gate edge. */
   --gate-head-gap: 42px;
   --gate-foot-gap: 42px;
@@ -1102,19 +1155,19 @@ body {
     100% 100%,
     0 100%,
     0 0,
-    var(--gate-x) var(--gate-top),
-    var(--gate-x) calc(100% - var(--gate-bottom)),
-    calc(100% - var(--gate-x)) calc(100% - var(--gate-bottom)),
-    calc(100% - var(--gate-x)) var(--gate-top),
-    var(--gate-x) var(--gate-top)
+    var(--gate-x) var(--gate-y),
+    var(--gate-x) calc(100% - var(--gate-y)),
+    calc(100% - var(--gate-x)) calc(100% - var(--gate-y)),
+    calc(100% - var(--gate-x)) var(--gate-y),
+    var(--gate-x) var(--gate-y)
   );
 }
 .gate-frame {
   position: absolute;
   left: var(--gate-x);
   right: var(--gate-x);
-  top: var(--gate-top);
-  bottom: var(--gate-bottom);
+  top: var(--gate-y);
+  bottom: var(--gate-y);
   border: 1px solid rgba(184, 216, 196, 0.4);
 }
 .gate-frame span {
@@ -1148,37 +1201,12 @@ body {
   border-top: 0;
 }
 
-.recon-cross {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 120px;
-  height: 120px;
-}
-.recon-cross::before,
-.recon-cross::after {
-  content: '';
-  position: absolute;
-  background: rgba(184, 216, 196, 0.55);
-}
-.recon-cross::before {
-  left: 50%;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-}
-.recon-cross::after {
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-}
-
+/* The status text only ever appears inside .recon-head, which lays it out; what
+   is left here is its typography. It used to carry its own `position:absolute;
+   left:16%; top:calc(20% - 34px)` — a second, silent copy of the gate geometry
+   that no breakpoint updated and nothing applied. The .recon-cross and
+   .recon-zoom rules that sat beside it described elements Hud.js never built. */
 .recon-status {
-  position: absolute;
-  left: 16%;
-  top: calc(20% - 34px);
   font-size: 11px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
@@ -1188,16 +1216,9 @@ body {
    viewport takes the separator with it and leaves the state alone. */
 .recon-status-name::after { content: ' — '; }
 .recon-status-state { color: var(--instrument); }
-.recon-zoom {
-  position: absolute;
-  right: 16%;
-  top: calc(20% - 34px);
-  font-size: 11px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--instrument-dim);
-}
 
+/* Concentric with the gate because both are concentric with the optical axis —
+   see the --gate-y note above. */
 .recon-reticle {
   position: absolute;
   left: 50%;
@@ -1221,11 +1242,14 @@ body {
 .ret-pip { opacity: 0.2; }
 .ret-pip.on { opacity: 0.9; }
 
+/* Anchored by its *bottom* edge, a fixed gap above the gate. The status line
+   wraps on a narrow viewport, and anchoring by the top made it grow downwards
+   into the photograph. */
 .recon-head {
   position: absolute;
   left: var(--gate-x);
   right: var(--gate-x);
-  top: calc(var(--gate-top) - var(--gate-head-gap));
+  bottom: calc(100% - var(--gate-y) + var(--gate-head-gap));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1252,7 +1276,7 @@ body {
 .recon-frame-no {
   position: absolute;
   right: var(--gate-x);
-  bottom: calc(var(--gate-bottom) - var(--gate-exposure-gap));
+  bottom: calc(var(--gate-y) - var(--gate-exposure-gap));
   color: var(--paper-faint);
   font: 9px/1 var(--mono);
   letter-spacing: 0.16em;
@@ -1262,7 +1286,7 @@ body {
   position: absolute;
   left: var(--gate-x);
   right: var(--gate-x);
-  bottom: calc(var(--gate-bottom) - var(--gate-foot-gap));
+  bottom: calc(var(--gate-y) - var(--gate-foot-gap));
 }
 .quality-bar {
   height: 4px;
@@ -2127,9 +2151,8 @@ input:focus-visible {
   .navigation-cue { gap: 5px; }
   .nav-direction { font-size: 9px; letter-spacing: 0.08em; }
   .nav-edge-chevron { font-size: 16px; }
+  #hud { --tape-inset: max(5px, env(safe-area-inset-left)); }
   .tape { width: 60px; height: 35vh; min-height: 190px; }
-  .tape.left { left: max(5px, env(safe-area-inset-left)); }
-  .tape.right { right: max(5px, env(safe-area-inset-right)); }
   .tape-readout { min-width: 54px; padding: 4px; font-size: 14px; }
   .throttle { left: max(6px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); width: 60px; }
   .objectives { right: max(6px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); }
@@ -2140,11 +2163,10 @@ input:focus-visible {
 
   #recon {
     --gate-x: 9%;
-    --gate-top: 18%;
-    --gate-bottom: 22%;
+    --gate-y: 20%;
     --gate-head-gap: 38px;
     --gate-foot-gap: 38px;
-    --gate-exposure-gap: 54px;
+    --gate-exposure-gap: 58px;
   }
   /* Drop the instrument's name rather than ellipsising the whole line: the
      state is the half that changes, and truncation ate it first. */
@@ -2241,7 +2263,7 @@ input:focus-visible {
 }
 
 .throttle-zone {
-  right: max(14px, env(safe-area-inset-right));
+  right: var(--act-edge);
   bottom: max(96px, env(safe-area-inset-bottom));
   width: 58px;
   height: min(40vh, 260px);
@@ -2272,11 +2294,21 @@ input:focus-visible {
 #touch.assisted .throttle-zone { display: none; }
 #touch:not(.assisted) .boost-btn { display: none; }
 #touch.assisted.recon-open .boost-btn { display: none; }
+/* Direct mode keeps the throttle strip on the bezel, so the action column steps
+   one lane inboard rather than landing on top of it. Overriding the token is
+   enough — every button reads its right edge from here. */
+#touch:not(.assisted) { --act-right: calc(var(--act-edge) + 58px + var(--act-gap)); }
 
+/* Every action button is one cell of the rail: same width, same right edge.
+   Only `bottom` distinguishes them, and it is always a whole number of slots
+   up from --act-bottom, so nothing can drift out of column. */
 .touch-btn {
   position: absolute;
   pointer-events: auto;
   touch-action: none;
+  right: var(--act-right);
+  width: var(--act-w);
+  height: var(--act-h);
   font: 600 11px/1 var(--mono, monospace);
   letter-spacing: 0.14em;
   color: var(--instrument, #b8d8c4);
@@ -2286,23 +2318,25 @@ input:focus-visible {
   padding: 0;
 }
 .touch-btn:active { background: rgba(184, 216, 196, 0.20); }
+
+/* Slot 0 — the thumb's resting place. Boost owns it in flight; Recon inherits
+   it the moment the camera comes up and Boost leaves, so the action the player
+   is about to press is always in the same place. */
 .boost-btn {
-  right: max(14px, calc(env(safe-area-inset-right) + 14px));
-  bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
-  width: 96px;
-  height: 58px;
+  bottom: var(--act-bottom);
   color: var(--ink, #05070a);
   background: rgba(184, 216, 196, 0.82);
   border-color: rgba(233, 238, 245, 0.82);
 }
-#touch.assisted .recon-btn {
-  right: max(126px, calc(env(safe-area-inset-right) + 126px));
-}
 .recon-btn {
-  right: max(84px, calc(env(safe-area-inset-right) + 84px));
-  bottom: max(96px, env(safe-area-inset-bottom));
-  width: 84px;
-  height: 46px;
+  bottom: var(--act-bottom);
+}
+/* Slot 1 while Boost holds slot 0. */
+#touch.assisted .recon-btn {
+  bottom: calc(var(--act-bottom) + var(--act-pitch));
+}
+#touch.assisted.recon-open .recon-btn {
+  bottom: var(--act-bottom);
 }
 .recon-btn.active {
   background: rgba(184, 216, 196, 0.26);
@@ -2314,21 +2348,20 @@ input:focus-visible {
 .zoom-btn { opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
 #touch.recon-open .shutter-btn,
 #touch.recon-open .zoom-btn { opacity: 1; pointer-events: auto; }
+/* Slot 1 — directly above Recon. */
 .shutter-btn {
-  right: max(84px, calc(env(safe-area-inset-right) + 84px));
-  bottom: max(150px, calc(env(safe-area-inset-bottom) + 54px));
-  width: 84px;
-  height: 46px;
+  bottom: calc(var(--act-bottom) + var(--act-pitch));
 }
-.zoom-btn { width: 44px; height: 44px; font-size: 16px; }
-.zoom-in {
-  right: max(84px, calc(env(safe-area-inset-right) + 84px));
-  bottom: max(374px, calc(env(safe-area-inset-bottom) + 278px));
+/* Slot 2 — the pair splits one slot, so zoom sits with the shutter instead of
+   floating halfway up the photograph. */
+.zoom-btn {
+  bottom: calc(var(--act-bottom) + var(--act-pitch) * 2);
+  width: calc((var(--act-w) - var(--act-gap)) / 2);
+  height: 44px;
+  font-size: 16px;
 }
-.zoom-out {
-  right: max(84px, calc(env(safe-area-inset-right) + 84px));
-  bottom: max(322px, calc(env(safe-area-inset-bottom) + 226px));
-}
+.zoom-in { right: var(--act-right); }
+.zoom-out { right: calc(var(--act-right) + (var(--act-w) + var(--act-gap)) / 2); }
 
 /* Phone layout.
    Two things have to give. The tapes are sized for a desktop window and on a
@@ -2348,15 +2381,32 @@ input:focus-visible {
 
   .stick-zone { height: min(38vh, 256px); }
 
+  /* Both tapes step inboard together. The right one has to — the throttle strip
+     and the action rail own that edge — and the left one follows so the pair
+     stays symmetric. They read as one instrument across the middle of the
+     screen; one hugging the bezel while the other sat 92px in read as a
+     mistake, which is exactly what it looked like on a phone. */
+  #hud { --tape-inset: max(var(--hud-lane), env(safe-area-inset-left)); }
   .tape {
-    width: 56px;
+    width: 60px;
     height: min(38vh, 300px);
     min-height: 0;
   }
-  .tape.left { left: max(5px, env(safe-area-inset-left)); }
-  .tape.right { right: 92px; }
 
-  .tape-readout { font-size: 15px; }
+  /* Sized to the tape rather than to its own minimum, and centred in it. At
+     min-width 54px against a 56px tape a five-figure altitude overhung the rail
+     it belongs to — on the left that put the readout against the bezel, on the
+     right it jutted into the photograph. */
+  .tape-readout {
+    left: -1px;
+    right: -1px;
+    min-width: 0;
+    padding: 4px 2px;
+    font-size: 14px;
+    text-align: center;
+  }
+  .tape.left .tape-readout,
+  .tape.right .tape-readout { text-align: center; }
 
   /* The touch throttle already communicates power. Removing the duplicate HUD
      block leaves the lower-left stick field visually quiet. */
@@ -2373,17 +2423,18 @@ input:focus-visible {
   }
   #hud .target-block .name { font-size: 11px; letter-spacing: 0.2em; }
   #hud .target-block .range { font-size: 13px; }
+  /* Directly below the action column and sharing its right edge, so the corner
+     reads as one stack rather than two things that happen to be near each
+     other. */
   #hud .objectives {
-    right: 92px;
+    right: var(--act-edge);
     bottom: max(8px, env(safe-area-inset-bottom));
   }
 
-  .recon-head {
-    left: max(14px, env(safe-area-inset-left));
-    right: max(14px, env(safe-area-inset-right));
-    top: max(70px, calc(env(safe-area-inset-top) + 58px));
-    gap: 10px;
-  }
+  /* The head is the gate's caption, so it keeps the gate's width. It used to be
+     pinned to the viewport at 14px while the gate sat at 9%, which put its rule
+     22px past the corner brackets at each end. */
+  .recon-head { gap: 10px; }
   .recon-head .recon-status {
     max-width: none;
     overflow: visible;
@@ -2395,96 +2446,115 @@ input:focus-visible {
   }
   .recon-optics { gap: 5px; font-size: 8px; }
   .recon-optics b { font-size: 10px; }
-  /* Lift the whole gate instead of pushing the readouts down into it.
-     The touch controls own the bottom-right corner, so the readouts were given
-     pixel offsets to clear them — but the gate stayed on its percentage, and on
-     a phone those offsets land inside the photograph. Raising the gate's lower
-     edge opens a band beneath it that holds the readouts and still leaves the
-     buttons their corner. */
-  #recon {
-    /* High enough that the readouts below the gate clear the stick zone as well
-     * as the button column — touch-controls.test.mjs holds both to an 8px lane. */
-    --gate-bottom: 36%;
-    --gate-foot-gap: 34px;
-    --gate-exposure-gap: 50px;
-  }
   .quality-legend { font-size: 8px; letter-spacing: 0.12em; }
   .recon-reticle { width: min(54vw, 220px); height: min(54vw, 220px); }
-  .photo-pop { right: 92px; }
+  .photo-pop { right: var(--act-edge); }
 }
 
-/* Compact portrait phones need the instruments above the stick and the two
-   assisted actions in one right-hand column. Recon drops into Boost's vacated
-   slot when the camera is open. */
-@media (pointer: coarse) and (max-height: 700px) and (max-aspect-ratio: 3 / 4) {
+/* Portrait phones need the instruments above the stick rather than beside it,
+   and the readouts above the gate rather than below it.
+   The cutoff is 880px rather than the 700px it used to be because the layout
+   this block replaces stops working well before 700: the centred tape is
+   min(38vh, 300px) and the action column reaches 260px up from the bottom, so
+   they meet at about 836px of viewport height. Everything between 700 and 836 —
+   which is most large phones once the browser chrome is hidden, and every one
+   of them installed to the home screen — was getting the layout that assumes
+   room the screen does not have. */
+@media (pointer: coarse) and (max-height: 880px) and (max-aspect-ratio: 3 / 4) {
+  /* Above the control cluster entirely, so the tapes can come back out to a
+     narrow symmetric inset instead of hiding from the thumbs. */
+  #hud { --tape-inset: max(14px, env(safe-area-inset-left), env(safe-area-inset-right)); }
   .tape {
     top: max(158px, calc(env(safe-area-inset-top) + 146px));
-    height: min(28vh, 168px);
+    /* 24vh, not 28: on a 568px screen the taller tape ran into the top of the
+       action column. */
+    height: min(24vh, 168px);
     transform: none;
   }
-  #hud .objectives {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
+  /* And the Direct-mode throttle strip, which shares the tape's column now that
+     the tape is back on the bezel, is capped so its top stays below it. At
+     min(40vh, 260px) it reached up through the altitude scale on a 568px
+     screen; 200px is still a full-length drag. */
+  .throttle-zone { height: min(29vh, 200px); }
+
+  /* The readouts move above the gate.
+     Below it is not available on a phone: the stick field is the bottom-left
+     256px and the action column the bottom-right 260px, and a gate low enough
+     to leave a clear band under it would have to be about 60px tall. The old
+     layout bought that band by lifting only the gate's *lower* edge, which is
+     what broke concentricity with the reticle. Above the gate the band is free,
+     and nothing there is ever under a hand.
+
+     The three of them are pinned in pixels rather than measured off the gate,
+     because what they have to clear is also in pixels: the acquisition notice
+     runs to y=62 on every phone, and a percentage that cleared it at 691px of
+     height put the header underneath it at 568px. The gate's own inset is then
+     chosen so its top edge stays below the stack on the shortest viewport this
+     block covers. */
+  #recon { --gate-y: 28%; }
+  .recon-head {
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    bottom: auto;
   }
-  #touch.assisted .recon-btn {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
-    bottom: max(162px, calc(env(safe-area-inset-bottom) + 162px));
+  .quality {
+    top: max(112px, calc(env(safe-area-inset-top) + 100px));
+    bottom: auto;
   }
-  #touch.assisted.recon-open .recon-btn {
-    bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  .recon-frame-no {
+    top: max(142px, calc(env(safe-area-inset-top) + 130px));
+    bottom: auto;
   }
 }
 
-/* Short landscape phones use a vertical action rail. The HUD occupies the
-   centre lane between the stick and that rail, while the tapes stay above the
-   stick and inboard of the buttons. */
+/* Short landscape phones use the same column, retuned. The HUD occupies the
+   centre lane between the stick and that rail, and the gate is narrow enough to
+   stay off the rail entirely. */
 @media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
+  /* 320px of height will not hold three 52px slots above a 96px floor, so the
+     column tightens rather than losing its alignment: same right edge, same
+     width, shorter cells and a shorter reach to the bottom one. */
+  :root {
+    --act-h: 44px;
+    --act-bottom: max(14px, calc(env(safe-area-inset-bottom) + 14px));
+  }
+  #hud { --tape-inset: max(14px, env(safe-area-inset-left), env(safe-area-inset-right)); }
   .tape {
     top: max(70px, calc(env(safe-area-inset-top) + 58px));
     width: 54px;
     height: min(22vh, 84px);
     transform: none;
   }
-  .tape.right {
-    right: max(110px, calc(env(safe-area-inset-right) + 110px));
-  }
+  /* Objectives step inboard of the column here, because the column now reaches
+     down to the bottom edge rather than starting 96px up. */
+  #hud .objectives { right: var(--act-lane); }
 
-  #touch.assisted .recon-btn {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
-    bottom: max(162px, calc(env(safe-area-inset-bottom) + 162px));
-  }
-  #touch.assisted.recon-open .recon-btn {
-    bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
-  }
-  .shutter-btn {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
-    bottom: max(150px, calc(env(safe-area-inset-bottom) + 150px));
-  }
-  .zoom-out {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
-    bottom: max(204px, calc(env(safe-area-inset-bottom) + 204px));
-  }
-  .zoom-in {
-    right: max(14px, calc(env(safe-area-inset-right) + 14px));
-    bottom: max(256px, calc(env(safe-area-inset-bottom) + 256px));
-  }
+  /* Landscape keeps the readouts under the gate — that band is clear, between
+     the stick field on the left and the action column on the right. Only the
+     quality bar has to dodge; everything else keeps the gate's own edges.
 
+     The header is pinned rather than measured off the gate for the same reason
+     as in portrait: the acquisition notice ends at y=62 and does not scale.
+     Where the screen is tall enough the gate then starts below it; at 320px it
+     does not, and the header reads as an overlay across the top of the frame. */
+  #recon {
+    /* 22% rather than the desktop 16%: the gate has to end before the action
+       column starts, and on a 568px-wide screen 16% leaves only 91px of margin
+       against the column's 110. */
+    --gate-x: 22%;
+    --gate-y: 27%;
+    --gate-foot-gap: 34px;
+    --gate-exposure-gap: 54px;
+  }
   .recon-head {
-    right: max(120px, calc(env(safe-area-inset-right) + 120px));
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    bottom: auto;
   }
-  .quality {
-    left: calc(min(42vw, 340px) + 8px);
-    right: max(120px, calc(env(safe-area-inset-right) + 120px));
-    bottom: max(14px, calc(env(safe-area-inset-bottom) + 14px));
-  }
-  .recon-frame-no {
-    right: max(120px, calc(env(safe-area-inset-right) + 120px));
-    bottom: max(56px, calc(env(safe-area-inset-bottom) + 56px));
-  }
+  .quality { left: calc(min(42vw, 340px) + 8px); }
   .recon-reticle {
-    width: min(54vh, 180px);
-    height: min(54vh, 180px);
+    width: min(44vh, 160px);
+    height: min(44vh, 160px);
   }
-  .photo-pop { right: max(120px, calc(env(safe-area-inset-right) + 120px)); }
+  .photo-pop { right: var(--act-lane); }
   #hud { font-size: 0.68em; }
 }
 
@@ -2500,7 +2570,7 @@ input:focus-visible {
      50% - 20vh. */
   position: absolute;
   top: calc(50% - 20vh - 20px);
-  right: 4.5vw;
+  right: var(--tape-inset);
   width: 92px;
   justify-content: center;
   display: flex;
@@ -2541,16 +2611,16 @@ input:focus-visible {
 }
 
 /* The radar altimeter tracks the altitude tape, and on a phone the tape is
-   narrower and shorter (60px / 35vh against 92px / 40vh) and hugs the screen
-   edge. This lives at the end of the sheet on purpose: the base .agl-readout
-   rule is declared below the main phone block, so an override placed up there
-   loses on source order at equal specificity.
+   narrower and shorter (60px / 35vh against 92px / 40vh). It reads --tape-inset
+   from the same place the tape does, so only the vertical anchor is left for a
+   breakpoint to state. This lives at the end of the sheet on purpose: the base
+   .agl-readout rule is declared below the main phone block, so an override
+   placed up there loses on source order at equal specificity.
    The max() mirrors the tape's own min-height, so the readout stays clear of
    the tape's top edge on a short viewport too. */
 @media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
   .agl-readout {
     top: calc(50% - max(17.5vh, 95px) - 26px);
-    right: max(5px, env(safe-area-inset-right));
     width: 60px;
     font-size: 11px;
     padding: 2px 4px;
@@ -2558,36 +2628,38 @@ input:focus-visible {
   .agl-readout .agl-label { font-size: 8px; letter-spacing: 0.16em; }
 }
 
-/* The same readout on an actual touch device.
-   The width-based block above is written against the phone *stylesheet* tape
-   (60px wide, edge-hugging, 35vh centred). A coarse pointer overrides all three:
-   the tape becomes 56px wide and sits 92px in from the right to clear the touch
-   controls, and its height becomes min(38vh, 300px) with no min-height. Without
-   these the badge floats beside the tape rather than above it, on every phone
-   the game is actually played on. */
+/* On an actual touch device the badge stacks instead of running as one line.
+   "AGL" and a five-figure reading need 56px of text plus padding, against a tape
+   60px wide — so as a row it overflowed its own plate at both ends. Stacked, it
+   sits exactly as wide as the tape it belongs to and reads as that instrument's
+   sub-scale rather than as a label that came loose. */
 @media (pointer: coarse) {
   .agl-readout {
-    right: 92px;
-    width: 56px;
-    top: calc(50% - min(19vh, 150px) - 26px);
+    width: 60px;
+    top: calc(50% - min(19vh, 150px) - 32px);
+    display: grid;
+    justify-items: center;
+    gap: 0;
+    padding: 3px 2px;
+    line-height: 1.15;
   }
+  .agl-readout .agl-label { letter-spacing: 0.2em; }
 }
-/* Short portrait drops the tape's vertical centring entirely — it is anchored
-   from the top with transform: none — so the badge has to be anchored the same
-   way rather than measured from the middle of the screen. */
-@media (pointer: coarse) and (max-height: 700px) and (max-aspect-ratio: 3 / 4) {
+/* Portrait drops the tape's vertical centring entirely — it is anchored from
+   the top with transform: none — so the badge has to be anchored the same way
+   rather than measured from the middle of the screen. */
+@media (pointer: coarse) and (max-height: 880px) and (max-aspect-ratio: 3 / 4) {
   .agl-readout {
-    top: calc(max(158px, calc(env(safe-area-inset-top) + 146px)) - 26px);
+    top: calc(max(158px, calc(env(safe-area-inset-top) + 146px)) - 32px);
   }
 }
 
-/* Landscape phone: the tape is top-anchored at 70px and only 84px tall, and it
-   sits 110px in from the right to clear the button rail. There is no room above
-   it — that is where the heading strip lives — so the badge goes underneath. */
+/* Landscape phone: the tape is top-anchored at 70px and only 84px tall. There is
+   no room above it — that is where the heading strip lives — so the badge goes
+   underneath. */
 @media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
   .agl-readout {
     top: calc(max(70px, calc(env(safe-area-inset-top) + 58px)) + min(22vh, 84px) + 6px);
-    right: max(110px, calc(env(safe-area-inset-right) + 110px));
     width: 54px;
     font-size: 10px;
   }

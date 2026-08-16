@@ -281,8 +281,12 @@ test('touch CSS switches throttle and Boost without violating phone safe-area la
   assert.match(css, /#touch\.assisted\s+\.throttle-zone[^}]*display:\s*none/s);
   assert.match(css, /#touch:not\(\.assisted\)\s+\.boost-btn[^}]*display:\s*none/s);
   assert.match(css, /#touch\.assisted\.recon-open\s+\.boost-btn[^}]*display:\s*none/s);
-  assert.match(css, /\.boost-btn\s*\{[^}]*right:\s*max\([^}]*safe-area-inset-right/s);
-  assert.match(css, /\.boost-btn\s*\{[^}]*bottom:\s*max\([^}]*safe-area-inset-bottom/s);
+  // Safe-area insets are declared once on the rail's tokens now, so a notched
+  // phone moves every action button by moving --act-edge and --act-bottom.
+  assert.match(css, /--act-edge:\s*max\([^;]*safe-area-inset-right/s);
+  assert.match(css, /--act-bottom:\s*max\([^;]*safe-area-inset-bottom/s);
+  assert.match(css, /\.touch-btn\s*\{[^}]*right:\s*var\(--act-right\)/s);
+  assert.match(css, /\.boost-btn\s*\{[^}]*bottom:\s*var\(--act-bottom\)/s);
 });
 
 function rect(left, top, width, height, name) {
@@ -311,152 +315,308 @@ function lastRuleBody(css, selector) {
   return [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'gs'))].at(-1)?.[1] ?? '';
 }
 
-test('390x844 Assisted controls maintain eight-pixel flight and recon safe rectangles', () => {
+/*
+ * Layout tests read the stylesheet's own tokens rather than restating its
+ * numbers.
+ *
+ * The previous version hardcoded every rectangle — 96x58 at (14, 96), 84x46 at
+ * (126, 96), 84x46 at (84, 150), 44x44 at (84, 374) — and so it passed on a
+ * layout where Shoot and Recon were different sizes in different columns and
+ * the zoom buttons floated 172px above the shutter, in the middle of the
+ * photograph. Every separation it checked held. The thing a player actually
+ * complains about — that none of it lines up — was not among them. These derive
+ * the geometry from --act-* and check alignment as well as clearance.
+ */
+function sliceBlocks(css) {
+  const coarse = css.indexOf('@media (pointer: coarse) {');
+  const portrait = css.indexOf('@media (pointer: coarse) and (max-height: 880px)');
+  const landscape = css.indexOf('@media (pointer: coarse) and (max-height: 420px)');
+  const altimeter = css.indexOf('/* Radar altimeter');
+  assert.ok(coarse > 0 && portrait > coarse && landscape > portrait && altimeter > landscape,
+    'the coarse-pointer layout blocks must appear in base / portrait / landscape order');
+  return {
+    base: css.slice(0, coarse),
+    coarse: css.slice(coarse, portrait),
+    portrait: css.slice(portrait, landscape),
+    landscape: css.slice(landscape, altimeter),
+  };
+}
+
+/** First px literal declared for a property, e.g. `max(14px, ...)` -> 14. */
+function px(body, name) {
+  const value = Number(body.match(new RegExp(`${name}:[^;]*?([\\d.]+)px`))?.[1]);
+  assert.ok(Number.isFinite(value), `${name} must be declared with a px value`);
+  return value;
+}
+
+function pct(body, name) {
+  const value = Number(body.match(new RegExp(`${name}:\\s*([\\d.]+)%`))?.[1]);
+  assert.ok(Number.isFinite(value), `${name} must be declared as a percentage`);
+  return value;
+}
+
+function ruleValue(body, selector, property, pattern) {
+  const rule = [...body.matchAll(new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`, 'gs'))].at(-1)?.[1] ?? '';
+  const value = Number(rule.match(new RegExp(`${property}:\\s*${pattern}`))?.[1]);
+  assert.ok(Number.isFinite(value), `${selector} must declare ${property}`);
+  return value;
+}
+
+/**
+ * The action rail, as the stylesheet describes it.
+ *
+ * Every button is one cell: `right` and `width` come from .touch-btn and only
+ * the slot index varies. Reproducing that mechanism here rather than listing
+ * rectangles is the point — a rule that drifts out of the column no longer has
+ * a slot to be described by.
+ */
+function railFor(css, viewport, overrides = '') {
+  const base = sliceBlocks(css).base;
+  const read = (name) => (new RegExp(`${name}:`).test(overrides) ? px(overrides, name) : px(base, name));
+  const w = read('--act-w');
+  const h = read('--act-h');
+  const gap = read('--act-gap');
+  const right = new RegExp('--act-right:').test(overrides) ? px(overrides, '--act-right') : px(base, '--act-edge');
+  const bottom = read('--act-bottom');
+  const pitch = h + gap;
+  const cell = (slot, height = h, name = 'action') =>
+    rect(viewport.width - right - w, viewport.height - bottom - slot * pitch - height, w, height, name);
+  return { w, h, gap, right, bottom, pitch, cell, lane: right + w + gap, zoomWidth: (w - gap) / 2 };
+}
+
+test('the action rail is one column: one width, one right edge, one pitch', () => {
   const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
-  const viewport = { width: 390, height: 844 };
-  const stickBodies = [...css.matchAll(/\.stick-zone\s*\{([^}]*)\}/gs)];
-  const stickMatch = stickBodies.at(-1)?.[1].match(/height:\s*min\((\d+)vh,\s*(\d+)px\)/);
-  assert.ok(stickMatch, 'the active coarse-pointer stick height must be explicit');
-  const stickHeight = Math.min(viewport.height * Number(stickMatch[1]) / 100, Number(stickMatch[2]));
-  // The readouts below the gate are positioned from the gate itself now, not
-  // from their own pixel offsets. They used to carry independent numbers that
-  // had to agree with the gate's percentage and did not: on a phone the gate
-  // stayed put while the readouts were pushed down to clear the touch buttons,
-  // which put them inside the photograph. Derive the lane the same way the
-  // stylesheet does, so this test tracks the mechanism rather than a constant.
-  const reconVars = lastRuleBody(css, '#recon');
-  const gateBottomPct = Number(reconVars.match(/--gate-bottom:\s*([\d.]+)%/)?.[1]);
-  const footGap = Number(reconVars.match(/--gate-foot-gap:\s*([\d.]+)px/)?.[1]);
-  assert.ok(
-    Number.isFinite(gateBottomPct) && Number.isFinite(footGap),
-    'the coarse-pointer gate must declare --gate-bottom and --gate-foot-gap',
-  );
-  const qualityBottom = (viewport.height * gateBottomPct) / 100 - footGap;
-  assert.ok(qualityBottom > 0, 'the quality lane must sit above the bottom edge');
-
-  const stick = rect(0, viewport.height - stickHeight, Math.min(viewport.width * 0.42, 340), stickHeight, 'stick');
-  const boost = rect(viewport.width - 14 - 96, viewport.height - 96 - 58, 96, 58, 'Boost');
-  const recon = rect(viewport.width - 126 - 84, viewport.height - 96 - 46, 84, 46, 'Recon');
-  const shutter = rect(viewport.width - 84 - 84, viewport.height - 150 - 46, 84, 46, 'Shutter');
-  const zoomIn = rect(viewport.width - 84 - 44, viewport.height - 374 - 44, 44, 44, 'Zoom in');
-  const zoomOut = rect(viewport.width - 84 - 44, viewport.height - 322 - 44, 44, 44, 'Zoom out');
-
-  const leftTape = rect(5, (viewport.height - 300) / 2, 56, 300, 'left HUD tape');
-  const rightTape = rect(viewport.width - 92 - 56, (viewport.height - 300) / 2, 56, 300, 'right HUD tape');
-  const target = rect((viewport.width - 220) / 2, 88, 220, 58, 'target HUD');
-  const objectives = rect(viewport.width - 92 - 96, viewport.height - 8 - 38, 96, 38, 'objectives HUD');
-  const normalHud = [leftTape, rightTape, target, objectives];
-  const normalTouch = [stick, boost, recon];
-  for (const control of normalTouch) {
-    for (const hud of normalHud) assertSeparated(control, hud);
+  // Geometry belongs to .touch-btn, so no individual button can invent its own.
+  const shared = lastRuleBody(css, '.touch-btn');
+  assert.match(shared, /right:\s*var\(--act-right\)/);
+  assert.match(shared, /width:\s*var\(--act-w\)/);
+  assert.match(shared, /height:\s*var\(--act-h\)/);
+  for (const button of ['.boost-btn', '.recon-btn', '.shutter-btn']) {
+    const body = [...css.matchAll(new RegExp(`\\${button}\\s*\\{([^}]*)\\}`, 'gs'))].map((m) => m[1]).join(' ');
+    assert.doesNotMatch(body, /(?:^|[;{\s])width:/, `${button} must not restate the rail width`);
+    assert.doesNotMatch(body, /(?:^|[;{\s])right:/, `${button} must not restate the rail's right edge`);
   }
-  for (let i = 0; i < normalTouch.length; i += 1) {
-    for (let j = i + 1; j < normalTouch.length; j += 1) assertSeparated(normalTouch[i], normalTouch[j]);
+  // Vertically, every button names a whole slot. Anything else — a raw pixel
+  // offset, a half-pitch — is how Shoot and the zoom pair drifted 172px apart.
+  const slot = (n) => (n === 0
+    ? /^\s*bottom:\s*var\(--act-bottom\);/m
+    : new RegExp(`^\\s*bottom:\\s*calc\\(var\\(--act-bottom\\) \\+ var\\(--act-pitch\\)${n > 1 ? ` \\* ${n}` : ''}\\);`, 'm'));
+  for (const [selector, index] of [
+    ['.boost-btn', 0],
+    ['.recon-btn', 0],
+    ['#touch.assisted .recon-btn', 1],
+    ['#touch.assisted.recon-open .recon-btn', 0],
+    ['.shutter-btn', 1],
+    ['.zoom-btn', 2],
+  ]) {
+    assert.match(lastRuleBody(css, selector), slot(index), `${selector} must sit in slot ${index}`);
   }
 
-  const flightNavigation = placeNavigationCue({
-    viewport,
-    cueSize: { width: 112, height: 58 },
-    edgeNdc: { x: 1, y: 0 },
-    avoidRects: [...normalTouch, ...normalHud],
-    gap: 8,
-  }).rect;
-  flightNavigation.name = 'flight navigation cue';
-  for (const obstacle of [...normalTouch, ...normalHud]) assertSeparated(flightNavigation, obstacle);
+  // The zoom pair fills exactly one cell, so the column keeps one left edge.
+  const rail = railFor(css, { width: 402, height: 691 });
+  assert.equal(rail.zoomWidth * 2 + rail.gap, rail.w);
+  assert.ok(rail.zoomWidth >= 44, `zoom buttons are ${rail.zoomWidth}px wide, under the 44px touch minimum`);
+  assert.match(lastRuleBody(css, '.zoom-in'), /right:\s*var\(--act-right\)/);
+  assert.match(lastRuleBody(css, '.zoom-out'), /right:\s*calc\(var\(--act-right\)/);
+  // Direct mode moves the whole column by moving the token, not the buttons.
+  assert.match(css, /#touch:not\(\.assisted\)\s*\{[^}]*--act-right:/s);
+});
 
-  const reconHead = rect(14, 70, viewport.width - 28, 32, 'recon header');
-  const quality = rect(16, viewport.height - qualityBottom - 34, viewport.width - 16 - 92, 34, 'quality HUD');
-  const reconControls = [stick, recon, shutter, zoomIn, zoomOut];
-  const reconHud = [reconHead, quality];
-  for (let i = 0; i < reconControls.length; i += 1) {
-    for (let j = i + 1; j < reconControls.length; j += 1) assertSeparated(reconControls[i], reconControls[j]);
-  }
-  for (const control of reconControls) {
-    for (const hud of reconHud) assertSeparated(control, hud);
+test('the optical gate has one vertical inset, so it stays concentric with the reticle', () => {
+  const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
+  // The reticle is drawn at 50%/50% and ReconCamera scores framing from the
+  // optical axis. A gate with independent top and bottom insets puts the
+  // best-scoring point off-centre in the frame that asks the pilot to aim.
+  assert.doesNotMatch(css, /--gate-top\b/, 'the gate must not carry a separate top inset');
+  assert.doesNotMatch(css, /--gate-bottom\b/, 'the gate must not carry a separate bottom inset');
+  // The base rule, not a breakpoint's size override — its anchor is the invariant.
+  assert.match(sliceBlocks(css).base.match(/\.recon-reticle\s*\{([^}]*)\}/s)[1], /top:\s*50%/);
+  const frame = lastRuleBody(css, '.gate-frame');
+  assert.match(frame, /top:\s*var\(--gate-y\)/);
+  assert.match(frame, /bottom:\s*var\(--gate-y\)/);
+  const declarations = [...css.matchAll(/#recon\s*\{([^}]*)\}/gs)].map((m) => m[1]).filter((b) => /--gate-y/.test(b));
+  assert.ok(declarations.length >= 3, 'every breakpoint that moves the gate must set --gate-y');
+  for (const body of declarations) {
+    const y = pct(body, '--gate-y');
+    assert.ok(y > 0 && y < 50, `--gate-y: ${y}% cannot describe a centred gate`);
   }
 });
 
-test('compact portrait and short landscape controls stay visible and clear of HUD lanes', () => {
+test('402x691 Assisted controls hold the flight and recon lanes and stay in column', () => {
   const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /@media \(pointer: coarse\) and \(max-height: 700px\) and \(max-aspect-ratio: 3 \/ 4\)/);
-  assert.match(css, /@media \(pointer: coarse\) and \(max-height: 420px\) and \(min-aspect-ratio: 4 \/ 3\)/);
-  assert.match(css, /#touch\.assisted \.recon-btn\s*\{[^}]*right:\s*max\(14px[^}]*bottom:\s*max\(162px/s);
-  assert.match(css, /#touch\.assisted\.recon-open \.recon-btn\s*\{[^}]*bottom:\s*max\(96px/s);
-  const compactStart = css.indexOf('@media (pointer: coarse) and (max-height: 700px)');
-  const landscapeStart = css.indexOf('@media (pointer: coarse) and (max-height: 420px)');
-  const compactCss = css.slice(compactStart, landscapeStart);
-  const landscapeCss = css.slice(landscapeStart);
-  const compactTapeTop = Number(compactCss.match(/\.tape\s*\{[^}]*top:\s*max\((\d+)px/s)?.[1]);
-  const landscapeTapeRight = Number(landscapeCss.match(/\.tape\.right\s*\{[^}]*right:\s*max\((\d+)px/s)?.[1]);
-  assert.ok(Number.isFinite(compactTapeTop));
-  assert.ok(Number.isFinite(landscapeTapeRight));
+  const blocks = sliceBlocks(css);
+  const gateX = pct(css.slice(css.indexOf('@media (max-width: 720px)')), '--gate-x');
+  const gateY = pct(blocks.portrait, '--gate-y');
+  const headTop = ruleValue(blocks.portrait, '.recon-head', 'top', 'max\\((\\d+)px');
+  const qualityTop = ruleValue(blocks.portrait, '.quality', 'top', 'max\\((\\d+)px');
+  const expTop = ruleValue(blocks.portrait, '.recon-frame-no', 'top', 'max\\((\\d+)px');
+  const inset = px(blocks.portrait, '--tape-inset');
+  const tapeWidth = ruleValue(blocks.coarse, '.tape', 'width', '(\\d+)px');
+  const tapeTop = ruleValue(blocks.portrait, '.tape', 'top', 'max\\((\\d+)px');
+  const tapeVh = ruleValue(blocks.portrait, '.tape', 'height', 'min\\((\\d+)vh');
+  const tapeMax = ruleValue(blocks.portrait, '.tape', 'height', 'min\\(\\d+vh,\\s*(\\d+)px');
+  const throttleVh = ruleValue(blocks.portrait, '.throttle-zone', 'height', 'min\\((\\d+)vh');
+  const throttleMax = ruleValue(blocks.portrait, '.throttle-zone', 'height', 'min\\(\\d+vh,\\s*(\\d+)px');
 
+  // The device class the layout is actually played on: a large phone in Safari
+  // with both toolbars showing. It sits inside the portrait block, which is why
+  // that block's cutoff is 880px rather than the 700px it used to be.
   for (const viewport of [
-    { width: 320, height: 568 },
-    { width: 360, height: 640 },
+    { width: 402, height: 691 },
+    { width: 390, height: 664 },
+    { width: 430, height: 745 },
     { width: 375, height: 667 },
+    { width: 320, height: 568 },
+    { width: 393, height: 852 },
   ]) {
-    const stick = rect(0, viewport.height - Math.min(viewport.height * 0.38, 256),
-      Math.min(viewport.width * 0.42, 340), Math.min(viewport.height * 0.38, 256), 'stick');
-    const boost = rect(viewport.width - 110, viewport.height - 154, 96, 58, 'Boost');
-    const recon = rect(viewport.width - 98, viewport.height - 208, 84, 46, 'Recon');
-    const leftTape = rect(5, compactTapeTop, 56, Math.min(viewport.height * 0.28, 168), 'left HUD tape');
-    const rightTape = rect(viewport.width - 148, compactTapeTop, 56, Math.min(viewport.height * 0.28, 168), 'right HUD tape');
-    const target = rect((viewport.width - Math.min(220, viewport.width * 0.56)) / 2, 88,
-      Math.min(220, viewport.width * 0.56), 58, 'target HUD');
-    const objectives = rect(viewport.width - 110, viewport.height - 46, 96, 38, 'objectives HUD');
-    const normalControls = [stick, boost, recon];
-    const normalHud = [leftTape, rightTape, objectives];
-    for (const control of normalControls) {
-      assertInside(control, viewport);
-      for (const hud of normalHud) assertSeparated(control, hud);
+    const label = `${viewport.width}x${viewport.height}`;
+    const rail = railFor(css, viewport);
+    const boost = rail.cell(0, rail.h, 'Boost');
+    const reconFlight = rail.cell(1, rail.h, 'Recon');
+    const reconOpen = rail.cell(0, rail.h, 'Recon (camera up)');
+    const shutter = rail.cell(1, rail.h, 'Shutter');
+    const zoomRow = rail.cell(2, 44, 'zoom row');
+    const zoomIn = rect(zoomRow.right - rail.zoomWidth, zoomRow.top, rail.zoomWidth, 44, 'Zoom in');
+    const zoomOut = rect(zoomRow.left, zoomRow.top, rail.zoomWidth, 44, 'Zoom out');
+
+    // Alignment, not just clearance — this is what a separation-only suite missed.
+    for (const cell of [boost, reconFlight, shutter, zoomRow]) {
+      assert.equal(cell.left, boost.left, `${cell.name} is out of column at ${label}`);
+      assert.equal(cell.right, boost.right, `${cell.name} is out of column at ${label}`);
     }
-    assertSeparated(boost, recon);
+    assert.equal(zoomIn.right, zoomRow.right, `zoom pair must reach the column edge at ${label}`);
+    assert.equal(zoomOut.left, zoomRow.left, `zoom pair must reach the column edge at ${label}`);
+    assert.equal(zoomOut.right + rail.gap, zoomIn.left);
+    assert.equal(shutter.top - zoomRow.bottom, rail.gap, `zoom must sit one gap above Shoot at ${label}`);
+    assert.equal(reconOpen.top - shutter.bottom, rail.gap, `Shoot must sit one gap above Recon at ${label}`);
+
+    const stickWidth = Math.min(viewport.width * 0.42, 340);
+    const stickHeight = Math.min(viewport.height * 0.38, 256);
+    const stick = rect(0, viewport.height - stickHeight, stickWidth, stickHeight, 'stick');
+
+    const tapeHeight = Math.min((viewport.height * tapeVh) / 100, tapeMax);
+    const leftTape = rect(inset, tapeTop, tapeWidth, tapeHeight, 'left HUD tape');
+    const rightTape = rect(viewport.width - inset - tapeWidth, tapeTop, tapeWidth, tapeHeight, 'right HUD tape');
+    assert.equal(leftTape.left, viewport.width - rightTape.right,
+      `the tapes must be a symmetric pair at ${label}`);
+
+    const agl = rect(rightTape.left, tapeTop - 32, tapeWidth, 28, 'AGL badge');
+    const objectives = rect(viewport.width - rail.right - 96, viewport.height - 8 - 51, 96, 51, 'objectives HUD');
+    const targetWidth = Math.min(220, viewport.width * 0.56);
+    const target = rect((viewport.width - targetWidth) / 2, 88, targetWidth, 51, 'target HUD');
+
+    const flightHud = [leftTape, rightTape, agl, target, objectives];
+    for (const control of [stick, boost, reconFlight]) {
+      assertInside(control, viewport);
+      for (const hud of flightHud) assertSeparated(control, hud);
+    }
+    assertSeparated(boost, reconFlight);
+    assertSeparated(target, leftTape);
     assertSeparated(target, rightTape);
 
-    const reconOpen = rect(viewport.width - 98, viewport.height - 142, 84, 46, 'Recon open');
-    const shutter = rect(viewport.width - 168, viewport.height - 196, 84, 46, 'Shutter');
-    const zoomOut = rect(viewport.width - 128, viewport.height - 366, 44, 44, 'Zoom out');
-    const zoomIn = rect(viewport.width - 128, viewport.height - 418, 44, 44, 'Zoom in');
-    for (const control of [reconOpen, shutter, zoomOut, zoomIn]) assertInside(control, viewport);
-    assertSeparated(reconOpen, shutter);
-    assertSeparated(zoomOut, zoomIn);
+    // Direct mode: the throttle keeps the bezel and the column steps inboard.
+    const throttleHeight = Math.min((viewport.height * throttleVh) / 100, throttleMax);
+    const throttle = rect(viewport.width - rail.right - 58, viewport.height - rail.bottom - throttleHeight,
+      58, throttleHeight, 'Direct throttle');
+    const directRail = railFor(css, viewport, `--act-right: ${rail.right + 58 + rail.gap}px`);
+    assertSeparated(throttle, directRail.cell(0, directRail.h, 'Direct Recon'));
+    assertSeparated(throttle, rightTape);
+    assertSeparated(throttle, agl);
+    assertInside(throttle, viewport);
+
+    // Recon readouts live above the gate on a phone, clear of both thumbs.
+    const gateTop = (viewport.height * gateY) / 100;
+    const gateLeft = (viewport.width * gateX) / 100;
+    assert.ok(Math.abs((gateTop + (viewport.height - gateTop)) / 2 - viewport.height / 2) < 0.001,
+      `the gate must stay concentric with the reticle at ${label}`);
+    const head = rect(gateLeft, headTop, viewport.width - 2 * gateLeft, 32, 'recon header');
+    const quality = rect(gateLeft, qualityTop, viewport.width - 2 * gateLeft, 22, 'quality HUD');
+    const exposure = rect(viewport.width - gateLeft - 47, expTop, 47, 9, 'exposure counter');
+    // 62px is where the acquisition notice ends, and it does not scale with the
+    // viewport — which is why these three are pinned rather than measured off
+    // the gate.
+    assert.ok(head.top >= 70, `the recon header must clear the notice at ${label}`);
+    assertSeparated(head, quality);
+    assertSeparated(quality, exposure);
+    assert.ok(exposure.bottom + 8 <= gateTop, `the readouts must clear the gate at ${label}`);
+    for (const control of [stick, reconOpen, shutter, zoomIn, zoomOut]) {
+      assertInside(control, viewport);
+      for (const readout of [head, quality, exposure]) assertSeparated(control, readout);
+    }
   }
+});
+
+test('short landscape keeps the same column and a gate clear of it', () => {
+  const css = readFileSync(new URL('../ui/styles.css', import.meta.url), 'utf8');
+  const blocks = sliceBlocks(css);
+  const overrides = blocks.landscape.match(/:root\s*\{([^}]*)\}/s)?.[1] ?? '';
+  assert.match(overrides, /--act-h:/, 'landscape must retune the column through its tokens');
+  const gateX = pct(blocks.landscape, '--gate-x');
+  const gateY = pct(blocks.landscape, '--gate-y');
+  const footGap = px(blocks.landscape, '--gate-foot-gap');
+  const expGap = px(blocks.landscape, '--gate-exposure-gap');
+  const headTop = ruleValue(blocks.landscape, '.recon-head', 'top', 'max\\((\\d+)px');
+  const inset = px(blocks.landscape, '--tape-inset');
+  const tapeWidth = ruleValue(blocks.landscape, '.tape', 'width', '(\\d+)px');
+  const tapeTop = ruleValue(blocks.landscape, '.tape', 'top', 'max\\((\\d+)px');
 
   for (const viewport of [
     { width: 568, height: 320 },
     { width: 667, height: 375 },
     { width: 844, height: 390 },
   ]) {
+    const label = `${viewport.width}x${viewport.height}`;
+    const rail = railFor(css, viewport, overrides);
+    const recon = rail.cell(0, rail.h, 'Recon');
+    const shutter = rail.cell(1, rail.h, 'Shutter');
+    const zoomRow = rail.cell(2, 44, 'zoom row');
+    for (const cell of [recon, shutter, zoomRow]) {
+      assertInside(cell, viewport);
+      assert.equal(cell.right, recon.right, `${cell.name} is out of column at ${label}`);
+    }
+    assertSeparated(zoomRow, shutter);
+    assertSeparated(shutter, recon);
+
     const stickWidth = Math.min(viewport.width * 0.42, 340);
     const stickHeight = Math.min(viewport.height * 0.38, 256);
     const stick = rect(0, viewport.height - stickHeight, stickWidth, stickHeight, 'stick');
-    const rightTape = rect(viewport.width - landscapeTapeRight - 54, 70,
-      54, Math.min(viewport.height * 0.22, 84), 'right HUD tape');
-    const target = rect((viewport.width - Math.min(220, viewport.width * 0.56)) / 2, 88,
-      Math.min(220, viewport.width * 0.56), 58, 'target HUD');
-    const boost = rect(viewport.width - 110, viewport.height - 154, 96, 58, 'Boost');
-    const recon = rect(viewport.width - 98, viewport.height - 208, 84, 46, 'Recon');
-    for (const control of [stick, boost, recon]) assertInside(control, viewport);
-    assertSeparated(stick, rightTape);
-    assertSeparated(boost, rightTape);
-    assertSeparated(recon, rightTape);
-    assertSeparated(boost, recon);
-    assertSeparated(target, rightTape);
 
-    const rail = [
-      rect(viewport.width - 98, viewport.height - 142, 84, 46, 'Recon open'),
-      rect(viewport.width - 98, viewport.height - 196, 84, 46, 'Shutter'),
-      rect(viewport.width - 58, viewport.height - 248, 44, 44, 'Zoom out'),
-      rect(viewport.width - 58, viewport.height - 300, 44, 44, 'Zoom in'),
-    ];
-    const quality = rect(stickWidth + 8, viewport.height - 48, viewport.width - stickWidth - 128, 34, 'quality HUD');
-    for (let index = 0; index < rail.length; index += 1) {
-      assertInside(rail[index], viewport);
-      assertSeparated(rail[index], rightTape);
-      assertSeparated(rail[index], quality);
-      if (index > 0) assertSeparated(rail[index - 1], rail[index]);
+    const tapeHeight = Math.min(viewport.height * 0.22, 84);
+    const leftTape = rect(inset, tapeTop, tapeWidth, tapeHeight, 'left HUD tape');
+    const rightTape = rect(viewport.width - inset - tapeWidth, tapeTop, tapeWidth, tapeHeight, 'right HUD tape');
+    assert.equal(leftTape.left, viewport.width - rightTape.right, `the tapes must stay symmetric at ${label}`);
+    for (const cell of [recon, shutter, zoomRow]) assertSeparated(cell, rightTape);
+    assertSeparated(stick, rightTape);
+
+    // The landscape gate is narrow enough to stay off the column entirely.
+    const gateLeft = (viewport.width * gateX) / 100;
+    const gateTop = (viewport.height * gateY) / 100;
+    const gate = rect(gateLeft, gateTop, viewport.width - 2 * gateLeft, viewport.height - 2 * gateTop, 'optical gate');
+    assert.ok(Math.abs((gate.top + gate.bottom) / 2 - viewport.height / 2) < 0.001,
+      `the gate must stay concentric with the reticle at ${label}`);
+    for (const cell of [recon, shutter, zoomRow]) assertSeparated(cell, gate);
+
+    // The header clears the acquisition notice and stays in the gate's upper
+    // half. It is not held off the gate itself: on a 320px-tall landscape
+    // screen there is no band between the notice at y=62 and a gate big enough
+    // to hold the reticle, so the header sits over the top of the frame the way
+    // a viewfinder overlay does. Above it — where a taller screen has room — is
+    // what the percentage buys.
+    const head = rect(gateLeft, headTop, gate.width, 26, 'recon header');
+    assert.ok(head.top >= 70, `the header must clear the notice at ${label}`);
+    assert.ok(head.bottom < gate.top + gate.height / 2, `the header must stay at the top at ${label}`);
+    assert.equal(head.left, gate.left, `the header must keep the gate's width at ${label}`);
+    assert.equal(head.right, gate.right, `the header must keep the gate's width at ${label}`);
+    const quality = rect(stickWidth + 8, viewport.height - (gateTop - footGap) - 22,
+      viewport.width - gateLeft - stickWidth - 8, 22, 'quality HUD');
+    const exposure = rect(viewport.width - gateLeft - 47, viewport.height - (gateTop - expGap) - 9,
+      47, 9, 'exposure counter');
+    for (const readout of [quality, exposure]) {
+      assertInside(readout, viewport);
+      assertSeparated(stick, readout);
+      for (const cell of [recon, shutter, zoomRow]) assertSeparated(cell, readout);
     }
-    assertSeparated(stick, quality);
+    assertSeparated(quality, exposure);
   }
 });
+

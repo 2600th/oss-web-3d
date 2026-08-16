@@ -312,47 +312,33 @@ test('coarse-pointer pause controls retain a 44px touch target', () => {
   );
 });
 
-test('390x844 recon zoom controls clear the throttle and each other by at least 8px', () => {
+test('390x844 recon zoom controls keep a 44px target and clear the Direct throttle', () => {
   const viewport = { width: 390, height: 844 };
-  const throttleCss = ruleBody('.throttle-zone');
-  const zoomCss = ruleBody('.zoom-btn', true);
-  const zoomInCss = ruleBody('.zoom-in');
-  const zoomOutCss = ruleBody('.zoom-out');
-  const throttleHeight = Number(throttleCss.match(/height:\s*min\([^,]+,\s*([0-9]+)px\)/)?.[1]);
-  assert.ok(Number.isFinite(throttleHeight));
+  const root = ruleBody(':root');
+  const token = (name) => {
+    const match = root.match(new RegExp(`${name}:[^;]*?([0-9.]+)px`));
+    assert.ok(match, `missing ${name} in :root`);
+    return Number(match[1]);
+  };
+  const actW = token('--act-w');
+  const actGap = token('--act-gap');
+  const actEdge = token('--act-edge');
 
-  const rect = ({ right, bottom, width, height }) => ({
-    left: viewport.width - right - width,
-    right: viewport.width - right,
-    top: viewport.height - bottom - height,
-    bottom: viewport.height - bottom,
-    width,
-    height,
-  });
-  const throttle = rect({
-    right: leadingPx(throttleCss, 'right'),
-    bottom: leadingPx(throttleCss, 'bottom'),
-    width: directPx(throttleCss, 'width'),
-    height: Math.min(viewport.height * 0.4, throttleHeight),
-  });
-  const zoomWidth = directPx(zoomCss, 'width');
-  const zoomHeight = directPx(zoomCss, 'height');
-  const zoomIn = rect({
-    right: leadingPx(zoomInCss, 'right'),
-    bottom: leadingPx(zoomInCss, 'bottom'),
-    width: zoomWidth,
-    height: zoomHeight,
-  });
-  const zoomOut = rect({
-    right: leadingPx(zoomOutCss, 'right'),
-    bottom: leadingPx(zoomOutCss, 'bottom'),
-    width: zoomWidth,
-    height: zoomHeight,
-  });
-
+  // The zoom pair splits one cell of the action rail rather than carrying its
+  // own offsets, so its width is a consequence of the column's — which is what
+  // keeps the two of them, the shutter and Recon on a single left edge.
+  const zoomWidth = (actW - actGap) / 2;
+  const zoomHeight = directPx(ruleBody('.zoom-btn', true), 'height');
   assert.ok(zoomWidth >= 44 && zoomHeight >= 44, `zoom target is only ${zoomWidth}x${zoomHeight}`);
-  assert.ok(throttle.left - zoomOut.right >= 8, `zoom/throttle gap is ${throttle.left - zoomOut.right}px`);
-  assert.ok(zoomOut.top - zoomIn.bottom >= 8, `zoom button gap is ${zoomOut.top - zoomIn.bottom}px`);
+  assert.match(ruleBody('.zoom-btn', true), /width:\s*calc\(\(var\(--act-w\) - var\(--act-gap\)\) \/ 2\)/);
+
+  // Direct mode is the only state where a throttle strip and the action column
+  // are both on screen, and the column clears it by moving one token.
+  assert.match(ruleBody('#touch:not(.assisted)', true), /--act-right:\s*calc\(var\(--act-edge\) \+ 58px/);
+  const throttleWidth = directPx(ruleBody('.throttle-zone'), 'width');
+  const throttleLeft = viewport.width - actEdge - throttleWidth;
+  const columnRight = viewport.width - (actEdge + throttleWidth + actGap);
+  assert.ok(throttleLeft - columnRight >= 8, `zoom/throttle gap is ${throttleLeft - columnRight}px`);
 });
 
 test('phone quality is represented by a real selected pause-menu choice', () => {
