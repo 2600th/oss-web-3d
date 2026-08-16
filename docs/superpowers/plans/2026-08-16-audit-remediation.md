@@ -26,7 +26,10 @@
 
 ## Status — 16 August 2026
 
-Branch `audit-fixes`. 251 tests pass, `npm run check` and `npm run build` clean.
+**Merged to `main`.** The branch `audit-fixes` no longer exists; everything below
+landed, plus a further round of work described at the end of this section.
+
+Originally on branch `audit-fixes`. 251 tests pass, `npm run check` and `npm run build` clean.
 
 **Landed:** F1 (Enter/debrief), F2 (line of sight — plus a second defect the test
 uncovered: fixed 30-sample spacing stepped over ridges at range), F3 (sortie clock on
@@ -1462,3 +1465,39 @@ sortie params carry `sunElevationDeg`/`sunAzimuthDeg`, matching. `Mission.update
 simDt)` — `simDt` is computed as `steps * PHYSICS_STEP` in `Game._updateFlight`.
 `Terrain.update(focus, budget, fovScale)` — third argument defaults to `1` so existing
 callers in `Game.load` and the cinematic path are unaffected.
+
+### After the merge
+
+Landed on `main` after the remediation branch was merged, mostly from user reports:
+
+- **The nozzle ring was a quarter turn off.** `TorusGeometry` already revolves about
+  Z — the exhaust axis — and carried a `rotateX(PI/2)` copied from the plume cylinders,
+  whose axis is Y. Measured: ring axis dot fore-aft went 0 -> 1, dot up 1 -> 0.
+- **The daily seed rotates through ten curated seeds** rather than an unbounded index,
+  screened across 1,200 seeds for sun angle, cloud coverage and >3.9 km of relief.
+- **The title camera flew through terrain.** Its altitude came from the terrain at the
+  orbit *centre* while the camera flies a 5.2 km circle; **seven of the ten featured
+  seeds put it underground**, worst case 1,315 m. Now >= 1,618 m clearance on all ten.
+- **iOS could not load.** `supportsWebGL2()` created a throwaway context and released it
+  through `WEBGL_lose_context`, which need not exist — so the probe leaked a context.
+  One context is now acquired on the real canvas and handed to the renderer. *The leak
+  is proven; that it was the iOS cause is not, and needs device confirmation.*
+- **Mobile layout.** The briefing runs ~1,130 px against 896 px of glass, so the primary
+  action sat below the fold; it is now pinned, with clearance for the fiction disclaimer.
+
+A second adversarial review over those commits found eight surviving issues, all fixed:
+the pinned bar buried the disclaimer (the clearance was on `.centre`, a sibling *before*
+it); the debrief cards had no distinguishing class so two of the three pinning selectors
+were dead; the `.agl-readout` phone override was written against stylesheet tape geometry
+that the `pointer: coarse` block overrides, so it missed the tape on every real touch
+device; `:has()` was grouped into a non-forgiving selector list; the pause screen got
+clearance for a bar it never pins; `GL_ATTRIBUTES` was documented as shared but Engine
+re-declared a literal three.js ignores; and the refused-context message blamed other tabs
+for what is usually a driver refusal.
+
+**And the cinematic test was near-vacuous** — it asserted the clamped clearance, which
+`max(y, ground + 1050) - ground >= 1050` satisfies algebraically whatever the ceiling is.
+It passed on seven of ten seeds with the fix reverted, four of them kilometres
+underground. It now measures the *unclamped* orbit, and carries a guard asserting the
+featured seeds still contain a case the naive ceiling gets wrong. Verified by reverting
+the fix: it now fails on the first seed at -205.9 m.
