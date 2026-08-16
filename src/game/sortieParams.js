@@ -32,14 +32,38 @@ function unit(seed, salt) {
 }
 
 /**
+ * The sortie rotation.
+ *
+ * Ten hand-picked seeds rather than an unbounded daily index. The generator is
+ * uniform, not curated: it will happily open a sortie on a gentle plateau under
+ * a high sun, which is flyable but dull. These were screened over 1,200 seeds
+ * for three things at once — sun elevation in the 13.5-22 degree band where the
+ * terrain's baked shadow march has something to show, cloud coverage that gives
+ * the deck shape without closing the valleys, and better than 3.9 km of relief
+ * with a mean altitude in the snow-and-rock transition — then flown and looked
+ * at. Their sun azimuths spread right around the compass, so consecutive days
+ * do not light the mountains the same way.
+ *
+ * `?seed=N` still accepts any number at all; this only governs the rotation.
+ */
+export const FEATURED_SEEDS = Object.freeze([
+  634, 1012, 772, 1185, 1003, 42, 489, 198, 1015, 406,
+]);
+
+/**
  * The seed everyone flying today shares.
  *
  * A daily seed is what makes a fastest-sortie board mean anything: it compares
  * pilots on the same terrain, the same five positions and the same light,
- * instead of on whatever the generator happened to hand each of them.
+ * instead of on whatever the generator happened to hand each of them. Rotating
+ * through a curated list keeps that property and adds a second one — every day
+ * is a sortie worth looking at.
  */
 export function dailySeed(now = Date.now()) {
-  return Math.floor(now / 86400000);
+  const day = Math.floor(now / 86400000);
+  // `day` can be negative for pre-epoch clocks; keep the index non-negative.
+  const index = ((day % FEATURED_SEEDS.length) + FEATURED_SEEDS.length) % FEATURED_SEEDS.length;
+  return FEATURED_SEEDS[index];
 }
 
 /**

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dailySeed, resolveSeed, sortieLabel, sortieParams } from './sortieParams.js';
+import { FEATURED_SEEDS, dailySeed, resolveSeed, sortieLabel, sortieParams } from './sortieParams.js';
 import { findPostSites } from './Mission.js';
 import * as THREE from 'three';
 
@@ -72,6 +72,47 @@ import * as THREE from 'three';
       assert.ok(Number.isFinite(site.position.y), `seed ${seed} produced a site with no ground under it`);
     }
   }
+}
+
+{
+  // The rotation is curated, not an unbounded daily index: the generator is
+  // uniform and will happily open a sortie on a gentle plateau under a high
+  // sun. Every featured seed must clear the bar it was picked for.
+  assert.equal(FEATURED_SEEDS.length, 10);
+  assert.equal(new Set(FEATURED_SEEDS).size, 10, 'no seed appears twice in the rotation');
+
+  const azimuths = [];
+  for (const seed of FEATURED_SEEDS) {
+    const p = sortieParams(seed);
+    assert.ok(
+      p.sunElevationDeg >= 13.5 && p.sunElevationDeg <= 22,
+      `featured seed ${seed} sun at ${p.sunElevationDeg.toFixed(1)} is outside the photogenic band`,
+    );
+    const sites = findPostSites(new THREE.Vector3(p.origin.x, 0, p.origin.z), 5);
+    assert.equal(sites.length, 5, `featured seed ${seed} must yield five objectives`);
+    assert.equal(
+      new Set(sites.map((s2) => `${s2.position.x},${s2.position.z}`)).size, 5,
+      `featured seed ${seed} must yield five distinct objectives`,
+    );
+    azimuths.push(p.sunAzimuthDeg);
+  }
+  // Consecutive days should not light the mountains the same way.
+  const quadrants = new Set(azimuths.map((a) => Math.floor(a / 90)));
+  assert.equal(quadrants.size, 4, `the sun should come from all four quadrants, saw ${quadrants.size}`);
+}
+
+{
+  // The rotation walks the list and wraps, including for pre-epoch clocks.
+  const day = 86400000;
+  const first = dailySeed(0);
+  assert.ok(FEATURED_SEEDS.includes(first), 'a daily seed is always a featured one');
+  assert.equal(dailySeed(10 * day), first, 'the rotation wraps after ten days');
+  assert.notEqual(dailySeed(day), first, 'consecutive days differ');
+  assert.ok(FEATURED_SEEDS.includes(dailySeed(-3 * day)), 'a pre-epoch clock still lands on the list');
+
+  const seen = new Set();
+  for (let d = 0; d < 10; d++) seen.add(dailySeed(d * day));
+  assert.equal(seen.size, 10, 'ten consecutive days visit every featured seed');
 }
 
 console.log('sortie parameter contracts passed');
