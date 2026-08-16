@@ -19,6 +19,7 @@ import { ReconCamera, CAPTURE_THRESHOLD } from './ReconCamera.js';
 import { NavigationHintTracker } from './NavigationHint.js';
 import { Leaderboard } from './Leaderboard.js';
 import { terrainVisibility } from './TerrainVisibility.js';
+import { acceptsLaunchKey } from './sortieState.js';
 import { Hud } from '../ui/Hud.js';
 import { Screens } from '../ui/Screens.js';
 
@@ -620,10 +621,10 @@ export class Game {
       else if (this.state === 'paused') this.resume();
     }
 
-    if ((this.state === 'briefing' || this.state === 'complete' || this.state === 'failed') &&
-        input.consumePress('Enter')) {
-      if (this.state === 'briefing') this.launch();
-      else this.restart();
+    // See acceptsLaunchKey: Enter is also the shutter, so a debrief must not
+    // accept it. Restart stays on the debrief's own button.
+    if (acceptsLaunchKey(this.state) && input.consumePress('Enter')) {
+      this.launch();
     }
 
     switch (this.state) {
