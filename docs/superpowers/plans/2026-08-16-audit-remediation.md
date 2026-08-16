@@ -41,11 +41,31 @@ terms, energy term, grade bands), G3 (AGL readout), and most of Task 13.
 **Retracted — the audit was wrong:** D5 and the `__sagar` item. The `window.__*` harness
 does not ship; `main.js:205` wraps it in `import.meta.env.DEV`, verified against `dist/`.
 
+Also landed after the first pass: D2 (sector and range band until a position is visually
+acquired), G5 (plates cropped toward the objective), re-photography via the manual shutter,
+E3 (capture no longer runs a full resize), and four of the 018 post-chain items — lens-flare
+aspect correction, heat shimmer anchored to the exhaust, the motion-blur optical centre
+(declared and read by the shader since day one but never written), and the tone look's toe
+lift, which was an S-curve that darkened the very shadows it claimed to protect.
+
+**Adversarial branch review.** Four dimension reviewers over `git diff main...audit-fixes`,
+each followed by a verifier instructed to refute. 22 raw claims, 13 survived. All the
+confirmed ones are fixed: the AGL readout was being clipped away entirely by the altitude
+tape's `overflow: hidden` (my own live check used `getBoundingClientRect`, which cannot see
+clipping); a throw inside the rAF callback froze the game silently once stray errors stopped
+being fatal; context loss stopped the loop but left the audio beds running; the AGL change
+guard stored a number where `set()` keeps a string, so it rewrote the node every frame; the
+caution colour referenced an undefined `--warn`; `terrainDetailWeight`'s JS mirror never
+gained the `uZoomScale` factor its GLSL twin did; and switching to phone left FX materials
+holding a freed depth texture for one frame.
+
 **Deferred, with reasons:** F6 (the unread cloud shadow target — removal is entangled with
 two near-duplicate update paths in a 1,138-line file for a scissored 32x256 stripe per
-frame; an A/B was inconclusive and the risk outweighs the gain). D2 (search area instead of
-a waypoint). G5 (plate crops). Re-photography. E3 (capture-target realloc). Most of the 018
-post-chain list. E6 (Game.js extraction). V4/V6/V7/G4/D4 were never in this plan.
+frame; an A/B was inconclusive and the risk outweighs the gain). E6 (Game.js extraction).
+The remaining 018 items: bloom-after-exposure ordering (needs a threshold retune and a
+careful look at what should still bloom), the dither transfer-curve fix, SMAA's gamma-space
+threshold on linear values, recon exposure compensation, and `fxCurl`'s normalisation.
+V4/V6/V7/G4/D4 were roadmap items, not defects, and were never in this plan.
 
 ---
 
