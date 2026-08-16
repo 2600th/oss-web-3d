@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { terrainHeight } from '../world/heightfield.js';
+import { REHEAT_THRESHOLD } from './burner.js';
 
 /**
  * Arcade flight model with real aerodynamic bones.
@@ -203,7 +204,13 @@ export class FlightModel {
     this.throttle = control.throttle;
     // Engines spool; the sound and the thrust both need to lag the lever.
     this.throttleSmoothed += (this.throttle - this.throttleSmoothed) * (1 - Math.exp(-2.4 * dt));
-    this.reheat = this.throttle > 0.86;
+    // On the *smoothed* lever, and at the same threshold the visual burner
+    // uses. This read the raw lever while burner.js ramped the flame from the
+    // smoothed one at 0.84, so slamming the throttle open delivered reheat
+    // thrust a beat before the flame appeared, and the two disagreed either
+    // side of the detent. The comment directly above says the thrust should lag
+    // the lever; now it does.
+    this.reheat = this.throttleSmoothed > REHEAT_THRESHOLD;
 
     const speed = this.velocity.length();
 

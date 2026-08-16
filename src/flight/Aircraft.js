@@ -85,6 +85,19 @@ export class Aircraft {
     this._buildExhaust();
   }
 
+  /**
+   * Hide the exhaust when there is no airframe for it to come out of.
+   *
+   * The exhaust is built in the constructor so it is ready before the model
+   * arrives. If the model never arrives — Game deliberately survives that and
+   * keeps flying on instruments — the flame carried on rendering by itself, and
+   * the sortie was flown by a disembodied afterburner.
+   */
+  setExhaustVisible(visible) {
+    this.burnerActive = this.burnerActive && visible;
+    if (this.exhaust) this.exhaust.visible = Boolean(visible);
+  }
+
   async load(url = './models/mig21.glb', envMap = null) {
     const loader = new GLTFLoader();
     loader.setMeshoptDecoder(MeshoptDecoder);

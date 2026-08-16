@@ -319,6 +319,9 @@ export class Game {
       // A missing airframe should not take the whole experience down; the world
       // and the mission are still flyable, and the failure is visible.
       console.error('[game] aircraft model failed to load', error);
+      // The exhaust is built in Aircraft's constructor, so without this the
+      // sortie is flown by a disembodied afterburner.
+      this.aircraft.setExhaustVisible(false);
       this.screens.showNotice?.('Aircraft model unavailable — continuing with flight instruments.');
     }
     this.screens.setProgress(0.75, 'Preparing reconnaissance sites');
