@@ -156,7 +156,7 @@ export class ReconCamera {
    * Score what the camera is currently looking at, for a given post.
    * Returns a breakdown so the HUD can show the pilot *why* a shot is weak.
    */
-  evaluate(post) {
+  evaluate(post, flightState = null) {
     const camera = this.camera;
     _toTarget.subVectors(post.aimPoint, camera.position);
     const range = _toTarget.length();
@@ -172,6 +172,7 @@ export class ReconCamera {
         coverage: 0,
         rangeQuality: 0,
         angleQuality: 0,
+        energy: 0,
         score: 0,
       };
       this._evaluationByPost.set(post, result);
@@ -183,6 +184,7 @@ export class ReconCamera {
     result.coverage = 0;
     result.rangeQuality = 0;
     result.angleQuality = 0;
+    result.energy = 0;
     result.score = 0;
     if (range < 1) return result;
 
@@ -193,22 +195,24 @@ export class ReconCamera {
 
     // Framing: dead centre is best, and it falls away smoothly rather than at
     // the frame edge, so a shot that clips the border still scores something.
-    result.framing = clamp01(1 - offset / 1.05);
+    // Tighter than 1.05: the old falloff gave a shot most of its framing credit
+    // anywhere in the frame at all, so framing barely discriminated.
+    result.framing = clamp01(1 - offset / 0.72);
 
     // Screen coverage from the true angular size of the camp footprint.
     const vFov = THREE.MathUtils.degToRad(camera.fov);
     const angular = 2 * Math.atan(POST_RADIUS / range);
     const fraction = angular / vFov;
-    result.coverage = band(fraction, 0.1, 0.22, 0.8, 1.5);
+    result.coverage = band(fraction, 0.13, 0.28, 0.66, 1.20);
 
-    result.rangeQuality = band(range, 160, IDEAL_RANGE_MIN, IDEAL_RANGE_MAX, HARD_RANGE_MAX);
+    result.rangeQuality = band(range, 220, IDEAL_RANGE_MIN, IDEAL_RANGE_MAX * 0.78, HARD_RANGE_MAX);
 
     // Viewing angle: an oblique looking down onto the position is what makes a
     // usable photograph. Straight-on from the same altitude shows nothing, and
     // straight down loses the terrain context.
     camera.getWorldDirection(_viewDir);
     const depression = Math.asin(clamp(-_viewDir.y, -1, 1));
-    result.angleQuality = band(depression, -0.08, 0.10, 0.72, 1.15);
+    result.angleQuality = band(depression, 0.02, 0.20, 0.56, 1.02);
 
     // Line of sight is 31 samples of the height function and it is the only
     // expensive term here, so it is gated on the cheap frustum test that has
@@ -220,12 +224,10 @@ export class ReconCamera {
 
     result.visibility = this.lineOfSight(camera.position, post.aimPoint);
 
-    result.score =
-      result.visibility *
-      (0.30 * result.framing +
-        0.25 * result.coverage +
-        0.22 * result.rangeQuality +
-        0.23 * result.angleQuality);
+    result.energy = flightState
+      ? energyTerm(flightState.speed, flightState.agl)
+      : NEUTRAL_ENERGY;
+    result.score = composeScore(result);
 
     return result;
   }
@@ -466,6 +468,53 @@ function clamp01(v) {
 }
 
 /** Trapezoid: 0 below `lo`, 1 across the plateau, 0 above `hi`. */
+/**
+ * How well the aircraft was being flown when the shutter fired.
+ *
+ * Nothing in the score used to depend on this, so the optimal way to photograph
+ * a position was to loiter above it, slowly, in level flight — the exact
+ * opposite of the sortie the briefing describes and the flight model is built
+ * for. Both bands close at the top as well as the bottom: scraping the ridge at
+ * 20 m is not skill, and past the airframe's useful band more speed only makes
+ * the plate harder to hold.
+ *
+ * @param {number} speed  metres per second
+ * @param {number} agl    metres above the ground below
+ */
+export function energyTerm(speed, agl) {
+  const fast = band(speed, 90, 175, 320, 430);
+  const low = band(agl, 40, 140, 900, 2600);
+  return 0.5 * fast + 0.5 * low;
+}
+
+/** Neutral energy for callers that have no flight state to offer. */
+const NEUTRAL_ENERGY = 0.62;
+
+/**
+ * Combine the plate's terms into one score in [0, 1].
+ *
+ * Visibility multiplies rather than adds: a ridge between the camera and the
+ * position does not make a worse photograph, it makes no photograph. The rest
+ * are weighted so a perfect plate reaches exactly 1, which is what keeps the
+ * grade thresholds meaning what they say.
+ */
+export function composeScore({
+  visibility = 0,
+  framing = 0,
+  coverage = 0,
+  rangeQuality = 0,
+  angleQuality = 0,
+  energy = NEUTRAL_ENERGY,
+}) {
+  return visibility * (
+    0.24 * framing +
+    0.20 * coverage +
+    0.18 * rangeQuality +
+    0.20 * angleQuality +
+    0.18 * energy
+  );
+}
+
 function band(v, lo, plateauLo, plateauHi, hi) {
   if (v <= lo || v >= hi) return 0;
   if (v < plateauLo) return smoothstep(lo, plateauLo, v);

@@ -910,22 +910,37 @@ export class Game {
     camera.updateMatrixWorld();
   }
 
+  /**
+   * How the aircraft is being flown, for the energy term of the plate score.
+   *
+   * A photograph is now partly a record of the pass that took it, so the score
+   * needs the same speed and ground clearance the HUD is showing.
+   */
+  _flightStateForScoring() {
+    const p = this.flight.position;
+    return {
+      speed: this.flight.velocity.length(),
+      agl: p.y - terrainHeight(p.x, p.z),
+    };
+  }
+
   /** The post the camera is best placed to photograph right now. */
   _evaluateBest() {
     let best = null;
+    const flightState = this._flightStateForScoring();
     for (const post of this.mission.posts) {
       // A post already in the bag must not compete for the shot. Leaving them
       // in meant flying past a captured site while lining up the next one
       // handed the overlay to the wrong target and re-fired the capture
       // confirmation on a post that was finished several minutes ago.
       if (post.captured) continue;
-      const ev = this.recon.evaluate(post);
+      const ev = this.recon.evaluate(post, flightState);
       if (!ev.inFrame) continue;
       if (!best || ev.score > best.score) best = ev;
     }
     // Fall back to the steering target so the overlay can explain itself even
     // when nothing is framed.
-    if (!best && this.mission.target) return this.recon.evaluate(this.mission.target);
+    if (!best && this.mission.target) return this.recon.evaluate(this.mission.target, flightState);
     return best;
   }
 
