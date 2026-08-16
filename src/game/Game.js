@@ -334,6 +334,7 @@ export class Game {
     this.screens.setProgress(0.75, 'Preparing reconnaissance sites');
 
     this.mission = new Mission(this.engine.scene, this.flight.position, 5, this.sortie.seed);
+    this.screens.setSortieLabel?.(sortieLabel(this.sortie.seed));
     this.screens.setTargets(this.mission.posts);
     this.hud.setObjectiveCount(this.mission.posts.length);
     this.screens.setQuality(this.settings.tierName);
@@ -488,6 +489,7 @@ export class Game {
     }
     this.mission.dispose();
     this.mission = new Mission(this.engine.scene, this._startPosition(), 5, this.sortie.seed);
+    this.screens.setSortieLabel?.(sortieLabel(this.sortie.seed));
     this.screens.setTargets(this.mission.posts);
     this.hud.setObjectiveCount(this.mission.posts.length);
     this.launch();

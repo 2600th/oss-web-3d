@@ -731,7 +731,7 @@ export class Screens {
     const grid = el('div', 'briefing', centre);
 
     const left = el('div', 'brief-col', grid);
-    el('div', 'eyebrow', left, 'Fictional operation • Western Himalaya');
+    this.briefingEyebrow = el('div', 'eyebrow', left, 'Fictional operation • Western Himalaya');
     el('h2', 'brief-heading', left, 'Sortie Briefing');
     const body = el('div', 'brief-body', left);
     body.innerHTML =
@@ -763,6 +763,21 @@ export class Screens {
 
     el('div', 'disclaimer', layer, DISCLAIMER);
     this.briefingLayer = layer;
+  }
+
+  /**
+   * Name the sortie on the briefing and the record card.
+   *
+   * A seeded sortie is shareable — the same string produces the same world for
+   * anyone — so it needs to be visible somewhere the player can read it off.
+   */
+  setSortieLabel(label) {
+    if (!label) return;
+    this._sortieLabel = label;
+    if (this.briefingEyebrow) {
+      this.briefingEyebrow.textContent = `Fictional operation • Western Himalaya • ${label}`;
+    }
+    if (this.recordEyebrow) this.recordEyebrow.textContent = `Sortie record • ${label}`;
   }
 
   setTargets(posts) {
@@ -838,7 +853,7 @@ export class Screens {
     // where it belongs: the briefing eyebrow reads "Fictional operation" and so
     // does the page description. Repeating it over the contact sheet made the
     // one line the player reads as a result caption argue with itself.
-    el('div', 'eyebrow record-eyebrow', this.recordCard, 'Sortie record');
+    this.recordEyebrow = el('div', 'eyebrow record-eyebrow', this.recordCard, 'Sortie record');
     this.contactSheet = el('div', 'contact-sheet', this.recordCard);
     this.statsRow = el('div', 'stats', this.recordCard);
     this._buildLeaderboard(this.recordCard);
