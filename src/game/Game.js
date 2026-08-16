@@ -82,6 +82,8 @@ const FALLBACK_ORIGIN = new THREE.Vector3(21000, 0, 6000);
 
 /** Scratch for projecting the nozzle into screen space each frame. */
 const _heatNdc = new THREE.Vector3();
+/** Scratch for projecting the velocity vanishing point each frame. */
+const _motionNdc = new THREE.Vector3();
 
 /** Ease with zero first *and* second derivative at both ends, so no visible kick. */
 function smootherstep(t) {
@@ -1237,6 +1239,18 @@ export class Game {
     const speedMotion = this.state === 'flying'
       ? THREE.MathUtils.clamp((this.flight.airspeed - 160) / 360, 0, 1) * 0.18
       : 0;
+    // Radial streaks converge on where the aircraft is going, not on the middle
+    // of the screen. Projecting a point well ahead along the velocity vector
+    // gives the vanishing point directly.
+    const velocity = this.flight?.velocity;
+    if (velocity && velocity.lengthSq() > 1) {
+      _motionNdc.copy(this.flight.position).addScaledVector(velocity, 60);
+      _motionNdc.project(this.engine.camera);
+      motionProfile.opticalCenter = {
+        x: _motionNdc.x * 0.5 + 0.5,
+        y: 0.5 - _motionNdc.y * 0.5,
+      };
+    }
     this.engine.setMotionBlur(motionProfile);
 
     const reheat = this.state === 'flying'

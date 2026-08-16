@@ -50,7 +50,29 @@ export class MotionBlurEffect extends Effect {
     this.angularPixels = angularPixels;
   }
 
-  setMotion({ angularX = 0, angularY = 0, radialPixels = 0, amount = 0, edgeStart = 0.45 } = {}) {
+  /**
+   * @param {object} motion
+   * @param {{x: number, y: number}} [motion.opticalCenter] where the radial
+   *   streaks converge, in [0,1] UV. This uniform was declared and read by the
+   *   shader from the start but never written, so the blur always streaked from
+   *   the exact centre of the frame — wrong in every banked turn and through the
+   *   whole recon transition, which are the two moments it exists for. The right
+   *   point is where the velocity vector meets the screen.
+   */
+  setMotion({
+    angularX = 0, angularY = 0, radialPixels = 0, amount = 0, edgeStart = 0.45,
+    opticalCenter = null,
+  } = {}) {
+    if (opticalCenter
+      && Number.isFinite(opticalCenter.x) && Number.isFinite(opticalCenter.y)) {
+      // Clamped generously rather than to [0,1]: when the aircraft is yawed the
+      // vanishing point genuinely leaves the frame, and pinning it to the edge
+      // would bend the streaks the wrong way.
+      this.uniforms.get('uOpticalCenter').value.set(
+        Math.max(-1, Math.min(2, opticalCenter.x)),
+        Math.max(-1, Math.min(2, opticalCenter.y)),
+      );
+    }
     const x = Number.isFinite(angularX) ? angularX : 0;
     const y = Number.isFinite(angularY) ? angularY : 0;
     let radial = Math.max(0, Number.isFinite(radialPixels) ? radialPixels : 0);
