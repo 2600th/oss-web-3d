@@ -523,3 +523,19 @@ console.log('terrain material numeric and shader contracts passed');
 }
 
 console.log('terrain lighting balance contracts passed');
+
+{
+  // The detail fade is scaled by the optic's zoom in the shader; the JS mirror
+  // has to scale by the same factor or the two describe different terrain the
+  // moment the pilot looks through the camera.
+  const near = terrainDetailWeight(6800, 1);
+  const zoomed = terrainDetailWeight(6800, 4);
+  assert.ok(near < 0.1, `unzoomed, 6.8 km is nearly faded out; got ${near}`);
+  assert.ok(zoomed > 0.99, `at 4x, 6.8 km should still carry full detail; got ${zoomed}`);
+  assert.equal(terrainDetailWeight(6800), near, 'omitting the scale means unzoomed');
+  assert.equal(terrainDetailWeight(6800, 9), terrainDetailWeight(6800, 4), 'scale is clamped to the shader clamp');
+  assert.equal(terrainDetailWeight(6800, 0.2), near, 'scale never goes below one');
+  assert.equal(terrainDetailWeight(6000, 1), 0.5, 'the fade midpoint is where the shader puts it');
+}
+
+console.log('terrain detail fade zoom contracts passed');

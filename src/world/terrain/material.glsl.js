@@ -259,6 +259,18 @@ const SNOW_ALBEDO = [0.86, 0.875, 0.90];
 const SNOW_ALBEDO_LOW = [0.85, 0.862, 0.885];
 
 /**
+ * Where procedural surface detail fades out, in metres of world distance —
+ * scaled at runtime by uZoomScale, because the recon optic narrows the field to
+ * a quarter and ground four kilometres away then fills the frame the way ground
+ * one kilometre away does unzoomed.
+ *
+ * Shared with the shader by template injection so the JS mirror and the GLSL
+ * cannot drift; terrainDetailWeight() takes the same scale for the same reason.
+ */
+const DETAIL_FADE_START = 4800;
+const DETAIL_FADE_END = 7200;
+
+/**
  * How much of the fixed per-material sky fill survives at a given sun height.
  *
  * The fill used to be constant, so dropping the sun produced a scene lit almost
@@ -334,8 +346,9 @@ function terrainFrameCpu(x, z, cell, nextCell, morph, distance, quality, focusX,
 }
 
 /** High-tier material detail stays visible through the operational vista. */
-export function terrainDetailWeight(distance) {
-  return 1 - smoothstep(4800, 7200, Math.max(distance, 0));
+export function terrainDetailWeight(distance, zoomScale = 1) {
+  const scale = Math.min(4, Math.max(1, Number.isFinite(zoomScale) ? zoomScale : 1));
+  return 1 - smoothstep(DETAIL_FADE_START * scale, DETAIL_FADE_END * scale, Math.max(distance, 0));
 }
 
 /** Pure numeric mirror of the broad material mask, used by validation. */
@@ -833,7 +846,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         // detail on a fixed world distance is what left the payoff shot, the
         // one image the whole sortie exists to produce, looking flatter than
         // any view the player gets for free.
-        float detailDistanceFade = 1.0 - smoothstep(4800.0 * uZoomScale, 7200.0 * uZoomScale, distanceToCamera);
+        float detailDistanceFade = 1.0 - smoothstep(${DETAIL_FADE_START}.0 * uZoomScale, ${DETAIL_FADE_END}.0 * uZoomScale, distanceToCamera);
         float strataCoord = surfaceHeight * 0.0105 + dot(vWorld.xz, vec2(0.0027, 0.0014)) + geology * 2.7;
         float strataFilter = 1.0 - smoothstep(0.18, 0.88, fwidth(strataCoord));
         float strata = sin(strataCoord) * strataFilter * detailDistanceFade;
