@@ -548,6 +548,14 @@ export class Engine {
     const previousTarget = this.renderer.getRenderTarget();
     const previousPixelRatio = this.renderer.getPixelRatio();
     const previousCloudCamera = this.clouds?.camera;
+    // The composer's current device-pixel size, so it can be put back directly.
+    // The restore used to go through resize(), which recomputes the camera
+    // projection and re-sizes the renderer as well as the composer — a second
+    // full reallocation of every HalfFloat target on the shutter frame, on top
+    // of the one going in. ReconCamera's async readback exists specifically to
+    // keep that frame clean at 250 m/s.
+    const previousComposerWidth = this.composer.inputBuffer.width;
+    const previousComposerHeight = this.composer.inputBuffer.height;
 
     this.composer.setMainScene(scene);
     this.composer.setMainCamera(camera);
@@ -565,7 +573,10 @@ export class Engine {
       this.composer.setMainCamera(this.camera);
       if (this.clouds && previousCloudCamera) this.clouds.camera = previousCloudCamera;
       this.renderer.setPixelRatio(previousPixelRatio);
-      this.resize();
+      // Put the composer back at the size it already had, rather than running a
+      // full resize(). Nothing else changed: the camera's projection was never
+      // touched, and the renderer's own drawing buffer was not resized either.
+      this.composer.setSize(previousComposerWidth, previousComposerHeight, false);
       this.renderer.setRenderTarget(previousTarget);
     }
   }
