@@ -181,10 +181,19 @@ need rebuilding when the sun moves; skyView and aerial LUTs already re-render dy
 and terrain regeneration is already a budgeted incremental job. Pick sun elevation/azimuth and
 cloud coverage per sortie from the same seed as D1.
 
-### D5 — Harness versus leaderboard
-`main.js` ships ~450 lines of `window.__*` ungated in production. `__fly()`/`__toPost()`
-teleport. The game keeps a fastest-sortie leaderboard. Mark harness-assisted sorties so the
-board stays honest.
+### D5 — Harness versus leaderboard — **RETRACTED**
+The audit reported that ~450 lines of `window.__*` ship ungated in production and that this
+lets anyone teleport onto the leaderboard. **That is wrong.** `main.js:205` opens an
+`if (import.meta.env.DEV) {` block that encloses the entire harness *and* the
+`Object.assign(window, { THREE, engine, game, settings, input })` exposure at the end.
+Verified against the built bundle: `__fly`, `__toPost`, `__recon`, `__gpuBench`,
+`__probeGLSL`, `__audit`, `__stats`, `__mission` and `__crashVfx` each return **zero** grep
+hits across every file in `dist/assets/`. No work is required.
+
+Related retraction: the audit listed `window.__sagar` as "referenced but never defined"
+(`Screens.js:512`). It is an **optional external test seam** — `BootLifecycle.js:24`,
+`Screens.js:393` and `Screens.js:512` all reach it through `?.` or a truthiness guard, and
+`boot-lifecycle.test.mjs:43` injects it. Never defining it is the design. No work required.
 
 ### G1 / G2 — Scoring
 Measured: a scripted approach returns `framing 0.944, coverage 1.0, rangeQuality 1.0,

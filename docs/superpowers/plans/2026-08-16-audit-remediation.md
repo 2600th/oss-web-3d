@@ -561,7 +561,47 @@ test('hiding the tab silences the continuous beds', () => {
 
 Commit: `git commit -m "fix: silence the audio beds while the tab is hidden"`
 
-- [ ] **Step 4: F6 — stop rendering the unread cloud shadow target**
+- [ ] **Step 4: F10 — make the adaptive scaler's occlusion guard reachable**
+
+`Engine._adapt` opens with `if (dt > 0.25) return;` and fourteen lines explaining that this
+rejects the ~1 Hz frames Chrome delivers to an occluded-but-not-hidden window. But the only
+production caller already clamps: `main.js:157` does
+`const dt = Math.min(engine.timer.getDelta(), 0.1)` before `engine.render(dt)` at `:159`.
+`_adapt` can never see a value above 0.1, so **the guard is dead code and the regression it
+documents is live**. `adaptive-scale.test.mjs` misses it because it calls `engine._adapt()`
+directly, bypassing the clamp.
+
+Pass the unclamped delta alongside the simulation delta so the scaler can see what the
+browser really did:
+
+```js
+// main.js
+const rawDt = engine.timer.getDelta();
+const dt = Math.min(rawDt, 0.1);   // simulation must not teleport through a mountain
+game.update(dt);
+engine.render(dt, rawDt);
+```
+
+```js
+// Engine.render / _adapt
+  render(dt, rawDt = dt) {
+    this._adapt(rawDt);
+```
+
+Add a test that feeds `_adapt` the *unclamped* 1 s samples an occluded window produces and
+asserts `renderScale` stays at 1 — the case the current suite cannot express:
+
+```js
+// A covered window gets ~1 Hz frames. Those say nothing about our cost, and
+// dropping resolution cannot buy back time we never spent.
+const h = harness();
+h.run(1.0, 40);
+assert.equal(h.engine.renderScale, 1, 'an occluded window must not move render scale');
+```
+
+Commit: `git commit -m "fix: let the adaptive scaler see the unclamped frame time"`
+
+- [ ] **Step 5: F6 — stop rendering the unread cloud shadow target**
 
 `getShadowContract()` has zero callers; terrain cloud shadows come from the analytic
 `cloudShadowAt()` in `clouds.glsl.js:474`. In `src/world/CloudVolume.js`, delete
@@ -1095,19 +1135,19 @@ acquired one reports metres.
 
 Commit: `git commit -m "feat: make the player find the posts"`
 
-- [ ] **Step 2: D5 — mark harness-assisted sorties**
+- [ ] **Step 2: D5 — RETRACTED, do not implement**
 
-In `main.js`, have `__fly`, `__toPost` and `__recon` set `game.harnessAssisted = true`. In
-`Leaderboard.record()`, refuse entries from an assisted sortie, and show the reason on the
-record card:
+The audit's premise was false. The whole `window.__*` harness sits inside
+`if (import.meta.env.DEV)` (`main.js:205`), which also encloses the
+`Object.assign(window, { THREE, engine, game, settings, input })` at its end. Verified
+against the built bundle — every hook greps to zero in `dist/assets/`:
 
-```js
-    // The game ships a documented teleport API and also keeps a fastest-sortie
-    // board. Both are fine; ranking a teleported sortie is not.
-    if (sortie.harnessAssisted) return { ranked: false, reason: 'HARNESS ASSISTED' };
+```bash
+for s in __fly __toPost __recon __gpuBench __probeGLSL __audit __stats __mission __crashVfx; do
+  grep -c "$s" dist/assets/*.js; done   # all zero
 ```
 
-Commit: `git commit -m "fix: keep harness-assisted sorties off the board"`
+The leaderboard was never reachable from the harness in a shipped build. Skip this step.
 
 ---
 
@@ -1293,7 +1333,9 @@ unless the behaviour is worth having:
 
 - [ ] **Step 2: Fix the real defects in this group**
 
-- `Screens.js:512` — define `window.__sagar` or remove the reference.
+- ~~`Screens.js:512` — define `window.__sagar`~~ — **retracted.** It is an optional external
+  test seam; every reference is guarded (`?.` or a truthiness check) and
+  `boot-lifecycle.test.mjs:43` injects it. Leaving it undefined is the design.
 - `Screens.js:458` — call `setLoadBytes` from the model fetch so the loading bar moves during
   the 5.4 MB airframe download.
 - `main.js:58` — do not raise a permanent fatal overlay for a recoverable error; log and
