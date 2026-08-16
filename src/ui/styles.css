@@ -2018,6 +2018,38 @@ input:focus-visible {
   .controls-grid { grid-template-columns: minmax(58px, auto) 1fr; font-size: 10px; }
   .menu { width: 100%; }
   .menu button { width: 100%; min-width: 0; }
+
+  /* Keep the action that moves the game on within reach.
+     The briefing and both debriefs are taller than a phone screen, so the layer
+     scrolls — and "Begin Sortie" and "Fly Again" were landing below the fold
+     with nothing on screen to say the page had any more to it. Measured on a
+     390x844 viewport the briefing runs about 1,130 px against 896 px of glass,
+     which puts the button roughly a screen-quarter out of sight.
+     Pinned to the viewport rather than sticky: .menu is the last child of its
+     column, so a sticky bottom has no travel left and would never engage. */
+  .layer:not(.letterbox) .briefing .menu,
+  .layer:not(.letterbox) .record-card .menu,
+  .layer:not(.letterbox) .ending-card .menu {
+    position: fixed;
+    left: max(20px, calc(env(safe-area-inset-left) + 18px));
+    right: max(20px, calc(env(safe-area-inset-right) + 18px));
+    bottom: max(14px, calc(env(safe-area-inset-bottom) + 10px));
+    width: auto;
+    z-index: 6;
+  }
+  /* The scrolling copy passes underneath, so it needs something to pass under. */
+  .layer:not(.letterbox) .briefing .menu::before,
+  .layer:not(.letterbox) .record-card .menu::before,
+  .layer:not(.letterbox) .ending-card .menu::before {
+    content: '';
+    position: absolute;
+    inset: -22px -24px -26px;
+    background: linear-gradient(to top, var(--ink) 58%, transparent);
+    z-index: -1;
+    pointer-events: none;
+  }
+  /* Room for the pinned bar, so the last line of copy is not sitting behind it. */
+  .layer:not(.letterbox) .centre { padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px)); }
   .options { width: 100%; }
   .flying-options {
     grid-template-columns: 1fr;
@@ -2448,4 +2480,22 @@ input:focus-visible {
   font-style: italic;
   opacity: 0.82;
   letter-spacing: 0.14em;
+}
+
+/* The radar altimeter tracks the altitude tape, and on a phone the tape is
+   narrower and shorter (60px / 35vh against 92px / 40vh) and hugs the screen
+   edge. This lives at the end of the sheet on purpose: the base .agl-readout
+   rule is declared below the main phone block, so an override placed up there
+   loses on source order at equal specificity.
+   The max() mirrors the tape's own min-height, so the readout stays clear of
+   the tape's top edge on a short viewport too. */
+@media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
+  .agl-readout {
+    top: calc(50% - max(17.5vh, 95px) - 26px);
+    right: max(5px, env(safe-area-inset-right));
+    width: 60px;
+    font-size: 11px;
+    padding: 2px 4px;
+  }
+  .agl-readout .agl-label { font-size: 8px; letter-spacing: 0.16em; }
 }
