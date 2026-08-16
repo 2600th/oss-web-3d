@@ -514,6 +514,24 @@ test('402x691 Assisted controls hold the flight and recon lanes and stay in colu
     assertSeparated(target, leftTape);
     assertSeparated(target, rightTape);
 
+    // The edge cue dodges live HUD rectangles at runtime, so it follows the rail
+    // wherever the rail goes — but its bounds come from the safe-area probe, and
+    // on a phone with no notch every env() there is zero. --hud-margin floors it
+    // so it keeps the same edge as everything else instead of touching the bezel.
+    const margin = px(sliceBlocks(css).base, '--hud-margin');
+    const cue = placeNavigationCue({
+      viewport,
+      safeInsets: { top: margin, right: margin, bottom: margin, left: margin },
+      cueSize: { width: 112, height: 58 },
+      edgeNdc: { x: 1, y: 0 },
+      avoidRects: [stick, boost, reconFlight, ...flightHud],
+      gap: 8,
+    }).rect;
+    cue.name = 'navigation cue';
+    assertInside(cue, viewport);
+    assert.ok(viewport.width - cue.right >= margin, `the cue must keep a ${margin}px margin at ${label}`);
+    for (const obstacle of [stick, boost, reconFlight, ...flightHud]) assertSeparated(cue, obstacle);
+
     // Direct mode: the throttle keeps the bezel and the column steps inboard.
     const throttleHeight = Math.min((viewport.height * throttleVh) / 100, throttleMax);
     const throttle = rect(viewport.width - rail.right - 58, viewport.height - rail.bottom - throttleHeight,
@@ -559,6 +577,17 @@ test('short landscape keeps the same column and a gate clear of it', () => {
   const inset = px(blocks.landscape, '--tape-inset');
   const tapeWidth = ruleValue(blocks.landscape, '.tape', 'width', '(\\d+)px');
   const tapeTop = ruleValue(blocks.landscape, '.tape', 'top', 'max\\((\\d+)px');
+  const throttleWidth = px(blocks.base, '--throttle-w');
+  const throttleVh = ruleValue(blocks.landscape, '.throttle-zone', 'height', 'min\\((\\d+)vh');
+  const throttleMax = ruleValue(blocks.landscape, '.throttle-zone', 'height', 'min\\(\\d+vh,\\s*(\\d+)px');
+  const actGap = px(blocks.base, '--act-gap');
+  const actEdge = px(blocks.base, '--act-edge');
+  const actW = px(blocks.base, '--act-w');
+  // The lane anything outside #touch has to leave: it cannot see the per-mode
+  // --act-right override, so it clears the *Direct* column, which is the wider
+  // of the two. Everything below is checked in that mode, because the previous
+  // suite checked Assisted only and Direct is where the throttle strip exists.
+  const laneMax = actEdge + throttleWidth + actGap + actW + actGap;
 
   for (const viewport of [
     { width: 568, height: 320 },
@@ -607,9 +636,12 @@ test('short landscape keeps the same column and a gate clear of it', () => {
     assert.ok(head.bottom < gate.top + gate.height / 2, `the header must stay at the top at ${label}`);
     assert.equal(head.left, gate.left, `the header must keep the gate's width at ${label}`);
     assert.equal(head.right, gate.right, `the header must keep the gate's width at ${label}`);
+    // The readouts take whichever right edge is further inboard, the gate's or
+    // the Direct-mode lane.
+    const readoutRight = Math.max(gateLeft, laneMax);
     const quality = rect(stickWidth + 8, viewport.height - (gateTop - footGap) - 22,
-      viewport.width - gateLeft - stickWidth - 8, 22, 'quality HUD');
-    const exposure = rect(viewport.width - gateLeft - 47, viewport.height - (gateTop - expGap) - 9,
+      viewport.width - readoutRight - stickWidth - 8, 22, 'quality HUD');
+    const exposure = rect(viewport.width - readoutRight - 47, viewport.height - (gateTop - expGap) - 9,
       47, 9, 'exposure counter');
     for (const readout of [quality, exposure]) {
       assertInside(readout, viewport);
@@ -617,6 +649,28 @@ test('short landscape keeps the same column and a gate clear of it', () => {
       for (const cell of [recon, shutter, zoomRow]) assertSeparated(cell, readout);
     }
     assertSeparated(quality, exposure);
+
+    // Direct mode: the throttle strip takes the bezel, the column steps inboard
+    // of it, and the objectives block clears the column in that wider state.
+    // The tapes are back on the bezel now, so the strip has to stay under them.
+    const directRail = railFor(css, viewport, `${overrides}\n--act-right: ${actEdge + throttleWidth + actGap}px;`);
+    const throttleHeight = Math.min((viewport.height * throttleVh) / 100, throttleMax);
+    const throttle = rect(viewport.width - actEdge - throttleWidth,
+      viewport.height - directRail.bottom - throttleHeight, throttleWidth, throttleHeight, 'Direct throttle');
+    const agl = rect(rightTape.left, tapeTop + tapeHeight + 6, tapeWidth, 28, 'AGL badge');
+    const objectives = rect(viewport.width - laneMax - 95, viewport.height - 8 - 51, 95, 51, 'objectives HUD');
+    assertInside(throttle, viewport);
+    assertInside(objectives, viewport);
+    assertSeparated(throttle, rightTape);
+    assertSeparated(throttle, agl);
+    for (const cell of [0, 1, 2].map((n) => directRail.cell(n, n === 2 ? 44 : directRail.h, `Direct slot ${n}`))) {
+      assertInside(cell, viewport);
+      assertSeparated(cell, throttle);
+      assertSeparated(cell, rightTape);
+      assertSeparated(cell, objectives);
+      assertSeparated(cell, quality);
+      assertSeparated(cell, exposure);
+    }
   }
 });
 

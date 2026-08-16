@@ -68,6 +68,15 @@
   --act-right: var(--act-edge);
   --act-bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
   --act-lane: calc(var(--act-right) + var(--act-w) + var(--act-gap));
+  /* Direct mode parks the throttle strip on the bezel and steps the column
+     inboard of it, so --act-lane (which resolves against the Assisted column)
+     is too narrow for anything that has to clear the buttons in *both* modes.
+     The HUD and the recon readouts are outside #touch and cannot see its
+     per-mode override, so they leave this wider lane instead. */
+  --throttle-w: 58px;
+  --act-lane-max: calc(
+    var(--act-edge) + var(--throttle-w) + var(--act-gap) + var(--act-w) + var(--act-gap)
+  );
   /* The lane the HUD instruments leave along both edges. Wide enough for the
      58px throttle strip, which is the only control that shares a horizontal
      band with a tape. */
@@ -2265,7 +2274,7 @@ input:focus-visible {
 .throttle-zone {
   right: var(--act-edge);
   bottom: max(96px, env(safe-area-inset-bottom));
-  width: 58px;
+  width: var(--throttle-w);
   height: min(40vh, 260px);
   border: 1px solid rgba(184, 216, 196, 0.28);
   background: rgba(8, 14, 20, 0.28);
@@ -2297,7 +2306,7 @@ input:focus-visible {
 /* Direct mode keeps the throttle strip on the bezel, so the action column steps
    one lane inboard rather than landing on top of it. Overriding the token is
    enough — every button reads its right edge from here. */
-#touch:not(.assisted) { --act-right: calc(var(--act-edge) + 58px + var(--act-gap)); }
+#touch:not(.assisted) { --act-right: calc(var(--act-edge) + var(--throttle-w) + var(--act-gap)); }
 
 /* Every action button is one cell of the rail: same width, same right edge.
    Only `bottom` distinguishes them, and it is always a whole number of slots
@@ -2525,8 +2534,19 @@ input:focus-visible {
     transform: none;
   }
   /* Objectives step inboard of the column here, because the column now reaches
-     down to the bottom edge rather than starting 96px up. */
-  #hud .objectives { right: var(--act-lane); }
+     down to the bottom edge rather than starting 96px up — far enough to clear
+     it in Direct mode too, where the column itself has stepped inboard. */
+  #hud .objectives { right: var(--act-lane-max); }
+
+  /* Direct mode's throttle strip drops to the column's floor and shortens.
+     Left at the shared 96px and min(40vh, 260px) it reached up to y=138 on a
+     390px screen and ran a bordered box straight through the altitude tape and
+     the radar altimeter, both of which are now back on the bezel in the same
+     column. */
+  .throttle-zone {
+    bottom: var(--act-bottom);
+    height: min(36vh, 200px);
+  }
 
   /* Landscape keeps the readouts under the gate — that band is clear, between
      the stick field on the left and the action column on the right. Only the
@@ -2549,7 +2569,14 @@ input:focus-visible {
     top: max(70px, calc(env(safe-area-inset-top) + 58px));
     bottom: auto;
   }
-  .quality { left: calc(min(42vw, 340px) + 8px); }
+  /* The readouts keep the gate's right edge wherever that already clears the
+     action column, and step in to the Direct-mode lane where it does not — at
+     844px wide the gate is the wider constraint, at 568px the column is. */
+  .quality {
+    left: calc(min(42vw, 340px) + 8px);
+    right: max(var(--gate-x), var(--act-lane-max));
+  }
+  .recon-frame-no { right: max(var(--gate-x), var(--act-lane-max)); }
   .recon-reticle {
     width: min(44vh, 160px);
     height: min(44vh, 160px);

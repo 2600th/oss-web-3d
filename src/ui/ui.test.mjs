@@ -334,8 +334,11 @@ test('390x844 recon zoom controls keep a 44px target and clear the Direct thrott
 
   // Direct mode is the only state where a throttle strip and the action column
   // are both on screen, and the column clears it by moving one token.
-  assert.match(ruleBody('#touch:not(.assisted)', true), /--act-right:\s*calc\(var\(--act-edge\) \+ 58px/);
-  const throttleWidth = directPx(ruleBody('.throttle-zone'), 'width');
+  assert.match(
+    ruleBody('#touch:not(.assisted)', true),
+    /--act-right:\s*calc\(var\(--act-edge\) \+ var\(--throttle-w\) \+ var\(--act-gap\)\)/,
+  );
+  const throttleWidth = token('--throttle-w');
   const throttleLeft = viewport.width - actEdge - throttleWidth;
   const columnRight = viewport.width - (actEdge + throttleWidth + actGap);
   assert.ok(throttleLeft - columnRight >= 8, `zoom/throttle gap is ${throttleLeft - columnRight}px`);
