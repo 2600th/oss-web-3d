@@ -839,7 +839,7 @@ export class Screens {
     // shown alone, and the record is a deliberate second step the player asks
     // for. A failed sortie carries no remembrance line, so it skips straight to
     // the record.
-    this.endingCard = el('div', 'stack', stack);
+    this.endingCard = el('div', 'stack ending-card', stack);
     this.resultTitle = el('h2', 'result-title', this.endingCard, '');
     this.resultLine = el('div', 'result-line', this.endingCard, '');
     this.resultQuote = el('div', 'lede', this.endingCard, '');
@@ -848,7 +848,7 @@ export class Screens {
     this.continueButton = el('button', '', endingMenu, 'Continue');
     this.continueButton.addEventListener('click', () => this._showRecord());
 
-    this.recordCard = el('div', 'stack', stack);
+    this.recordCard = el('div', 'stack record-card', stack);
     // "— fictional" came off the heading because the framing is already carried
     // where it belongs: the briefing eyebrow reads "Fictional operation" and so
     // does the page description. Repeating it over the contact sheet made the
