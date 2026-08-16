@@ -458,6 +458,16 @@ export class Game {
       this.recon.releaseShot(post.photo);
       post.photo = null;
     }
+    // Pick the sortie up again, in case the day turned over while the tab sat
+    // on the debrief. An explicit ?seed keeps its sortie forever, which is the
+    // point of pinning one.
+    const next = sortieParams(resolveSeed(globalThis.location?.search ?? ''));
+    if (next.seed !== this.sortie.seed) {
+      this.sortie = next;
+      this.environment.setSun(next.sunElevationDeg, next.sunAzimuthDeg);
+      this.environment.uniforms.uCloudCoverage.value = next.cloudCoverage;
+      this.terrain.prime(this._startPosition());
+    }
     this.mission.dispose();
     this.mission = new Mission(this.engine.scene, this._startPosition(), 5);
     this.screens.setTargets(this.mission.posts);

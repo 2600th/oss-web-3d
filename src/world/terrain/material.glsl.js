@@ -264,9 +264,17 @@ const SNOW_ALBEDO_LOW = [0.85, 0.862, 0.885];
  * The fill used to be constant, so dropping the sun produced a scene lit almost
  * entirely by blue. Real snow is warm-white in sun and blue only in shadow.
  */
+const SKY_FILL_BASE = 0.35;
+const SKY_FILL_RANGE = 0.65;
+const SKY_FILL_RAMP = 1.6;
+
 function skyFill(sunY) {
-  return 0.35 + 0.65 * clamp01(sunY * 1.6);
+  return SKY_FILL_BASE + SKY_FILL_RANGE * clamp01(sunY * SKY_FILL_RAMP);
 }
+
+/** The same expression as skyFill(), for injection into the shader. */
+const SKY_FILL_GLSL =
+  `(${SKY_FILL_BASE} + ${SKY_FILL_RANGE} * clamp(uSunDir.y * ${SKY_FILL_RAMP}, 0.0, 1.0))`;
 const SLOPE_RADIUS = 96;
 const CURVATURE_RADIUS = 288;
 
@@ -744,7 +752,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         // Low-tier terrain still needs enough blue-sky fill to keep opposing
         // ridge faces readable after tone mapping — but it has to fall with the
         // sun, or a low sun lights the scene almost entirely in blue.
-        float lowFill = 0.35 + 0.65 * clamp(uSunDir.y * 1.6, 0.0, 1.0);
+        float lowFill = ${SKY_FILL_GLSL};
         vec3 ambient = mix(vec3(0.39, 0.42, 0.48), vec3(0.32, 0.40, 0.55), snow) * lowFill;
         vec3 color = albedo * (ambient + uSunColor * min(uSunIntensity * ${DIRECT_SUN_SCALE}, ${DIRECT_SUN_CEILING}) * direct);
       #else
@@ -884,7 +892,7 @@ export function buildTerrainFragmentShader({ levels, res, half, quality = 2 }) {
         // Fixed sky fill, scaled by sun height. Constant fill meant a low sun
         // produced a scene lit almost entirely by blue; real snow is warm-white
         // in sun and blue only where the sun cannot reach it.
-        float fill = 0.35 + 0.65 * clamp(uSunDir.y * 1.6, 0.0, 1.0);
+        float fill = ${SKY_FILL_GLSL};
         vec3 ambient = atm_skyIrradiance(N) * (rockWeight * 0.25 + scree * 0.29 + ice * 0.39 + snow * 0.43);
         ambient += vec3(0.105, 0.115, 0.135) * rockWeight * fill;
         ambient += vec3(0.135, 0.115, 0.095) * scree * fill;

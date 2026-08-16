@@ -117,4 +117,52 @@ import { OutputEffectPass } from './OutputEffectPass.js';
   assert.deepEqual(finish.sanitizeSample([-0.04, 0.1, 1.2]), [0, 0.1, 1.2]);
 }
 
+
+{
+  // Scene consumers of the composer depth texture.
+  //
+  // CloudField and the GPU FX materials sample composer depth for their soft
+  // edge, but they are scene objects rather than passes, so polling
+  // pass.needsDepthTexture cannot see them. They rode on whatever the post
+  // chain happened to want, and below the high tier it wants nothing — so soft
+  // particles were dead on medium, low and phone, including the tier the
+  // reference GPU selects.
+  const { Engine } = await import('../../core/Engine.js');
+
+  function fakeEngine({ passesWantDepth = false } = {}) {
+    const engine = Object.create(Engine.prototype);
+    const passes = passesWantDepth ? [{ needsDepthTexture: true, setDepthTexture() {} }] : [];
+    engine._sceneWantsDepth = false;
+    engine.composer = {
+      passes,
+      stableDepthTexture: null,
+      createDepthTexture() { this.stableDepthTexture = { fake: true }; },
+      deleteDepthTexture() { this.stableDepthTexture = null; },
+    };
+    return engine;
+  }
+
+  const e = fakeEngine();
+  e.syncDepthTexture();
+  assert.equal(e.composer.stableDepthTexture, null, 'no pass and no scene consumer means no depth texture');
+
+  e.setSceneDepthRequired(true);
+  // The declaration must not allocate on the spot: at the moment Game is
+  // constructed the composer has not been sized for the first frame yet, and
+  // allocating there produced a zero-dimension texture and an incomplete
+  // framebuffer on every subsequent blit.
+  assert.equal(e.composer.stableDepthTexture, null, 'declaring a need must not allocate immediately');
+
+  e.syncDepthTexture();
+  assert.notEqual(e.composer.stableDepthTexture, null, 'the per-frame sync allocates for a scene consumer');
+
+  e.setSceneDepthRequired(false);
+  e.syncDepthTexture();
+  assert.equal(e.composer.stableDepthTexture, null, 'dropping the need releases the texture');
+
+  const withPass = fakeEngine({ passesWantDepth: true });
+  withPass.syncDepthTexture();
+  assert.notEqual(withPass.composer.stableDepthTexture, null, 'a pass that wants depth still gets it');
+}
+
 console.log('post effect contracts passed');
