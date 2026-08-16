@@ -17,6 +17,7 @@ import {
   normalizeRenderOptions,
   setPassEnabled,
 } from '../fx/post/PostPipeline.js';
+import { GL_ATTRIBUTES } from './BootLifecycle.js';
 import { OutputEffectPass } from '../fx/post/OutputEffectPass.js';
 import { SunShaftEffect } from '../fx/post/SunShaftEffect.js';
 import { MotionBlurEffect } from '../fx/post/MotionBlurEffect.js';
@@ -47,14 +48,14 @@ export class Engine {
   constructor(canvas, settings, context = null) {
     this.settings = settings;
 
+    // Spread rather than re-typed: three.js ignores these entirely when a
+    // context is supplied (it only reads back `alpha`), so a hand-written copy
+    // here could drift from what the context was actually created with and
+    // nothing would say so.
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       ...(context ? { context } : {}),
-      antialias: false,
-      powerPreference: 'high-performance',
-      stencil: false,
-      depth: true,
-      alpha: false,
+      ...GL_ATTRIBUTES,
     });
     this.renderer.autoClear = true;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;

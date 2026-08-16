@@ -33,24 +33,56 @@ for (const seed of FEATURED_SEEDS) {
   const { origin } = sortieParams(seed);
   const centreY = orbitCeiling(origin.x, origin.z) + CLEARANCE;
 
-  let worst = Infinity;
-  // Finer than the setup sampling on purpose: this is what catches a ridge
-  // sitting between two of the 24 samples, which is why the per-frame floor in
-  // _updateCinematic exists at all.
+  // Two separate questions, and the first one is the one that matters.
+  //
+  // The orbit ceiling is what this fix is: sample the terrain the whole circle
+  // passes over, not just the point at its centre. The per-frame floor in
+  // _updateCinematic is a backstop for a ridge between samples.
+  //
+  // Asserting only the clamped height was near-vacuous: `max(y, ground + 1050)
+  // - ground >= 1050` is true algebraically for every sample whatever the
+  // ceiling is, so the original version of this test passed on seven of the ten
+  // seeds with the ceiling reverted to the old single-point height — including
+  // four that were kilometres underground. Measure the *unclamped* orbit.
+  let worstUnclamped = Infinity;
+  let worstClamped = Infinity;
   for (let i = 0; i < 360; i++) {
     const a = 0.55 + (i / 360) * Math.PI * 2;
     const cx = origin.x + Math.cos(a) * RADIUS;
     const cz = origin.z + Math.sin(a) * RADIUS;
     const ground = terrainHeight(cx, cz);
-    const floor = ground + CLEARANCE * 0.5;
-    const y = Math.max(centreY - SWAY, floor);
-    worst = Math.min(worst, y - ground);
+    // Worst case of the vertical sway is the bottom of it.
+    const unclamped = centreY - SWAY;
+    worstUnclamped = Math.min(worstUnclamped, unclamped - ground);
+    worstClamped = Math.min(worstClamped, Math.max(unclamped, ground + CLEARANCE * 0.5) - ground);
   }
 
   assert.ok(
-    worst >= CLEARANCE * 0.5,
-    `seed ${seed}: title camera came within ${Math.round(worst)} m of the ground, want >= ${CLEARANCE * 0.5}`,
+    worstUnclamped >= CLEARANCE * 0.5,
+    `seed ${seed}: the orbit ceiling alone leaves ${worstUnclamped.toFixed(1)} m of clearance, `
+    + `want >= ${CLEARANCE * 0.5}. The ceiling is the fix; the per-frame floor is only a backstop.`,
   );
+  assert.ok(
+    worstClamped >= CLEARANCE * 0.5,
+    `seed ${seed}: clamped clearance ${worstClamped.toFixed(1)} m`,
+  );
+}
+
+{
+  // The guard the assertion above depends on: with the pre-fix ceiling — the
+  // height of the single centre point — the orbit really did go underground.
+  // If this ever stops failing, the test above has stopped proving anything.
+  let sawNegative = false;
+  for (const seed of FEATURED_SEEDS) {
+    const { origin } = sortieParams(seed);
+    const naiveY = terrainHeight(origin.x, origin.z) + CLEARANCE;
+    for (let i = 0; i < 360 && !sawNegative; i++) {
+      const a = 0.55 + (i / 360) * Math.PI * 2;
+      const ground = terrainHeight(origin.x + Math.cos(a) * RADIUS, origin.z + Math.sin(a) * RADIUS);
+      if (naiveY - SWAY - ground < 0) sawNegative = true;
+    }
+  }
+  assert.ok(sawNegative, 'the featured seeds must still include a case the naive ceiling gets wrong');
 }
 
 console.log('cinematic orbit clearance contracts passed');

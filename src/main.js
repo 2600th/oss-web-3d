@@ -39,7 +39,13 @@ if (!supportsWebGL2()) {
   // WEBGL_lose_context, which on iOS is enough to deny the renderer its own.
   const gl = acquireWebGL2(canvas);
   if (!gl) {
-    showBootFailure('This browser could not open a WebGL2 drawing surface. Close other 3D tabs and reload.');
+    // Both causes, because the cheap pre-check above cannot tell them apart:
+    // WebGL2RenderingContext exists on a blocklisted GPU too, so a driver
+    // refusal now lands here rather than on the "update your browser" message.
+    showBootFailure(
+      'This browser could not open a WebGL2 drawing surface. '
+      + 'Close other 3D tabs, or update your graphics driver or browser, then reload.',
+    );
   } else {
     await start(canvas, gl);
   }

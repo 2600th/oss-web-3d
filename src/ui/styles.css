@@ -2048,12 +2048,26 @@ input:focus-visible {
     z-index: -1;
     pointer-events: none;
   }
-  /* Room for the pinned bar, so the last line of copy is not sitting behind it. */
-  /* Room for the pinned bar. The debrief is letterboxed but still scrolls, so
-     it needs the same allowance the briefing does. */
-  .layer:not(.letterbox) .centre,
+  /* Room for the pinned bar.
+     The clearance goes on the scrolling column *and* on the disclaimer, because
+     the disclaimer is a sibling that follows .centre — padding on .centre alone
+     left the fiction notice sitting underneath the bar, which is the one piece
+     of copy on this screen that must stay readable. Scoped to the screens that
+     actually pin something: the pause screen has a .menu too, and giving it
+     132px of dead space for a bar it never pins just pushes its own options up. */
+  .layer:not(.letterbox) .centre:has(.briefing) {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
+  .layer:not(.letterbox) > .disclaimer {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
+  /* Its own rule, not grouped with the above: a selector list is not forgiving,
+     so a browser without :has() would drop the whole block — including the
+     clearance for screens that do not need :has() to be identified. */
   .layer:has(.record-card) .centre,
-  .layer:has(.ending-card) .centre { padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px)); }
+  .layer:has(.ending-card) .centre {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
   .options { width: 100%; }
   .flying-options {
     grid-template-columns: 1fr;
@@ -2502,4 +2516,39 @@ input:focus-visible {
     padding: 2px 4px;
   }
   .agl-readout .agl-label { font-size: 8px; letter-spacing: 0.16em; }
+}
+
+/* The same readout on an actual touch device.
+   The width-based block above is written against the phone *stylesheet* tape
+   (60px wide, edge-hugging, 35vh centred). A coarse pointer overrides all three:
+   the tape becomes 56px wide and sits 92px in from the right to clear the touch
+   controls, and its height becomes min(38vh, 300px) with no min-height. Without
+   these the badge floats beside the tape rather than above it, on every phone
+   the game is actually played on. */
+@media (pointer: coarse) {
+  .agl-readout {
+    right: 92px;
+    width: 56px;
+    top: calc(50% - min(19vh, 150px) - 26px);
+  }
+}
+/* Short portrait drops the tape's vertical centring entirely — it is anchored
+   from the top with transform: none — so the badge has to be anchored the same
+   way rather than measured from the middle of the screen. */
+@media (pointer: coarse) and (max-height: 700px) and (max-aspect-ratio: 3 / 4) {
+  .agl-readout {
+    top: calc(max(158px, calc(env(safe-area-inset-top) + 146px)) - 26px);
+  }
+}
+
+/* Landscape phone: the tape is top-anchored at 70px and only 84px tall, and it
+   sits 110px in from the right to clear the button rail. There is no room above
+   it — that is where the heading strip lives — so the badge goes underneath. */
+@media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
+  .agl-readout {
+    top: calc(max(70px, calc(env(safe-area-inset-top) + 58px)) + min(22vh, 84px) + 6px);
+    right: max(110px, calc(env(safe-area-inset-right) + 110px));
+    width: 54px;
+    font-size: 10px;
+  }
 }

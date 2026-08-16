@@ -162,10 +162,14 @@ azimuths spread right around the compass, so consecutive days do not light the
 mountains the same way.
 
 Everyone flying on a given UTC day gets the same sortie, which is the only thing
-that makes a fastest-sortie board comparable at all; the board is scoped to the
-seed, so today's times are ranked against today's course and yesterday's survive
-untouched. `?seed=N` pins any sortie you like, for sharing or for practice, and
-the briefing and record card name it.
+that makes a fastest-sortie board comparable at all. The board is scoped **to the
+course, not to the day**: times are ranked against others flown on the same seed,
+and every seed keeps its own rows indefinitely. Since the rotation is ten days
+long, a course comes back around with its previous times still on it — so the
+board reads as a per-course record rather than a daily reset, and coming back to
+beat your own best on ground you have flown before is the point. `?seed=N` pins
+any sortie you like, for sharing or for practice, and the briefing and record
+card name it.
 
 ### Reconnaissance
 
