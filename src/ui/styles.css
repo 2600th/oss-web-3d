@@ -2395,3 +2395,42 @@ input:focus-visible {
   .photo-pop { right: max(120px, calc(env(safe-area-inset-right) + 120px)); }
   #hud { font-size: 0.68em; }
 }
+
+/* Radar altimeter, under the altitude tape.
+   The ALT tape reads sea level; in a Himalayan valley that number is nearly
+   useless for the one threat in the game. This is the height the proximity
+   warning is actually watching, shown before it has anything to shout about. */
+.agl-readout {
+  /* Clear of the tape rather than over it: the tape is 40vh tall and centred,
+     so anything inside its box lands on the graduations. */
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--instrument-dim);
+  background: rgba(3, 6, 10, 0.5);
+  padding: 2px 7px;
+  border-radius: 2px;
+  z-index: 3;
+  transition: color 220ms ease;
+}
+.agl-readout .agl-label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  opacity: 0.8;
+}
+.agl-readout .agl-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--instrument);
+}
+.agl-readout.caution .agl-value { color: var(--warn, #d7a13a); }
+.agl-readout.danger .agl-value { color: var(--danger, #e0573c); }
+@media (prefers-reduced-motion: reduce) {
+  .agl-readout { transition: none; }
+}

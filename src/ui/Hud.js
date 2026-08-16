@@ -164,6 +164,17 @@ export class Hud {
 
     this.speedTape = make('left', 'IAS', 'KM/H', 50, 2, 0.34);
     this.altTape = make('right', 'ALT', 'M', 250, 2, 0.062);
+
+    // Radar altimeter, under the altitude tape.
+    //
+    // The tape is above sea level, which in a valley at 5,600 m tells the pilot
+    // almost nothing about the ridge they are about to hit. Terrain is the only
+    // thing in this game that can end a sortie and the proximity warning
+    // already computes ground clearance — this simply shows the number the
+    // warning is watching, before it starts shouting.
+    this.aglReadout = el('div', 'agl-readout', this.altTape.tape);
+    el('span', 'agl-label', this.aglReadout, 'AGL');
+    this.aglValue = el('span', 'agl-value', this.aglReadout, '—');
   }
 
   /**
@@ -496,6 +507,18 @@ export class Hud {
       set(this.targetRange, 'COMPLETE');
       set(this.targetBearing, 'RETURN TO BASE');
       toggle(this.targetName, 'complete', true);
+    }
+
+    if (Number.isFinite(s.agl)) {
+      const agl = Math.max(0, Math.round(s.agl));
+      if (this.aglValue._v !== agl) {
+        this.aglValue._v = agl;
+        set(this.aglValue, agl.toLocaleString('en-US'));
+      }
+      // Amber well before the proximity warning fires, so the number is a cue
+      // the pilot can fly on rather than an alarm they react to.
+      toggle(this.aglReadout, 'caution', agl < 300);
+      toggle(this.aglReadout, 'danger', agl < 130);
     }
 
     toggle(this.warnStall, 'show', s.stalling);

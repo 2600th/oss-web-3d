@@ -1363,6 +1363,11 @@ export class Game {
       targetBearing: bearing,
       targetRange: range,
       stalling: flight.stalling,
+      // Height above the ground below, not above sea level. In a game whose
+      // whole threat model is terrain, this was the one number the pilot could
+      // not see — it existed only in the ?debug panel while the altitude tape
+      // showed 5,677 at 300 m over a ridge.
+      agl: flight.position.y - terrainHeight(flight.position.x, flight.position.z),
       terrainWarning: this.terrainWarning,
       gLoad: flight.gLoad,
       reconActive: this.reconActive,
