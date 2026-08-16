@@ -27,9 +27,11 @@
 ## Status — 16 August 2026
 
 **Merged to `main`.** The branch `audit-fixes` no longer exists; everything below
-landed, plus a further round of work described at the end of this section.
+landed, plus two further rounds of work described at the end of this document —
+"After the merge" and "The touch interface".
 
-Originally on branch `audit-fixes`. 251 tests pass, `npm run check` and `npm run build` clean.
+Originally on branch `audit-fixes` at 251 tests. On `main` at `cdfa7e1`: 271 tests
+pass, `npm run check` and `npm run build` clean.
 
 **Landed:** F1 (Enter/debrief), F2 (line of sight — plus a second defect the test
 uncovered: fixed 30-sample spacing stepped over ridges at range), F3 (sortie clock on
@@ -42,7 +44,9 @@ sun and weather), E1 (detail fade by apparent size), E5 (advancedChunks), G1+G2 
 terms, energy term, grade bands), G3 (AGL readout), and most of Task 13.
 
 **Retracted — the audit was wrong:** D5 and the `__sagar` item. The `window.__*` harness
-does not ship; `main.js:205` wraps it in `import.meta.env.DEV`, verified against `dist/`.
+does not ship; `main.js` wraps it in `import.meta.env.DEV`, verified against `dist/`.
+(The README carried the opposite claim — "exposed on `window` in every build" — until
+`cdfa7e1`; retracting a finding is not the same as correcting everywhere it was repeated.)
 
 Also landed after the first pass: D2 (sector and range band until a position is visually
 acquired), G5 (plates cropped toward the objective), re-photography via the manual shutter,
@@ -1184,8 +1188,9 @@ Commit: `git commit -m "feat: make the player find the posts"`
 
 - [ ] **Step 2: D5 — RETRACTED, do not implement**
 
-The audit's premise was false. The whole `window.__*` harness sits inside
-`if (import.meta.env.DEV)` (`main.js:205`), which also encloses the
+The audit's premise was false. The whole `window.__*` harness sits inside the last
+`if (import.meta.env.DEV)` block in `src/main.js` — the one under the "Development
+hooks" banner, at line 205 when this was written and 271 today — which also encloses the
 `Object.assign(window, { THREE, engine, game, settings, input })` at its end. Verified
 against the built bundle — every hook greps to zero in `dist/assets/`:
 
@@ -1501,3 +1506,65 @@ It passed on seven of ten seeds with the fix reverted, four of them kilometres
 underground. It now measures the *unclamped* orbit, and carries a guard asserting the
 featured seeds still contain a case the naive ceiling gets wrong. Verified by reverting
 the fix: it now fails on the first seed at -205.9 m.
+
+### The touch interface — 16 August 2026
+
+Reported from an iPhone after the mobile hotfix above had shipped twice. The
+in-game UI, not the menus this time: the tapes were not aligned, Recon and the
+other buttons were different sizes, Shoot and Recon did not line up, the recon
+reticle was not centred, and the zoom buttons were nowhere near the shutter.
+
+All one defect. Phone geometry was stated five times in five places and the
+copies had drifted:
+
+- **The action buttons.** Boost 96x58 at `right:14`, Recon 84x46 at `right:126`,
+  Shoot 84x46 at `right:84`, zoom 44x44 at `bottom:322/374`. At 402 x 691 that
+  put Shoot and Recon in different columns at different sizes and left the zoom
+  pair floating 172 px above the shutter, inside the photograph. Replaced by one
+  rail on `:root` — `--act-w/-h/-gap/-pitch/-right/-bottom` — with every button
+  naming a whole slot, and the zoom pair splitting one slot at `(96-8)/2 = 44`.
+- **The optical gate was not concentric with the reticle.** `ReconCamera` scores
+  framing as `1 - hypot(ndc)/0.72`, so the optimum is the optical axis, which is
+  the viewport centre, which is where the reticle is drawn. The phone gate had
+  `--gate-top: 18%` against `--gate-bottom: 36%`, putting the reticle 62 px below
+  the middle of its own frame — measured, not inferred. There is one `--gate-y`
+  now and the two cannot disagree. The quality bar and exposure counter moved
+  *above* the gate to pay for it: the stick field is the bottom-left 256 px and
+  the action column the bottom-right 260 px, so a gate leaving a clear band
+  beneath it would have to be about 60 px tall.
+- **The tapes.** `left: 5px` against `right: 92px`, with readouts sized to their
+  own `min-width` rather than the tape, so a five-figure altitude overhung it.
+  One `--tape-inset` drives both, and the radar altimeter — whose content needs
+  56 px of text in a 60 px plate — stacks instead of overflowing at both ends.
+- **The portrait breakpoint moved from 700 px to 880 px.** The centred-tape
+  layout it replaces meets the action column at about 836 px of viewport height,
+  so 700-836 was getting a layout that assumed room the screen did not have —
+  most large phones with the browser chrome hidden, and all of them installed to
+  the home screen.
+
+**Why three rounds of mobile fixes did not stick.** Verification was a CSSOM
+simulation of the coarse-pointer cascade, adopted because an earlier session
+concluded CDP could not set `pointer: coarse`. It can: `emulate` with
+`mobile,touch` makes `matchMedia('(pointer: coarse)')` match. Everything above
+was measured against the live cascade at 402 x 691, which is the device class
+the reports came from. See `docs/release-portability.md`.
+
+**The tests were the other half.** They hardcoded every rectangle and asserted
+only 8 px separations, so a layout where nothing lined up passed cleanly. They
+now derive from the same tokens the stylesheet uses and assert alignment as well
+as clearance, across six portrait sizes and three landscape, in both control
+modes. That rewrite immediately found a second bug the emulator confirmed: in
+landscape Direct mode the throttle strip ran straight through the altitude tape
+and the radar altimeter, and the objectives block and recon readouts overlapped
+the action column, because `--act-lane` resolves against the Assisted column and
+`#hud` cannot see `#touch`'s per-mode override. Both assertions were verified to
+fail when the fix is reverted (-9.2 px, and the shutter slot check).
+
+**And two files that looked dead were unwired tests.** Sweeping for removable
+files found `src/fx/gpu/foundation.test.js` — nine cases the `src/**/*.test.mjs`
+glob never collected — and `src/world/atmosphere/validation.mjs`, a standalone
+script of physical-model asserts in no glob, no npm script and no import. Both
+passed when run by hand, so they had been quietly correct and quietly unenforced.
+Renamed into the suite with assertions unchanged: 256 tests to 271.
+
+Commits: `811b554`, `2cf33b4`, `f936f6b`, `cdfa7e1`.

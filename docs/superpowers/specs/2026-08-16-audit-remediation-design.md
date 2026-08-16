@@ -183,8 +183,9 @@ cloud coverage per sortie from the same seed as D1.
 
 ### D5 — Harness versus leaderboard — **RETRACTED**
 The audit reported that ~450 lines of `window.__*` ship ungated in production and that this
-lets anyone teleport onto the leaderboard. **That is wrong.** `main.js:205` opens an
-`if (import.meta.env.DEV) {` block that encloses the entire harness *and* the
+lets anyone teleport onto the leaderboard. **That is wrong.** The "Development hooks"
+banner in `src/main.js` opens an `if (import.meta.env.DEV) {` block — line 205 when this
+was written, 271 today — that encloses the entire harness *and* the
 `Object.assign(window, { THREE, engine, game, settings, input })` exposure at the end.
 Verified against the built bundle: `__fly`, `__toPost`, `__recon`, `__gpuBench`,
 `__probeGLSL`, `__audit`, `__stats`, `__mission` and `__crashVfx` each return **zero** grep
