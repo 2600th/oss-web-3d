@@ -80,6 +80,14 @@ const AUTO_CAPTURE_FALLOFF = 0.012;
  */
 const FALLBACK_ORIGIN = new THREE.Vector3(21000, 0, 6000);
 
+/**
+ * The title-screen orbit. Radius and clearance live together because the
+ * clearance is only meaningful against the radius it is sampled over.
+ */
+const CINEMATIC_RADIUS = 5200;
+const CINEMATIC_CLEARANCE = 2100;
+const CINEMATIC_CLEARANCE_SAMPLES = 24;
+
 /** Scratch for projecting the nozzle into screen space each frame. */
 const _heatNdc = new THREE.Vector3();
 /** Scratch for projecting the velocity vanishing point each frame. */
@@ -406,7 +414,25 @@ export class Game {
   _setupCinematic() {
     const { x, z } = this.sortie?.origin ?? { x: FALLBACK_ORIGIN.x, z: FALLBACK_ORIGIN.z };
     this.cinematicCentre = new THREE.Vector3(x, 0, z);
-    this.cinematicCentre.y = terrainHeight(x, z) + 2100;
+
+    // Clear the whole orbit, not just its centre.
+    //
+    // This used to be `terrainHeight(centre) + 2100`, which is the height of one
+    // point — while the camera flies a 5.2 km circle around it. That was tuned
+    // against a single fixed start position; now that a seed moves the sortie
+    // anywhere on a 40-240 km annulus, and the featured seeds are chosen for
+    // nearly 4 km of local relief, a ridge on the far side of the orbit is
+    // routinely higher than the ground at the centre, and the title camera flew
+    // straight through it.
+    let ceiling = terrainHeight(x, z);
+    for (let i = 0; i < CINEMATIC_CLEARANCE_SAMPLES; i++) {
+      const a = (i / CINEMATIC_CLEARANCE_SAMPLES) * Math.PI * 2;
+      const h = terrainHeight(x + Math.cos(a) * CINEMATIC_RADIUS, z + Math.sin(a) * CINEMATIC_RADIUS);
+      if (h > ceiling) ceiling = h;
+    }
+    // Above the highest ground the orbit passes over, plus room for the 260 m
+    // vertical sway and a margin for ridges between the sampled points.
+    this.cinematicCentre.y = ceiling + CINEMATIC_CLEARANCE;
     this.cinematicTime = 0;
     this._updateCinematic(0);
   }
@@ -416,11 +442,17 @@ export class Game {
     this.cinematicTime += dt;
     const camera = this.engine.camera;
     const a = 0.55 + this.cinematicTime * 0.016;
-    const r = 5200;
+    const r = CINEMATIC_RADIUS;
+    const cx = this.cinematicCentre.x + Math.cos(a) * r;
+    const cz = this.cinematicCentre.z + Math.sin(a) * r;
+    // The orbit ceiling is sampled at setup, so a ridge between two samples can
+    // still rise into the path. This is the per-frame backstop: never closer to
+    // the ground directly below than the clearance the shot was designed for.
+    const floor = terrainHeight(cx, cz) + CINEMATIC_CLEARANCE * 0.5;
     camera.position.set(
-      this.cinematicCentre.x + Math.cos(a) * r,
-      this.cinematicCentre.y + Math.sin(this.cinematicTime * 0.05) * 260,
-      this.cinematicCentre.z + Math.sin(a) * r,
+      cx,
+      Math.max(this.cinematicCentre.y + Math.sin(this.cinematicTime * 0.05) * 260, floor),
+      cz,
     );
     const look = this._cinematicLook.copy(this.cinematicCentre);
     look.y -= 900;
