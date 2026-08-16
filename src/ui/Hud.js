@@ -173,7 +173,9 @@ export class Hud {
     // thing in this game that can end a sortie and the proximity warning
     // already computes ground clearance — this simply shows the number the
     // warning is watching, before it starts shouting.
-    this.aglReadout = el('div', 'agl-readout', this.altTape.tape);
+    // Parented to the plate, not the tape: .tape sets overflow:hidden, so a
+    // child positioned below it is clipped away entirely.
+    this.aglReadout = el('div', 'agl-readout', this.plate);
     el('span', 'agl-label', this.aglReadout, 'AGL');
     this.aglValue = el('span', 'agl-value', this.aglReadout, '—');
   }
@@ -518,10 +520,10 @@ export class Hud {
 
     if (Number.isFinite(s.agl)) {
       const agl = Math.max(0, Math.round(s.agl));
-      if (this.aglValue._v !== agl) {
-        this.aglValue._v = agl;
-        set(this.aglValue, agl.toLocaleString('en-US'));
-      }
+      // set() already skips unchanged text; a second guard here stored a number
+      // in the same _v slot set() keeps a string in, so every frame compared
+      // unequal and rewrote the node.
+      set(this.aglValue, agl.toLocaleString('en-US'));
       // Amber well before the proximity warning fires, so the number is a cue
       // the pilot can fly on rather than an alarm they react to.
       toggle(this.aglReadout, 'caution', agl < 300);

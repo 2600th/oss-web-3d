@@ -169,6 +169,21 @@ let running = true;
 let frameId = 0;
 function frame() {
   if (!running) return;
+  try {
+    frameBody();
+  } catch (error) {
+    // A throw *inside* the loop is genuinely fatal in a way a stray error is
+    // not: requestAnimationFrame does not reschedule, so the game is already
+    // frozen. Say so rather than leaving a still frame and a silent console.
+    running = false;
+    console.error('[frame] loop aborted', error);
+    showBootFailure('The experience stopped unexpectedly. Reload to try again.');
+    return;
+  }
+  frameId = requestAnimationFrame(frame);
+}
+
+function frameBody() {
   engine.timer.update();
   // Bound the step: returning from a background tab hands back a delta of
   // several seconds, which would teleport the aircraft through a mountain.
@@ -192,7 +207,6 @@ function frame() {
       `objectives ${game.mission.captured}/${game.mission.posts.length}`;
   }
 
-  frameId = requestAnimationFrame(frame);
 }
 frameId = requestAnimationFrame(frame);
 void game.begin().then(() => {
@@ -213,6 +227,9 @@ const removeContextRecovery = installContextRecovery(
     // sortie that had flown itself into a mountain.
     running = false;
     cancelAnimationFrame(frameId);
+    // The beds are driven from the frame loop, so stopping it without this
+    // leaves a jet at cruise power playing over the overlay.
+    game.audio?.setHidden(true);
     showBootFailure('Graphics context lost. Waiting for recovery…');
   },
   () => showBootFailure('Graphics context restored. Reload to resume safely.'),

@@ -25,6 +25,8 @@
   --instrument-dim: #8fae9a;
   --caution: #e5a23c;
   --danger: #e05a4a;
+  /* Amber, for a reading that wants attention before it wants action. */
+  --caution: #d7a13a;
   --confirm: #7fd6a0;
 
   --saffron: #ff9933;
@@ -2401,12 +2403,16 @@ input:focus-visible {
    useless for the one threat in the game. This is the height the proximity
    warning is actually watching, shown before it has anything to shout about. */
 .agl-readout {
-  /* Clear of the tape rather than over it: the tape is 40vh tall and centred,
-     so anything inside its box lands on the graduations. */
+  /* Positioned against the HUD plate, not the tape: .tape is overflow:hidden,
+     so a child below it is clipped away entirely.
+     Above the tape rather than below it, because below is where the navigation
+     edge cue sits — the tape is 40vh tall and centred, so its top edge is at
+     50% - 20vh. */
   position: absolute;
-  top: calc(100% + 9px);
-  left: 50%;
-  transform: translateX(-50%);
+  top: calc(50% - 20vh - 20px);
+  right: 4.5vw;
+  width: 92px;
+  justify-content: center;
   display: flex;
   align-items: baseline;
   gap: 5px;
@@ -2429,8 +2435,8 @@ input:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--instrument);
 }
-.agl-readout.caution .agl-value { color: var(--warn, #d7a13a); }
-.agl-readout.danger .agl-value { color: var(--danger, #e0573c); }
+.agl-readout.caution .agl-value { color: var(--caution); }
+.agl-readout.danger .agl-value { color: var(--danger); }
 @media (prefers-reduced-motion: reduce) {
   .agl-readout { transition: none; }
 }
