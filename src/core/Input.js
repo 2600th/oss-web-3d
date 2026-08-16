@@ -1,3 +1,21 @@
+import { isTouchDevice } from './Settings.js';
+
+/**
+ * The input the player almost certainly has, before they have used any.
+ *
+ * Guarded because isTouchDevice() reads `navigator` and `matchMedia` directly,
+ * and Input is constructed in tests that provide neither. A device we cannot
+ * interrogate is assumed to have a keyboard, which is the safe default: it is
+ * what the briefing used to show everyone anyway.
+ */
+function detectModality() {
+  try {
+    return isTouchDevice() ? 'touch' : 'keyboard';
+  } catch {
+    return 'keyboard';
+  }
+}
+
 /**
  * Keyboard / gamepad / touch input, normalised into flight axes.
  *
@@ -57,7 +75,17 @@ export class Input {
       brake: 0,
       throttle: 0.72,
     };
-    this.modality = 'keyboard';
+    /**
+     * What the briefing should describe, before anything has been pressed.
+     *
+     * This defaulted to 'keyboard' and only became 'touch' once the player
+     * actually touched a control — but Game pushes it into the briefing at
+     * build time, which overrode the coarse-pointer choice Screens had already
+     * made. Every phone player therefore opened on a legend of W, Shift, Esc
+     * and Tab for a device with none of them, and only saw the real controls
+     * after flying with them. Seed it from the device instead.
+     */
+    this.modality = detectModality();
 
     // Touch state. `touchActive` latches on first use so a desktop session is
     // never affected by these being present.
@@ -91,7 +119,17 @@ export class Input {
       // chord could stay in `keys` for the rest of the session and fly the
       // aircraft on its own.
       if (e.metaKey) return;
-      this.modality = 'keyboard';
+      /**
+     * What the briefing should describe, before anything has been pressed.
+     *
+     * This defaulted to 'keyboard' and only became 'touch' once the player
+     * actually touched a control — but Game pushes it into the briefing at
+     * build time, which overrode the coarse-pointer choice Screens had already
+     * made. Every phone player therefore opened on a legend of W, Shift, Esc
+     * and Tab for a device with none of them, and only saw the real controls
+     * after flying with them. Seed it from the device instead.
+     */
+    this.modality = detectModality();
       this.keys.add(e.code);
       this._pressed.add(e.code);
       // Suppressing the default is what would swallow a browser shortcut;

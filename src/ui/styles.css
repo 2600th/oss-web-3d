@@ -1072,6 +1072,26 @@ body {
 }
 
 /* Masked frame: everything outside the camera gate is dimmed. */
+/*
+ * The optical gate, defined once.
+ *
+ * Five rules describe this box — the mask, its frame, the header above it and
+ * the two readouts below it — and each breakpoint used to restate all five in
+ * its own numbers. They drifted: the coarse-pointer block moved the readouts to
+ * pixel offsets that clear the touch buttons but left the gate on percentages,
+ * so on a phone "FRAME THE OBJECTIVE" and the exposure counter sat *inside* the
+ * photograph. A breakpoint now moves the gate by setting these three values and
+ * everything else follows.
+ */
+#recon {
+  --gate-x: 16%;
+  --gate-top: 20%;
+  --gate-bottom: 20%;
+  /* Clearances for the satellites, measured out from the gate edge. */
+  --gate-head-gap: 42px;
+  --gate-foot-gap: 42px;
+  --gate-exposure-gap: 61px;
+}
 .gate {
   position: absolute;
   inset: 0;
@@ -1082,19 +1102,19 @@ body {
     100% 100%,
     0 100%,
     0 0,
-    16% 20%,
-    16% 80%,
-    84% 80%,
-    84% 20%,
-    16% 20%
+    var(--gate-x) var(--gate-top),
+    var(--gate-x) calc(100% - var(--gate-bottom)),
+    calc(100% - var(--gate-x)) calc(100% - var(--gate-bottom)),
+    calc(100% - var(--gate-x)) var(--gate-top),
+    var(--gate-x) var(--gate-top)
   );
 }
 .gate-frame {
   position: absolute;
-  left: 16%;
-  right: 16%;
-  top: 20%;
-  bottom: 20%;
+  left: var(--gate-x);
+  right: var(--gate-x);
+  top: var(--gate-top);
+  bottom: var(--gate-bottom);
   border: 1px solid rgba(184, 216, 196, 0.4);
 }
 .gate-frame span {
@@ -1203,9 +1223,9 @@ body {
 
 .recon-head {
   position: absolute;
-  left: 16%;
-  right: 16%;
-  top: calc(20% - 42px);
+  left: var(--gate-x);
+  right: var(--gate-x);
+  top: calc(var(--gate-top) - var(--gate-head-gap));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1231,8 +1251,8 @@ body {
 .recon-optics b { color: var(--paper); font-size: 12px; }
 .recon-frame-no {
   position: absolute;
-  right: 16%;
-  bottom: calc(20% - 61px);
+  right: var(--gate-x);
+  bottom: calc(var(--gate-bottom) - var(--gate-exposure-gap));
   color: var(--paper-faint);
   font: 9px/1 var(--mono);
   letter-spacing: 0.16em;
@@ -1240,9 +1260,9 @@ body {
 
 .quality {
   position: absolute;
-  left: 16%;
-  right: 16%;
-  bottom: calc(20% - 42px);
+  left: var(--gate-x);
+  right: var(--gate-x);
+  bottom: calc(var(--gate-bottom) - var(--gate-foot-gap));
 }
 .quality-bar {
   height: 4px;
@@ -1961,6 +1981,7 @@ input:focus-visible {
 #hud.recon-open .objectives,
 #hud.recon-open .target-block,
 #hud.recon-open .warnings,
+#hud.recon-open .agl-readout,
 #hud.recon-open .reticle {
   opacity: 0;
   visibility: hidden;
@@ -1971,6 +1992,20 @@ input:focus-visible {
    non-overlapping hierarchy. */
 @media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
   .layer.show { overflow-y: auto; overscroll-behavior: contain; }
+  /* The scrim has to stay put while the copy scrolls over it.
+     It is `position: absolute; inset: 0`, which sizes to the scroll container's
+     *client* box and scrolls with the content — so on a phone, where the layer
+     is a scroller, scrolling the briefing dragged the scrim up and left every
+     row below the first screenful sitting unreadably on bare sunlit terrain.
+     Fixed rather than stretched: this is a full-viewport darkening, and pinning
+     it is both correct and cheaper than sizing it to the scroll height. */
+  .layer.show > .scrim { position: fixed; }
+  /* And the letterbox bars, for the same reason. Absolutely positioned inside a
+     scroller they travel with the content, so scrolling the debrief left a black
+     bar stranded across the middle of the contact sheet instead of framing the
+     screen. */
+  .layer.show.letterbox::before,
+  .layer.show.letterbox::after { position: fixed; }
   .centre {
     position: relative;
     min-height: 100%;
@@ -2103,11 +2138,14 @@ input:focus-visible {
   .target-block .range { font-size: 13px; }
   .warnings { top: 20vh; }
 
-  .gate-frame { left: 9%; right: 9%; top: 18%; bottom: 22%; }
-  .gate {
-    clip-path: polygon(0 0,100% 0,100% 100%,0 100%,0 0,9% 18%,9% 78%,91% 78%,91% 18%,9% 18%);
+  #recon {
+    --gate-x: 9%;
+    --gate-top: 18%;
+    --gate-bottom: 22%;
+    --gate-head-gap: 38px;
+    --gate-foot-gap: 38px;
+    --gate-exposure-gap: 54px;
   }
-  .recon-head { left: 9%; right: 9%; top: calc(18% - 38px); }
   /* Drop the instrument's name rather than ellipsising the whole line: the
      state is the half that changes, and truncation ate it first. */
   .recon-status { max-width: 62%; white-space: nowrap; letter-spacing: 0.18em; }
@@ -2116,8 +2154,6 @@ input:focus-visible {
      throttle block is 60px wide, so the label was clipped mid-word. */
   .throttle .block-label { letter-spacing: 0.14em; font-size: 9px; }
   .recon-optics { gap: 7px; font-size: 8px; }
-  .quality { left: 9%; right: 9%; bottom: calc(22% - 38px); }
-  .recon-frame-no { right: 9%; bottom: calc(22% - 54px); }
   .recon-reticle { width: min(66vw, 270px); height: min(66vw, 270px); }
   .photo-pop {
     top: max(72px, calc(env(safe-area-inset-top) + 58px));
@@ -2359,16 +2395,20 @@ input:focus-visible {
   }
   .recon-optics { gap: 5px; font-size: 8px; }
   .recon-optics b { font-size: 10px; }
-  .quality {
-    left: max(16px, env(safe-area-inset-left));
-    right: 92px;
-    bottom: max(272px, calc(env(safe-area-inset-bottom) + 272px));
+  /* Lift the whole gate instead of pushing the readouts down into it.
+     The touch controls own the bottom-right corner, so the readouts were given
+     pixel offsets to clear them — but the gate stayed on its percentage, and on
+     a phone those offsets land inside the photograph. Raising the gate's lower
+     edge opens a band beneath it that holds the readouts and still leaves the
+     buttons their corner. */
+  #recon {
+    /* High enough that the readouts below the gate clear the stick zone as well
+     * as the button column — touch-controls.test.mjs holds both to an 8px lane. */
+    --gate-bottom: 36%;
+    --gate-foot-gap: 34px;
+    --gate-exposure-gap: 50px;
   }
   .quality-legend { font-size: 8px; letter-spacing: 0.12em; }
-  .recon-frame-no {
-    right: 92px;
-    bottom: max(204px, calc(env(safe-area-inset-bottom) + 204px));
-  }
   .recon-reticle { width: min(54vw, 220px); height: min(54vw, 220px); }
   .photo-pop { right: 92px; }
 }

@@ -318,13 +318,21 @@ test('390x844 Assisted controls maintain eight-pixel flight and recon safe recta
   const stickMatch = stickBodies.at(-1)?.[1].match(/height:\s*min\((\d+)vh,\s*(\d+)px\)/);
   assert.ok(stickMatch, 'the active coarse-pointer stick height must be explicit');
   const stickHeight = Math.min(viewport.height * Number(stickMatch[1]) / 100, Number(stickMatch[2]));
-  const qualityBottom = Number(
-    [...css.matchAll(/\.quality\s*\{([^}]*)\}/gs)]
-      .map((match) => match[1])
-      .find((body) => /bottom:\s*max\(272px/.test(body))
-      ?.match(/bottom:\s*max\((\d+)px/)?.[1],
+  // The readouts below the gate are positioned from the gate itself now, not
+  // from their own pixel offsets. They used to carry independent numbers that
+  // had to agree with the gate's percentage and did not: on a phone the gate
+  // stayed put while the readouts were pushed down to clear the touch buttons,
+  // which put them inside the photograph. Derive the lane the same way the
+  // stylesheet does, so this test tracks the mechanism rather than a constant.
+  const reconVars = lastRuleBody(css, '#recon');
+  const gateBottomPct = Number(reconVars.match(/--gate-bottom:\s*([\d.]+)%/)?.[1]);
+  const footGap = Number(reconVars.match(/--gate-foot-gap:\s*([\d.]+)px/)?.[1]);
+  assert.ok(
+    Number.isFinite(gateBottomPct) && Number.isFinite(footGap),
+    'the coarse-pointer gate must declare --gate-bottom and --gate-foot-gap',
   );
-  assert.ok(Number.isFinite(qualityBottom), 'coarse-pointer quality safe lane must have an explicit bottom');
+  const qualityBottom = (viewport.height * gateBottomPct) / 100 - footGap;
+  assert.ok(qualityBottom > 0, 'the quality lane must sit above the bottom edge');
 
   const stick = rect(0, viewport.height - stickHeight, Math.min(viewport.width * 0.42, 340), stickHeight, 'stick');
   const boost = rect(viewport.width - 14 - 96, viewport.height - 96 - 58, 96, 58, 'Boost');
