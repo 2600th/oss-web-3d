@@ -847,13 +847,21 @@ test('quality switch requests a terrain rebuild only when grid resolution change
       this.tier = { name, terrainRes: name === 'low' ? 129 : 257 };
     },
   };
-  game.engine = { applySettings() {} };
+  // Scene consumers of the composer depth texture have to be re-declared on a
+  // tier switch, so the fake engine models that part of the real interface.
+  let declaredDepth = null;
+  game.engine = {
+    applySettings() {},
+    setSceneDepthRequired(required) { declaredDepth = required; },
+    composer: { stableDepthTexture: null },
+  };
+  game._waterDrawingSize = new THREE.Vector2(1280, 720);
   game.terrain = { setQuality() { throw new Error('old terrain must not be retuned before rebuild'); } };
   game.water = { setQuality() {} };
   game.fx = { setQuality() {} };
   game.screens = { setQuality() {} };
-  game.cloudField = { setQuality() {} };
-  game.clouds = { setQuality() {} };
+  game.cloudField = { setQuality() {}, setDepthTexture() {} };
+  game.clouds = { setQuality() {}, setDepthTexture() {} };
   game._disposeWaterRefraction = () => {};
   let rebuild;
   game._rebuildTerrain = (next, old) => { rebuild = [next, old]; };
@@ -862,6 +870,14 @@ test('quality switch requests a terrain rebuild only when grid resolution change
   assert.deepEqual(rebuild, [129, 257]);
   assert.equal(game.flight, flight);
   assert.equal(game.mission, mission);
+  assert.equal(declaredDepth, true, 'low tier still needs composer depth for soft particles');
+
+  // The rebuild guard above has served its purpose; from here the question is
+  // only what the phone tier declares about scene depth.
+  game.terrainResolution = 129;
+  game.terrain = { setQuality() {} };
+  game.setQuality('phone');
+  assert.equal(declaredDepth, false, 'phone declines soft depth: the define costs a fetch on the most fill-bound geometry');
 });
 
 test('low tier water path never performs a refraction prepass', () => {

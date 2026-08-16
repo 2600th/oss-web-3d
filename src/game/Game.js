@@ -155,14 +155,12 @@ export class Game {
     this.fx.setQuality(settings.tier);
     engine.scene.add(this.fx.group);
     engine.renderer.getDrawingBufferSize(this._waterDrawingSize);
-    setSceneDepth(
-      engine.composer.stableDepthTexture,
-      this._waterDrawingSize.x,
-      this._waterDrawingSize.y,
-    );
     this.clouds.initialize(engine.renderer);
-    this.clouds.setDepthTexture(engine.composer.stableDepthTexture);
-    this.cloudField.setDepthTexture(engine.composer.stableDepthTexture);
+    // Soft particles read composer depth. Declaring the need here is what makes
+    // the composer allocate the texture on tiers whose post chain wants none —
+    // which is every tier below high, including the reference hardware's.
+    this._applySceneDepthRequirement();
+    this._syncSceneDepth();
 
     this.audio = new Audio(settings);
 
@@ -338,6 +336,37 @@ export class Game {
     }
   }
 
+  /**
+   * Tell the engine whether anything in the scene needs composer depth.
+   *
+   * Everything above phone does. Phone stays off deliberately: the soft-depth
+   * define costs a texture fetch on the most fill-bound geometry in the frame,
+   * and a depth attachment costs bandwidth that tier does not have to spare.
+   */
+  _applySceneDepthRequirement() {
+    this.engine.setSceneDepthRequired(this.settings.tier.name !== 'phone');
+  }
+
+  /**
+   * Re-read the composer's depth texture and push it to every scene consumer.
+   *
+   * The composer allocates this in applySettings — after Game's constructor —
+   * and swaps it whenever a depth-reading pass is added or removed, so it has
+   * to be re-read rather than bound once. setSceneDepth() matters most: it
+   * compiles FX_SOFT_DEPTH into every registered FX material, and because it
+   * was called exactly once from the constructor it always compiled against a
+   * null texture. Every particle system and ribbon spent the whole session with
+   * hard edges against the world.
+   */
+  _syncSceneDepth() {
+    const depth = this.engine.composer.stableDepthTexture;
+    if (depth === this._sceneDepthTexture) return;
+    this._sceneDepthTexture = depth;
+    this.cloudField.setDepthTexture(depth);
+    this.clouds.setDepthTexture(depth);
+    setSceneDepth(depth, this._waterDrawingSize.x, this._waterDrawingSize.y);
+  }
+
   _startPosition() {
     const p = START.clone();
     p.y = terrainHeight(p.x, p.z) + 1500;
@@ -441,6 +470,11 @@ export class Game {
     const previousResolution = this.terrainResolution;
     this.settings.setTier(tier);
     this.engine.applySettings();
+    // The new tier's post chain may want depth where the old one did not, or
+    // the other way round; either way the scene's own need is unchanged and has
+    // to be re-asserted before anything reads the texture.
+    this._applySceneDepthRequirement();
+    this._syncSceneDepth();
     if (this.settings.tier.terrainRes !== previousResolution) {
       this._rebuildTerrain(this.settings.tier.terrainRes, previousResolution);
     } else {
@@ -653,15 +687,7 @@ export class Game {
     // The volume is shadow-only now, so nothing in the post chain drives it;
     // the terrain still needs its stripe refreshed every frame.
     this.clouds.update(this.engine.renderer, null, dt);
-    // The composer allocates its stable depth texture in applySettings, after
-    // Game is constructed, and swaps it whenever a depth-reading pass is added
-    // or removed — so this is re-read rather than bound once.
-    const depth = this.engine.composer.stableDepthTexture;
-    if (depth !== this._cloudDepthTexture) {
-      this._cloudDepthTexture = depth;
-      this.cloudField.setDepthTexture(depth);
-      this.clouds.setDepthTexture(depth);
-    }
+    this._syncSceneDepth();
     this.cloudField.update();
     this._updateWaterRefraction(dt);
     this._updatePostEffects(dt);

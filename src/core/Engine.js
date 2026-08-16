@@ -150,6 +150,8 @@ export class Engine {
     this._frameIndex = 0;
     this._frameCount = 0;
     this.renderScale = 1;
+    // Set by the Game once it knows the tier; see setSceneDepthRequired.
+    this._sceneWantsDepth = false;
     this._scaleCooldown = 0;
     this.fps = 60;
     this.adaptEnabled = true;
@@ -216,8 +218,26 @@ export class Engine {
    * so the flag read here is still false and a one-shot check misses it
    * permanently. The scan is nine booleans and it only acts on a transition.
    */
+  /**
+   * Declare that something in the *scene* reads the composer depth texture.
+   *
+   * The cloud billboards and every GPU FX material sample it for their soft
+   * edge, but they are scene objects, not passes, so `pass.needsDepthTexture`
+   * cannot see them. They used to ride on whatever the post chain happened to
+   * want, and on medium, low and phone it wants nothing — so soft particles
+   * were dead on three of four tiers, including the one the reference GPU
+   * selects. Cloud billboards cut a hard straight line into the mountains there.
+   */
+  setSceneDepthRequired(required) {
+    const next = Boolean(required);
+    if (this._sceneWantsDepth === next) return false;
+    this._sceneWantsDepth = next;
+    return this.syncDepthTexture();
+  }
+
   syncDepthTexture() {
-    const wantsDepth = this.composer.passes.some((pass) => pass.needsDepthTexture);
+    const wantsDepth = this._sceneWantsDepth
+      || this.composer.passes.some((pass) => pass.needsDepthTexture);
     const has = this.composer.stableDepthTexture !== null;
     if (wantsDepth && !has) {
       this.composer.createDepthTexture();
