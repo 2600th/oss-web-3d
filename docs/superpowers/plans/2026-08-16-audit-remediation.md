@@ -23,6 +23,30 @@
 - Accessibility is a shipped feature: focus trapping, `prefers-reduced-motion`, keyboard/gamepad/touch parity. Do not regress it.
 - Commit per task using the repo's existing style (`fix:`, `feat:`, `docs:`). Never `git add .` — stage named paths.
 
+
+## Status — 16 August 2026
+
+Branch `audit-fixes`. 251 tests pass, `npm run check` and `npm run build` clean.
+
+**Landed:** F1 (Enter/debrief), F2 (line of sight — plus a second defect the test
+uncovered: fixed 30-sample spacing stepped over ridges at range), F3 (sortie clock on
+simulated time), F4 (HUD halo), F5 (audio on tab hide), F7 (tape ticks), F8+F9 (composer
+depth for scene consumers — soft particles restored on medium/low), F10 (adaptive scaler
+saw a pre-clamped delta, so its occlusion guard was unreachable), V1+V3 (sun elevation,
+shadow floors, elevation-scaled sky fill, ambient occlusion from the baked shadow term),
+V2 (look transform after AGX) plus a snow-albedo correction, D1+D3 (seeded sortie: origin,
+sun and weather), E1 (detail fade by apparent size), E5 (advancedChunks), G1+G2 (scoring
+terms, energy term, grade bands), G3 (AGL readout), and most of Task 13.
+
+**Retracted — the audit was wrong:** D5 and the `__sagar` item. The `window.__*` harness
+does not ship; `main.js:205` wraps it in `import.meta.env.DEV`, verified against `dist/`.
+
+**Deferred, with reasons:** F6 (the unread cloud shadow target — removal is entangled with
+two near-duplicate update paths in a 1,138-line file for a scissored 32x256 stripe per
+frame; an A/B was inconclusive and the risk outweighs the gain). D2 (search area instead of
+a waypoint). G5 (plate crops). Re-photography. E3 (capture-target realloc). Most of the 018
+post-chain list. E6 (Game.js extraction). V4/V6/V7/G4/D4 were never in this plan.
+
 ---
 
 ## File structure
