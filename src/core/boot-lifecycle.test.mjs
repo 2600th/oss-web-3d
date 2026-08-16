@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { installContextRecovery, installPageLifecycle, showBootFailure, supportsWebGL2 } from './BootLifecycle.js';
+import { acquireWebGL2, installContextRecovery, installPageLifecycle, showBootFailure, supportsWebGL2 } from './BootLifecycle.js';
 
 class Target {
   constructor() { this.listeners = new Map(); }
@@ -9,8 +9,32 @@ class Target {
 }
 
 {
-  assert.equal(supportsWebGL2({ createElement: () => ({ getContext: (name) => name === 'webgl2' ? {} : null }) }), true);
-  assert.equal(supportsWebGL2({ createElement: () => ({ getContext: () => null }) }), false);
+  // Availability is answered without creating anything. The old probe made a
+  // throwaway context and released it through WEBGL_lose_context — an extension
+  // that need not exist, and when it does not the probe context leaks. Desktop
+  // has contexts to spare; iOS keeps a small budget and evicts aggressively, so
+  // a leaked probe could cost the renderer its own context and the experience
+  // never started.
+  assert.equal(supportsWebGL2({ WebGL2RenderingContext: function () {} }), true);
+  assert.equal(supportsWebGL2({}), false);
+  assert.equal(supportsWebGL2(undefined), false);
+}
+
+{
+  // The one context the app will use, created on the real canvas.
+  const asked = [];
+  const context = { real: true };
+  const canvas = { getContext: (name, attrs) => { asked.push([name, attrs]); return name === 'webgl2' ? context : null; } };
+  assert.equal(acquireWebGL2(canvas), context);
+  assert.equal(asked[0][0], 'webgl2');
+  assert.equal(asked[0][1].alpha, false, 'attributes must match the renderer, or getContext returns the old ones');
+  assert.equal(asked[0][1].antialias, false);
+  assert.equal(asked[0][1].depth, true);
+
+  assert.equal(acquireWebGL2({ getContext: () => null }), null, 'a refused context is null, not a throw');
+  assert.equal(acquireWebGL2({ getContext: () => { throw new Error('blocked'); } }), null, 'a throwing getContext is survivable');
+  assert.equal(acquireWebGL2(null), null);
+  assert.equal(acquireWebGL2({}), null, 'a canvas with no getContext is not a canvas');
 }
 
 {

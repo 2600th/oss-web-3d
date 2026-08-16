@@ -1,15 +1,54 @@
 /** Small DOM-only boot/lifecycle seams, kept independent of Three.js. */
 
-export function supportsWebGL2(doc = document) {
+/**
+ * The context attributes the renderer is built with.
+ *
+ * Shared so the probe and the renderer ask for exactly the same thing — a
+ * mismatch would make getContext() hand back the already-created context with
+ * the *original* attributes, silently ignoring the new ones.
+ */
+export const GL_ATTRIBUTES = Object.freeze({
+  alpha: false,
+  antialias: false,
+  depth: true,
+  stencil: false,
+  powerPreference: 'high-performance',
+  failIfMajorPerformanceCaveat: false,
+});
+
+/**
+ * Acquire the one WebGL2 context this application will ever use.
+ *
+ * It is created on the real viewport canvas and handed to the renderer, rather
+ * than probed on a throwaway canvas and discarded. The old probe made a second
+ * context purely to answer "is WebGL2 available?", then tried to release it
+ * through WEBGL_lose_context — an extension that is not guaranteed to exist,
+ * and when it does not, the probe context simply leaked.
+ *
+ * Desktop browsers allow enough simultaneous contexts that nobody noticed. iOS
+ * does not: WebKit keeps a small budget and evicts aggressively, so a leaked
+ * probe could cost the real renderer its context and the whole experience
+ * failed to start with no useful message.
+ *
+ * @returns {WebGL2RenderingContext|null}
+ */
+export function acquireWebGL2(canvas) {
+  if (!canvas?.getContext) return null;
   try {
-    const canvas = doc.createElement('canvas');
-    const context = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
-    if (!context) return false;
-    context.getExtension?.('WEBGL_lose_context')?.loseContext?.();
-    return true;
+    return canvas.getContext('webgl2', GL_ATTRIBUTES) ?? null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Whether WebGL2 exists at all, without creating a context.
+ *
+ * Kept as a cheap pre-check so a browser that has no WebGL2 whatsoever gets the
+ * "update your browser" message rather than a renderer construction failure.
+ */
+export function supportsWebGL2(view = globalThis) {
+  return typeof view?.WebGL2RenderingContext !== 'undefined';
 }
 
 export function showBootFailure(message, doc = document) {

@@ -37,11 +37,19 @@ import { LensArtifactsEffect } from '../fx/post/LensArtifactsEffect.js';
  * flight experience than a crisp 45.
  */
 export class Engine {
-  constructor(canvas, settings) {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {Settings} settings
+   * @param {WebGL2RenderingContext} [context] the context acquired at boot.
+   *   Passed in rather than created here so exactly one ever exists — see
+   *   acquireWebGL2 in BootLifecycle.js for why that matters on iOS.
+   */
+  constructor(canvas, settings, context = null) {
     this.settings = settings;
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
+      ...(context ? { context } : {}),
       antialias: false,
       powerPreference: 'high-performance',
       stencil: false,

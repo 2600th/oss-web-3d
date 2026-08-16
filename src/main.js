@@ -6,6 +6,7 @@ import { Input } from './core/Input.js';
 import { shouldToggleDebug } from './core/debugPanel.js';
 import { TouchControls } from './core/TouchControls.js';
 import {
+  acquireWebGL2,
   installContextRecovery,
   installPageLifecycle,
   showBootFailure,
@@ -33,10 +34,18 @@ const canvas = document.getElementById('viewport');
 if (!supportsWebGL2()) {
   showBootFailure('WebGL2 is unavailable. Update your browser or graphics driver, then reload.');
 } else {
-  await start(canvas);
+  // One context, created here on the real canvas and handed to the renderer.
+  // Probing on a throwaway canvas used to leak a context on any browser without
+  // WEBGL_lose_context, which on iOS is enough to deny the renderer its own.
+  const gl = acquireWebGL2(canvas);
+  if (!gl) {
+    showBootFailure('This browser could not open a WebGL2 drawing surface. Close other 3D tabs and reload.');
+  } else {
+    await start(canvas, gl);
+  }
 }
 
-async function start(canvas) {
+async function start(canvas, gl) {
 const __log = [];
 const restoreConsole = [];
 if (import.meta.env.DEV) {
@@ -86,7 +95,7 @@ if (import.meta.env.DEV) {
     settings.autoDetected = true;
   }
 }
-const engine = new Engine(canvas, settings);
+const engine = new Engine(canvas, settings, gl);
 if (!settings.autoDetected) settings.setTier(guessTier(engine.renderer));
 
 // Terrain grid resolution has to be fixed before Terrain is constructed — it
