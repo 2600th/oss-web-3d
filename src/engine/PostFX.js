@@ -494,7 +494,9 @@ export class PostFX {
     // sun on screen
     const sun = f.sunDirection;
     let amount = 0;
-    if (sun && this.options.flare) {
+    // only the sun throws a flare/glare: when the key light is the moon
+    // (env.keyLight, handed over ~3.4 deg below the horizon) the lens is dark
+    if (sun && this.options.flare && (f.keyLight ?? 'sun') === 'sun') {
       _v.copy(sun).transformDirection(cam.matrixWorldInverse);
       const front = _v.z < 0 ? Math.min(1, -_v.z * 6) : 0; // fade as it swings behind
       _v.copy(cam.position).addScaledVector(sun, 1e4).project(cam);
@@ -519,6 +521,13 @@ export class PostFX {
     }
     const e = evToMultiplier(s.ev);
     this.uniforms.exposure.value = e;
+    // Film grain is a daylight texture. In low light (golden hour -> dusk ->
+    // night) the exposure gain lifts the scene into the mid-tones where grain
+    // shows most, so fade it with the metered scene luminance (adaptedLog2:
+    // noon ~-1.9, golden ~-3.7, dusk ~-5.5, night ~-6.5). options.grain is the
+    // settings toggle.
+    const light = Number.isFinite(s.adaptedLog2) ? smoothstepJS(-6, -2.5, s.adaptedLog2) : 1;
+    this.uniforms.grain.value = o.grain === false ? 0 : 0.35 + 0.65 * light;
     if (this._bloom) {
       // threshold is specified in *exposed* units; the bloom input is pre-exposure
       const b = this.bloomSettings;

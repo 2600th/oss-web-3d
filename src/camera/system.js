@@ -368,6 +368,8 @@ export function createSystem(game) {
         post.setFrameState({
           sunDirection: env?.sunDirection,
           sunIntensity: sunI * sunUp,
+          // env.sun / sunDirection are the *key* light: the moon at night
+          keyLight: env?.keyLight ?? 'sun',
           // speed-driven blur/streaks only when the lens rides with the jet
           airspeed: riding ? f.airspeed : 0,
           agl: f.agl,
