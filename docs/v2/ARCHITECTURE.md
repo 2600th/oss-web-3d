@@ -300,3 +300,22 @@ when unavoidable; say so in your report.
   - The recon optic borrows `cameraRig` view `hud` and narrows `baseFov`/`cockpitFov`
     while V is held (restored on release) — camera owner: replace with a real optic
     view on `camera:request {mode: 'optic'}` when convenient.
+
+- **terrain + water (additive).** `new Terrain(r, { env, tier })` (the old
+  `grid`/`levels` options are accepted and ignored: the terrain has its own
+  table keyed by `r.tier.name`, low 6 m / medium 4 m / high 3 m / ultra 2 m
+  finest cell, 11 clipmap levels). Game.js passes `env` so the terrain can fold
+  cloud shadow, its own long-range heightfield shadow and the range-gated
+  shadow map into one `receivedShadowNode`; `env.applyCloudShadow(material)`
+  may still be called on terrain materials at any time, the terrain re-wraps it
+  on the next `update`. Data: `public/assets/terrain/dem.json` now lists
+  `packs` (`kargil-hi.stp` 3073^2, `kargil-lo.stp` 2049^2; STP1 container,
+  see `src/world/terrain/pack.js`); `dem.u16` is gone. `loadDEM(base, { set })`
+  picks the pack. Heightfield additions: `initTerrain`, `detailHeight`,
+  `riverEdge(x,z)` (metres to the bank, negative in water), `isWater`,
+  `waterHeight`, `demInset`; `terrainHeight` now includes the sub-DEM detail,
+  carved river beds and the procedural surround beyond the DEM, and equals the
+  rendered surface (`window.__verifyTerrain()`, under 0.1 m everywhere).
+  Terrain additions: `ready`, `material(s)`, `stats`, `height`, `verify()`,
+  `crackTest()`, `gpuTime()` (dev; use `?gputime`). Rivers are shaded in the
+  terrain material (`src/world/water/river.js`), there is no separate water mesh.
