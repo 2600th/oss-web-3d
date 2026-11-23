@@ -74,7 +74,9 @@ export class GroundUnit {
     if (b === 'aaa') this._aaa(dt, ctx, engaged, dist);
     else if (b === 'flak') this._flak(dt, ctx, engaged, dist);
     else this._sam(dt, ctx, engaged, dist);
-    if (engaged) {
+    // [art pass] Units whose model has a turret/launcher pivot are laid by the
+    // assets system (src/assets/system.js sets `aimRig`); only the rest turn whole.
+    if (engaged && !this.aimRig) {
       // Cosmetic: face the target.
       e.object3d.rotation.y = Math.atan2(-(p.position.x - e.position.x), -(p.position.z - e.position.z));
     }
