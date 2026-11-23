@@ -3,17 +3,17 @@
   "layers": [
     {
       "name": "scree",
-      "source": "https://polyhaven.com/a/dry_ground_rocks",
-      "id": "dry_ground_rocks",
+      "source": "https://polyhaven.com/a/rock_ground_02",
+      "id": "rock_ground_02",
       "authors": [
         "Rob Tuytel"
       ],
       "licence": "CC0-1.0",
-      "sizeMetres": 4,
+      "sizeMetres": 3,
       "meanAlbedoLinear": [
-        0.3161,
-        0.1852,
-        0.0859
+        0.1956,
+        0.1688,
+        0.1227
       ]
     },
     {
@@ -92,6 +92,21 @@
         0.2326,
         0.1956,
         0.1554
+      ]
+    },
+    {
+      "name": "talus",
+      "source": "https://polyhaven.com/a/gray_rocks",
+      "id": "gray_rocks",
+      "authors": [
+        "Dimitrios Savva"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 1.8,
+      "meanAlbedoLinear": [
+        0.1982,
+        0.1743,
+        0.1374
       ]
     }
   ]

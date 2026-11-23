@@ -22,13 +22,17 @@ const SIZE = 1024;
 const UA = { 'User-Agent': 'terrain-texture-build/1.0' };
 
 // Order is the layer index used by the shader (src/world/terrain/layers.js).
+// [textures] scree was dry_ground_rocks (cracked desert mud: read as Arizona,
+// not Ladakh); rock_ground_02 is grey-brown gravelly scree. talus (angular
+// frost-shattered blocks) is new and appended so the other indices stay put.
 const LAYERS = [
-  { name: 'scree', id: 'dry_ground_rocks' },
+  { name: 'scree', id: 'rock_ground_02' },
   { name: 'rock', id: 'rock_face_03' },
   { name: 'strata', id: 'cliff_side' },
   { name: 'snow', id: 'snow_02' },
   { name: 'grass', id: 'grass_ground' },
   { name: 'gravel', id: 'ganges_river_pebbles' },
+  { name: 'talus', id: 'gray_rocks' },
 ];
 
 async function get(url) {
