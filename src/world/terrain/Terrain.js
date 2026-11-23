@@ -90,6 +90,8 @@ export class Terrain {
       shadowMin: SHADOW_MIN,
       shadowSoft: uniform(3.5),
       shadowOn: uniform(1),
+      shadowCamPos: uniform(new THREE.Vector3()),
+      shadowRange: uniform(new THREE.Vector2(-1e9, 1e9)), // near, far of the sun shadow camera along the light
     };
     /** Per-object level data: (centre x, centre z, cell size, unused). */
     this._level = uniform(new THREE.Vector4()).onObjectUpdate(({ object }, self) => {
@@ -101,7 +103,7 @@ export class Terrain {
       DEM, tex: this.textures, nodes: this.nodes, layers: this.layers, uniforms: this.uniforms, quality: this.tier,
     });
     this.material.positionNode = this._positionNode();
-    applyShadowHooks(this.material, env);
+    this._shadowNode = applyShadowHooks(this.material, env, this.uniforms);
     /** Materials other areas may want to hook (fog, cloud shadow). */
     this.materials = [this.material];
 
@@ -340,6 +342,15 @@ export class Terrain {
       u.sunVisible.value = THREE.MathUtils.smoothstep(env.sunDirection.y, -0.02, 0.06);
       this.shadow.update(env.sunDirection);
     }
+    const sh = env?.sun?.shadow?.camera;
+    if (sh) {
+      u.shadowCamPos.value.copy(env.sun.position);
+      u.shadowRange.value.set(sh.near, sh.far * 0.98);
+    }
+    // Someone re-installed the cloud shadow on our material: wrap it again.
+    if (this.material.receivedShadowNode !== this._shadowNode) {
+      this._shadowNode = applyShadowHooks(this.material, env, u);
+    }
     if (env?.sun?.color) u.sunColor.value.copy(env.sun.color);
     if (env?.ambient?.color) u.skyColor.value.copy(env.ambient.color).multiplyScalar(env.ambient.intensity ?? 1);
     u.skyReflect.value = this._scene?.environment ? 0 : 1;
@@ -431,7 +442,26 @@ export class Terrain {
       if (device) await device.queue.onSubmittedWorkDone();
       else renderer.backend.gl?.finish();
     };
+    // With ?gputime the renderer records timestamp queries: the real duration of
+    // the passes, which also holds in a background tab.
+    const stamped = !!renderer.backend.trackTimestamp && typeof renderer.resolveTimestampsAsync === 'function';
     const run = async () => {
+      if (stamped) {
+        renderer.setRenderTarget(rt);
+        renderer.render(scene, camera);
+        await renderer.resolveTimestampsAsync('render');
+        // Chrome quantises the queries (~66 us): take the median of the frames
+        const got = [];
+        for (let i = 0; i < frames; i++) {
+          renderer.setRenderTarget(rt); // the game loop may render in between
+          renderer.render(scene, camera);
+          const ms = await renderer.resolveTimestampsAsync('render');
+          got.push(Number.isFinite(ms) ? ms : renderer.info.render.timestamp || 0);
+        }
+        got.sort((a, b) => a - b);
+        renderer.setRenderTarget(null);
+        return { total: got[got.length >> 1], submit: 0 };
+      }
       renderer.setRenderTarget(rt);
       renderer.render(scene, camera); // warm-up (pipelines)
       await flush();
@@ -459,6 +489,7 @@ export class Terrain {
     const info = renderer.info.render;
     return {
       width, height,
+      method: stamped ? 'timestamp-query' : 'queue-flush',
       terrainMs: +(terrain.total - empty.total).toFixed(3),
       totalMs: +terrain.total.toFixed(3),
       submitMs: +terrain.submit.toFixed(3),
@@ -529,8 +560,12 @@ export class Terrain {
       // oblique: culled vs everything
       cam.rotation.set(-0.15 - rnd() * 0.6, rnd() * 6.28, 0);
       cam.updateMatrixWorld(true);
+      this._clear = null;
       this.update(cam);
       px = await shoot();
+      // the game loop may have run its own update() while the pixels were read back
+      this._clear = null;
+      this.update(cam);
       const before = [];
       this.group.traverse((o) => { if (o.isMesh) before.push([o, o.visible]); });
       const finest = this.stats.finest;

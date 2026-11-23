@@ -148,7 +148,6 @@ function buildAmp() {
       const alt = H[z * n + x];
       let a = 0.8 + 8.8 * smooth(0.22, 1.15, tan);
       a *= 1 - 0.65 * smooth(4900, 5400, alt) * (1 - smooth(0.55, 0.95, tan)); // snowfields
-      if (state.river) a *= smooth(12, 90, state.river[z * n + x] * state.riverStep + state.riverMin);
       raw[j * m + i] = a;
     }
   }
@@ -159,7 +158,9 @@ function buildAmp() {
       const w = (2 - Math.abs(a)) * (2 - Math.abs(b));
       acc += w * raw[Math.min(m - 1, Math.max(0, j + b)) * m + Math.min(m - 1, Math.max(0, i + a))];
     }
-    amp[j * m + i] = Math.min(255, Math.round((acc / 16 / AMP_MAX) * 255));
+    // River beds stay exactly level: masked after the blur so nothing leaks in.
+    const bank = state.river ? smooth(14, 95, state.river[j * 2 * n + i * 2] * state.riverStep + state.riverMin) : 1;
+    amp[j * m + i] = Math.min(255, Math.round(((acc / 16) * bank / AMP_MAX) * 255));
   }
   state.amp = amp;
   state.ampRes = m;

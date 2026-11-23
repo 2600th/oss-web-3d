@@ -35,16 +35,16 @@ import { riverSurface } from '../water/river.js';
 // Palette values are linear albedo.
 const C = (r, g, b) => vec3(r, g, b);
 const PAL = {
-  screeOchre: C(0.33, 0.265, 0.185),
-  screeGrey: C(0.29, 0.275, 0.25),
-  screeBrown: C(0.25, 0.18, 0.12),
-  screePale: C(0.43, 0.385, 0.31),
+  screeOchre: C(0.275, 0.21, 0.135),
+  screeGrey: C(0.235, 0.22, 0.195),
+  screeBrown: C(0.2, 0.14, 0.088),
+  screePale: C(0.35, 0.305, 0.235),
   rockPurple: C(0.19, 0.16, 0.18),
   rockDark: C(0.095, 0.088, 0.092),
   rockTan: C(0.27, 0.215, 0.155),
   rockRust: C(0.24, 0.15, 0.1),
-  snowFresh: C(0.9, 0.915, 0.94),
-  snowFirn: C(0.66, 0.69, 0.73),
+  snowFresh: C(0.78, 0.8, 0.83),
+  snowFirn: C(0.58, 0.61, 0.65),
   ice: C(0.3, 0.46, 0.55),
   grassDry: C(0.21, 0.185, 0.08),
   grassGreen: C(0.075, 0.15, 0.04),
@@ -391,19 +391,36 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 }
 
 /**
- * Fold the terrain's own long-range shadow and the cloud shadow into the
- * material's received shadow (direct sunlight only).
+ * Fold the terrain's own long-range shadow into the material's received shadow
+ * (direct sunlight only), on top of whatever is already there. The atmosphere
+ * system installs the cloud shadow with env.applyCloudShadow(material) and may
+ * re-install it; Terrain.update calls this again whenever the node it finds is
+ * not the one returned here.
+ *
+ * The sun shadow map only covers a small box around the player. Receivers that
+ * fall inside that box in the light's xy but beyond its depth range read as
+ * fully shadowed (a dark square on the ground far below the aircraft), so the
+ * map's result is only trusted inside the box's depth range.
  */
-export function applyShadowHooks(mat, env) {
-  const lit = mat.terrainLit;
+export function applyShadowHooks(mat, env, uniforms) {
   if (env?.applyCloudShadow) {
+    if (mat.userData) delete mat.userData.cloudShadowFn; // force a fresh install to wrap
     env.applyCloudShadow(mat);
-    const prev = mat.receivedShadowNode;
-    mat.receivedShadowNode = Fn(([s]) => (prev ? prev(s) : s).mul(lit));
   } else if (env?.cloudShadow) {
-    mat.receivedShadowNode = Fn(([s]) => s.mul(lit).mul(env.cloudShadow(positionWorld)));
+    mat.receivedShadowNode = Fn(([s]) => s.mul(env.cloudShadow(positionWorld)));
   } else {
-    mat.receivedShadowNode = Fn(([s]) => s.mul(lit));
+    mat.receivedShadowNode = null;
   }
+  const prev = mat.receivedShadowNode;
+  const lit = mat.terrainLit;
+  const wrapped = Fn(([s]) => {
+    // distance from the shadow camera along the light, in metres
+    const depth = dot(uniforms.shadowCamPos.sub(positionWorld), uniforms.sunDir);
+    const inBox = step(uniforms.shadowRange.x, depth).mul(step(depth, uniforms.shadowRange.y));
+    const map = mix(float(1), s, inBox);
+    return (prev ? prev(map) : map).mul(lit);
+  });
+  mat.receivedShadowNode = wrapped;
   mat.needsUpdate = true;
+  return wrapped;
 }

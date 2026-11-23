@@ -45,6 +45,28 @@ export function makeTerrainNodes(DEM, tex) {
     return s.b.mul(255 * 256).add(s.a.mul(255)).sub(32768).mul(tileScale);
   };
 
+  /**
+   * Tile height with the bilinear filter done by hand (four texel loads). The
+   * sampler's 8-bit filter weights are fine for metre-scale detail but cost
+   * over a metre on the surround, whose layers span kilometres of relief.
+   */
+  const tileHeightExact = (L, p) => {
+    const f = layerUV(L, p).mul(TILE_SIZE).sub(0.5);
+    const i = floor(f);
+    const k = f.sub(i);
+    const ii = ivec2(i);
+    const at = (dx, dy) => {
+      const t = textureLoad(tex.tile, ii.add(ivec2(dx, dy)).bitAnd(ivec2(TILE_SIZE - 1)));
+      return t.b.mul(255 * 256).add(t.a.mul(255)).sub(32768).mul(tileScale);
+    };
+    const a = at(0, 0);
+    const b = at(1, 0);
+    const c = at(0, 1);
+    const d = at(1, 1);
+    const top = a.add(b.sub(a).mul(k.x));
+    return top.add(c.add(d.sub(c).mul(k.x)).sub(top).mul(k.y));
+  };
+
   /** Filtered tile sample for shading: world-space gradient of a unit-amplitude layer, and its height. */
   const tileShade = (L, p, dpx = null, dpy = null) => {
     // Explicit gradients (needed inside branches): the UV is linear in p.
@@ -73,9 +95,9 @@ export function makeTerrainNodes(DEM, tex) {
     const inner = innerAt(p.sub(minXZ).div(cell));
     const outer = outerAt(p.sub(oMin).div(oMax.sub(oMin)).mul(oSize));
     const proc = float(SURROUND.BASE)
-      .add(tileHeight(SURROUND.L0, p).mul(SURROUND.G0))
-      .add(tileHeight(SURROUND.L1, p).mul(SURROUND.G1))
-      .add(tileHeight(SURROUND.L2, p).mul(SURROUND.G2));
+      .add(tileHeightExact(SURROUND.L0, p).mul(SURROUND.G0))
+      .add(tileHeightExact(SURROUND.L1, p).mul(SURROUND.G1))
+      .add(tileHeightExact(SURROUND.L2, p).mul(SURROUND.G2));
     const out = proc.add(outer.sub(proc).mul(tO));
     const base = out.add(inner.sub(out).mul(tI));
     const m = smoothstep(-DETAIL.MASK_EDGE, DETAIL.MASK_EDGE, tileHeight(DETAIL.MASK, p));
