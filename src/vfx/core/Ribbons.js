@@ -6,7 +6,10 @@ import {
 import { Ring, DirtyRanges } from './ring.js';
 import { fireRamp } from './shared.js';
 
-const STRIDE = 28; // 7 x vec4 per segment
+const STRIDE = 32; // 8 x vec4 per segment
+// Trail segments are clipped to this view-space plane (metres in front of the
+// camera); the camera's own near plane is 0.5 m.
+const NEAR = 0.6;
 const _d = new THREE.Vector3();
 
 /**
@@ -43,7 +46,7 @@ export class Ribbons {
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, -1, 0, 0, 1, 0, 1, -1, 0, 1, 1, 0]), 3));
     g.setIndex([0, 2, 1, 1, 2, 3]);
-    const names = ['iP', 'iA', 'iB', 'iN', 'iS', 'iC', 'iX'];
+    const names = ['iP', 'iA', 'iB', 'iN', 'iS', 'iC', 'iX', 'iY'];
     names.forEach((n, k) => g.setAttribute(n, new THREE.InterleavedBufferAttribute(this.buffer, 4, k * 4)));
     g.instanceCount = capacity;
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
@@ -62,7 +65,10 @@ export class Ribbons {
    * opacity (optical depth through the fresh core), wobble (m), rise (m/s),
    * glow (motor light on the first metres; a negative value -w means water
    * condensation, lit by Shared.vapourLight instead of as smoke, w = 1 fully),
-   * wind (0..1), spacing (m) }.
+   * wind (0..1), spacing (m), lump (0..1, default 1: how much the radius
+   * swells and necks along the trail; a contrail is a clean line, 0),
+   * taper (m: the first metres of a trail grow from a point instead of
+   * starting at full radius, for debris streamers) }.
    */
   create(style) {
     return new Trail(this, style);
@@ -77,6 +83,7 @@ export class Ribbons {
     d[o + 16] = s.radius; d[o + 17] = s.growth; d[o + 18] = s.life; d[o + 19] = trail.seed;
     d[o + 20] = s.color[0]; d[o + 21] = s.color[1]; d[o + 22] = s.color[2]; d[o + 23] = s.opacity * trail.strength;
     d[o + 24] = s.wobble; d[o + 25] = s.rise; d[o + 26] = s.glow; d[o + 27] = s.wind;
+    d[o + 28] = s.lump ?? 1; d[o + 29] = s.taper ?? 0; d[o + 30] = 0; d[o + 31] = 0;
     this.owner[i] = trail;
     this.dirty.mark(i);
   }
@@ -118,7 +125,7 @@ export class Ribbons {
 
     const iP = attribute('iP', 'vec4'), iA = attribute('iA', 'vec4'), iB = attribute('iB', 'vec4');
     const iN = attribute('iN', 'vec4'), iS = attribute('iS', 'vec4'), iC = attribute('iC', 'vec4');
-    const iX = attribute('iX', 'vec4');
+    const iX = attribute('iX', 'vec4'), iY = attribute('iY', 'vec4');
     const seed = iS.w;
 
     // Where a history point has drifted to by now.
@@ -135,8 +142,10 @@ export class Ribbons {
     };
     const radius = (birth, dist) => {
       const age = u.time.sub(birth).max(0);
-      const lump = sin(dist.mul(0.043).add(seed.mul(40))).mul(0.22).add(sin(dist.mul(0.117).add(seed.mul(17))).mul(0.12)).add(1);
-      return iS.x.add(iS.y.mul(sqrt(age))).mul(lump);
+      const lump = sin(dist.mul(0.043).add(seed.mul(40))).mul(0.22).add(sin(dist.mul(0.117).add(seed.mul(17))).mul(0.12)).mul(iY.x).add(1);
+      // taper: the first `iY.y` metres grow out of a point (debris streamers)
+      const taper = select(iY.y.greaterThan(0), smoothstep(0, iY.y.max(1e-3), dist).mul(0.85).add(0.15), float(1));
+      return iS.x.add(iS.y.mul(sqrt(age))).mul(lump).mul(taper);
     };
 
     const bA = iA.w, bB = iB.w;
@@ -157,27 +166,40 @@ export class Ribbons {
     const tanA = normalize(bv.sub(pv).add(vec3(1e-5, 0, 0)));
     const tanB = normalize(nv.sub(av).add(vec3(1e-5, 0, 0)));
 
+    // Near-plane clip (fxmath.clipSegmentNear): a segment that crosses the
+    // camera plane is cut at z = -NEAR, one wholly behind it is dropped. The
+    // bounding quad of a segment with an end behind the camera used to project
+    // through infinity into a screen-wide translucent wedge with banded rings.
+    const zN = float(-NEAR);
+    const aBeh = av.z.greaterThan(zN), bBeh = bv.z.greaterThan(zN);
+    const dzAB = bv.z.sub(av.z);
+    const tCut = zN.sub(av.z).div(select(abs(dzAB).lessThan(1e-6), float(1e-6), dzAB)).clamp(0, 1);
+    const tA = select(aBeh, tCut, float(0)), tB = select(bBeh, tCut, float(1));
+    const avC = mix(av, bv, tA), bvC = mix(av, bv, tB);
+    const rAc = mix(rA, rB, tA), rBc = mix(rA, rB, tB);
+    const front = aBeh.and(bBeh).not();
+
     // Screen-space direction of the segment. It has to come from the projected
     // end points: for a segment running away from the camera the view-space xy
     // delta points somewhere else entirely and the quad collapses to a sliver.
-    const seg = bv.xy.div(bv.z.negate().max(0.05)).sub(av.xy.div(av.z.negate().max(0.05)));
+    const seg = bvC.xy.div(bvC.z.negate().max(0.05)).sub(avC.xy.div(avC.z.negate().max(0.05)));
     const segLen = length(seg);
     const dir2 = select(segLen.greaterThan(1e-6), seg.div(segLen.max(1e-6)), vec2(1, 0));
     const perp = vec2(dir2.y.negate(), dir2.x);
     const e = positionGeometry.x, side = positionGeometry.y;
-    const c = mix(av, bv, e);
-    const r = mix(rA, rB, e).mul(1.5).mul(select(alive, float(1), float(0)));
+    const c = mix(avC, bvC, e);
+    const r = mix(rAc, rBc, e).mul(1.5).mul(select(alive.and(front), float(1), float(0)));
     const viewPos = c.add(vec3(dir2.mul(e.mul(2).sub(1)).add(perp.mul(side)).mul(r), 0));
     material.vertexNode = cameraProjectionMatrix.mul(vec4(viewPos, 1));
 
     const vPos = varying(viewPos);
-    const v0 = varying(vec4(av, rA));
-    const v1 = varying(vec4(bv, rB));
-    const v2 = varying(vec4(tanA, ageA));
-    const v3 = varying(vec4(tanB, ageB));
-    const v4 = varying(vec4(distA, distB, life, seed));
+    const v0 = varying(vec4(avC, rAc));
+    const v1 = varying(vec4(bvC, rBc));
+    const v2 = varying(vec4(tanA, mix(ageA, ageB, tA)));
+    const v3 = varying(vec4(tanB, mix(ageA, ageB, tB)));
+    const v4 = varying(vec4(mix(distA, distB, tA), mix(distA, distB, tB), life, seed));
     const v5 = varying(iC);
-    const v6 = varying(vec4(iX.z, iS.x, rA0.div(rA), rB0.div(rB)));
+    const v6 = varying(vec4(iX.z, iS.x, mix(rA0.div(rA), rB0.div(rB), tA), mix(rA0.div(rA), rB0.div(rB), tB)));
     // cloud shadow where the segment has drifted to (one shadow-map tap per vertex)
     const v7 = varying(sh.cloudShadow(drift(iA.xyz, bA)));
 
@@ -205,40 +227,77 @@ export class Ribbons {
       const lod = log2(rBase.max(0.25));
       const l0 = floor(lod), lf = lod.sub(l0);
       const s0 = pow(float(2), l0), s1 = s0.mul(2);
-      const lodNoise = (per, vcoord) => mix(
-        texture(sh.tex.noise, vec2(along.div(s0.mul(per)), vcoord)),
-        texture(sh.tex.noise, vec2(along.div(s1.mul(per)), vcoord.add(0.37))), lf);
-      // billow the silhouette: the radius itself is noisy along the trail
-      const nR = lodNoise(13, sd.mul(5.1)).g;
-      const r = rBase.mul(nR.mul(0.75).add(0.6));
-      const h2 = r.mul(r).sub(d2);
-      const ht = sqrt(max(h2, 0).div(dp2));
-      const t0 = tc.sub(ht).toVar();
-      const t1 = tc.add(ht).toVar();
-      // clip by the joint planes so adjacent segments tile without overlap
+      const lodNoise = (per, vcoord, at = along) => mix(
+        texture(sh.tex.noise, vec2(at.div(s0.mul(per)), vcoord)),
+        texture(sh.tex.noise, vec2(at.div(s1.mul(per)), vcoord.add(0.37))), lf);
+      // The ray against this segment's tube, clipped by the joint planes so
+      // adjacent segments tile without overlap, by the camera and by the
+      // scene. The tube is a cone, not a cylinder: its radius runs linearly
+      // from one end's to the other's (a trail widens with age). With one
+      // radius per segment every joint was a step, and seen along the trail
+      // the steps showed as a stack of discs ("slinky").
+      //   |wp + t Dp|^2 = (m (rA + k (wu + t Dpar)))^2,  k = (rB - rA) / L
+      // `m` is the billow noise on the radius, taken where the ray crosses
+      // (a first pass at the closest approach finds where that is).
       const safe = (x) => select(abs(x).lessThan(1e-5), float(1e-5), x);
       const da = safe(dot(D, v2.xyz)), ta = dot(a, v2.xyz).div(da);
-      t0.assign(max(t0, select(da.greaterThan(0), ta, float(-1e9))));
-      t1.assign(min(t1, select(da.greaterThan(0), float(1e9), ta)));
       const db = safe(dot(D, v3.xyz)), tb = dot(b, v3.xyz).div(db);
-      t0.assign(max(t0, select(db.greaterThan(0), float(-1e9), tb)));
-      t1.assign(min(t1, select(db.greaterThan(0), tb, float(1e9))));
-      t0.assign(max(t0, 0));
-      t1.assign(min(t1, sh.sceneViewZ().div(D.z.negate().max(1e-3))));
+      const sceneT = sh.sceneViewZ().div(D.z.negate().max(1e-3));
+      const wpDp = dot(wp, Dp), wp2 = dot(wp, wp);
+      const intersect = (m) => {
+        const k = v1.w.sub(v0.w).div(L).mul(m);
+        const r0 = v0.w.mul(m).add(k.mul(wu));             // radius level with the camera
+        const kq = k.mul(Dpar);
+        const qa = dp2.sub(kq.mul(kq)).max(dp2.mul(0.05));  // (nearly down the axis: stay a tube)
+        const qb = wpDp.sub(r0.mul(kq));
+        const qc = wp2.sub(r0.mul(r0));
+        const disc = qb.mul(qb).sub(qa.mul(qc));
+        const sq = sqrt(disc.max(0));
+        const miss = disc.lessThan(0);
+        const lo0 = select(miss, float(1e9), qb.negate().sub(sq).div(qa));
+        const hi0 = select(miss, float(-1e9), qb.negate().add(sq).div(qa));
+        const lo = max(max(lo0, select(da.greaterThan(0), ta, float(-1e9))), select(db.greaterThan(0), float(-1e9), tb)).max(0);
+        const hi = min(min(hi0, select(da.greaterThan(0), float(1e9), ta)), select(db.greaterThan(0), tb, float(1e9))).min(sceneT);
+        return { lo, hi, wall: select(miss, tc, lo0) };
+      };
+      const mAt = (sAt) => lodNoise(13, sd.mul(5.1), mix(v4.x, v4.y, sAt)).g.mul(0.75).add(0.6);
+      const first = intersect(mAt(sc));
+      const s1m = saturate(dot(D.mul(first.lo.add(first.hi).mul(0.5)).sub(a), ax).div(L));
+      const sR = select(first.hi.greaterThan(first.lo), s1m, sc);
+      const mR = mAt(sR);
+      const rS = mix(v0.w, v1.w, sR);
+      const r = rS.mul(mR);
+      const { lo, hi, wall } = intersect(mR);
+      const h2 = r.mul(r).sub(d2);
+      const tWall = wall;
+      const t0 = lo.toVar();
+      const t1 = hi.toVar();
       const chord = max(t1.sub(t0), 0);
 
-      const age = mix(v2.w, v3.w, sc).max(0);
+      // Everything inside the medium is evaluated at the chord's midpoint, not
+      // at the ray's closest approach to the axis. Seen end-on (a missile
+      // trail from dead six) the closest-approach parameter of every segment
+      // clamps to one of its ends, so age, density and noise stepped from
+      // segment to segment: a stack of discs ("slinky" seams).
+      const pm = D.mul(t0.add(t1).mul(0.5));
+      const sm = saturate(dot(pm.sub(a), ax).div(L));
+      const radialM = pm.sub(a.add(ax.mul(sm.mul(L))));
+      const rm2 = dot(radialM, radialM);
+      const age = mix(v2.w, v3.w, sm).max(0);
       const lifeT = saturate(age.div(v4.z));
-      const prof = saturate(h2.div(r.mul(r)));
-      const thin = mix(v6.z, v6.w, sc);
+      const prof = saturate(float(1).sub(rm2.div(r.mul(r))));
+      const thin = mix(v6.z, v6.w, sm);
       // noise along the trail: breaks the tube into billows, then erodes it with age
-      const across = sign(dot(cl, cross(ax, D))).mul(sqrt(d2)).div(r.max(1e-3));
-      const nz = lodNoise(9, across.mul(0.21).add(sd.mul(7.3)));
+      const across = sign(dot(radialM, cross(ax, D))).mul(sqrt(rm2)).div(r.max(1e-3));
+      const alongM = mix(v4.x, v4.y, sm);
+      const nz = mix(
+        texture(sh.tex.noise, vec2(alongM.div(s0.mul(9)), across.mul(0.21).add(sd.mul(7.3)))),
+        texture(sh.tex.noise, vec2(alongM.div(s1.mul(9)), across.mul(0.21).add(sd.mul(7.3)).add(0.37))), lf);
       const n1 = nz.r, n2 = nz.b;
       const n = n1.mul(0.6).add(n2.mul(0.4));
       const er = mix(float(-0.22), float(0.6), pow(lifeT, 1.2));
       const erosion = smoothstep(er, er.add(0.42), n).mul(n.mul(1.3).add(0.3));
-      const sigma = v5.w.mul(pow(v6.y.div(rBase), 0.3)).div(rBase.mul(2)).mul(thin.mul(thin));
+      const sigma = v5.w.mul(pow(v6.y.div(rS), 0.3)).div(rS.mul(2)).mul(thin.mul(thin));
       const fadeLife = smoothstep(0.55, 1, lifeT).oneMinus();
       // fade when the camera itself is inside the tube (the quad cannot cover the screen)
       const camSeg = a.add(ax.mul(wu.clamp(0, L)));
@@ -250,10 +309,25 @@ export class Ribbons {
       const tau = sigma.mul(chord).mul(pow(prof, 0.5)).mul(erosion).mul(fadeLife).mul(inside).mul(1.5);
       const alpha = float(1).sub(exp(tau.negate())).mul(u.fade).mul(sh.cloudVisAt(t0.add(t1).mul(0.5)));
 
-      // shading: tube normal at the entry point, roughened by the noise
+      // shading: through the wall, the tube normal at the entry point; through
+      // a joint plane (end-on), the radial direction at the chord midpoint --
+      // the wall normal there belongs to a surface the ray never crossed.
       const rim = sqrt(max(h2, 0)).div(r.max(1e-3));
-      const nrm = normalize(cl.div(r.max(1e-3)).sub(Dp.div(sqrt(dp2)).mul(rim))
-        .add(ax.mul(n1.sub(0.5).mul(1.1))).add(cl.div(r.max(1e-3)).mul(n2.sub(0.5).mul(0.9))));
+      // (blended in only when the entry is far past the wall, i.e. nearly
+      // end-on: an oblique ray near a joint enters through the joint plane a
+      // little past a wall point that lies in the neighbouring segment of the
+      // same continuous tube, and that wall normal is the right one; switching
+      // there shaded every segment as a separate pillow)
+      const capEntry = smoothstep(r.mul(4), r.mul(10), t0.sub(tWall));
+      const base0 = mix(cl.div(r.max(1e-3)).sub(Dp.div(sqrt(dp2)).mul(rim)),
+        radialM.div(r.max(1e-3)).mul(0.8).sub(D.mul(0.35)), capEntry);
+      // The tangent for shading is interpolated between the joint planes'
+      // normals (the trail's smoothed tangent at each joint), not this
+      // segment's chord: on a curving trail every segment otherwise turned its
+      // normals by the bend at each joint, and the segments read as pillows.
+      const tS = normalize(mix(v2.xyz, v3.xyz, sm));
+      const base = base0.sub(tS.mul(dot(base0, tS)));
+      const nrm = normalize(base.add(tS.mul(n1.sub(0.5).mul(1.1))).add(radialM.div(r.max(1e-3)).mul(n2.sub(0.5).mul(0.9))));
       const ndl = dot(nrm, u.sunDirView);
       const diffuse = saturate(ndl.mul(0.5).add(0.5)).mul(0.8).add(0.2).mul(mix(float(0.7), float(1), n2));
       const upV = cameraViewMatrix.mul(vec4(0, 1, 0, 0)).xyz;

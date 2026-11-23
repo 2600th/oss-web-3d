@@ -14,7 +14,7 @@ export function defineTypes(lit, glow) {
     // low rolling ground dust
     groundDust: lit.type({ drag: 1.6, gravity: 0.3, turbulence: 2, turbScale: 0.03, wind: 0.8, sizePow: 0.5, fadeIn: 0.05, fadeOut: 0.35, heatDecay: 4, soft: 0.6, spin: 0.2, thin: 0.4 }),
     // oily column from a fire
-    column: lit.type({ drag: 0.55, gravity: 3.4, turbulence: 2.2, turbScale: 0.012, wind: 1, sizePow: 0.75, fadeIn: 0.08, fadeOut: 0.45, heatDecay: 1.4, soft: 0.5, spin: 0.2 }),
+    column: lit.type({ drag: 0.55, gravity: 4.6, turbulence: 2.2, turbScale: 0.012, wind: 1, windTau: 9, sizePow: 0.75, fadeIn: 0.08, fadeOut: 0.45, heatDecay: 1.4, soft: 0.5, spin: 0.2 }),
     // licking flames
     flame: lit.type({ drag: 1.8, gravity: 7, turbulence: 7, turbScale: 0.12, wind: 0.5, sizePow: 0.6, fadeIn: 0.12, fadeOut: 0.35, heatDecay: 1.3, soft: 0.5, spin: 1.2 }),
     // vapour: stays with the air, gone in a blink
@@ -23,12 +23,25 @@ export function defineTypes(lit, glow) {
     // burning fuel streaming off something fast: flame for a moment, then soot
     burn: lit.type({ drag: 4, gravity: 1.2, turbulence: 5, turbScale: 0.04, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.45, heatDecay: 13, soft: 0.4, spin: 0.6 }),
     // sooty burn smoke off a damaged aircraft or a falling wreck: rolls hard, swells fast
-    soot: lit.type({ drag: 3.2, gravity: 0.9, turbulence: 7, turbScale: 0.045, wind: 1, sizePow: 0.42, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 13, soft: 0.4, spin: 0.8 }),
+    soot: lit.type({ drag: 3.2, gravity: 0.9, turbulence: 7, turbScale: 0.045, wind: 1, sizePow: 0.42, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 13, soft: 0.4, spin: 0.8, stretch: 0.035 }),
     // the upper, older part of a smoke column: paler, huge, drifting downwind for a minute
-    columnTop: lit.type({ drag: 0.4, gravity: 2.7, turbulence: 2.8, turbScale: 0.008, wind: 1, sizePow: 0.8, fadeIn: 0.1, fadeOut: 0.5, heatDecay: 2, soft: 0.6, spin: 0.15, thin: 0.15 }),
+    columnTop: lit.type({ drag: 0.4, gravity: 2.7, turbulence: 2.8, turbScale: 0.008, wind: 1, windTau: 5, sizePow: 0.8, fadeIn: 0.1, fadeOut: 0.5, heatDecay: 2, soft: 0.6, spin: 0.15, thin: 0.15 }),
     // big explosions: the fireball stays hot longer and lifts into a mushroom
     fireballBig: lit.type({ drag: 2.1, gravity: 3.4, turbulence: 8, turbScale: 0.02, wind: 0.6, sizePow: 0.34, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 1.0, soft: 0.3, spin: 0.5 }),
-    shed: lit.type({ drag: 4.5, gravity: 0.6, turbulence: 4, turbScale: 0.04, wind: 1, sizePow: 0.45, fadeIn: 0.04, fadeOut: 0.4, heatDecay: 2.6, soft: 0.4, spin: 0.5, thin: 0.35 }),
+    // (heat decays in a few frames: a motor's exhaust is white smoke, not fire)
+    shed: lit.type({ drag: 4.5, gravity: 0.6, turbulence: 4, turbScale: 0.04, wind: 1, sizePow: 0.45, fadeIn: 0.04, fadeOut: 0.4, heatDecay: 25, soft: 0.4, spin: 0.5, thin: 0.35 }),
+    // gun gas: a grey puff stripped back along the belly
+    gunSmoke: lit.type({ drag: 3.5, gravity: 0.3, turbulence: 3, turbScale: 0.06, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.55, heatDecay: 6, soft: 0.4, spin: 0.6, thin: 0.3 }),
+    // ground blast: soil thrown up in jets (long, dark, stretched along their flight)
+    spike: lit.type({ drag: 1.1, gravity: -7.5, turbulence: 1.2, turbScale: 0.03, wind: 0.3, sizePow: 0.45, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 6, soft: 0.25, spin: 0.1, stretch: 0.09 }),
+    // ...and the clods that rain back out of them: small, dense, ballistic
+    clump: lit.type({ drag: 0.25, gravity: -9.8, turbulence: 0, turbScale: 0.03, wind: 0.1, sizePow: 1, fadeIn: 0.02, fadeOut: 0.25, heatDecay: 6, soft: 0.15, spin: 3, stretch: 0.025, minPixels: 1.2 }),
+    // AA burst: crisp, dense, barely grows, hangs in still air for a long time
+    flak: lit.type({ drag: 3.2, gravity: 0.12, turbulence: 0.9, turbScale: 0.03, wind: 1, windTau: 2, sizePow: 0.3, fadeIn: 0.015, fadeOut: 0.5, heatDecay: 9, soft: 0.25, spin: 0.12 }),
+    // shell fragments with the burst's smoke streaming off them
+    frag: lit.type({ drag: 2.2, gravity: -1.2, turbulence: 0.6, turbScale: 0.03, wind: 0.4, sizePow: 0.6, fadeIn: 0.01, fadeOut: 0.6, heatDecay: 6, soft: 0.2, spin: 0, stretch: 0.11 }),
+    // rain: grey, translucent, lit by the sky (non-additive: a drop is darker than a bright sky)
+    rain: lit.type({ drag: 0, gravity: -9.8, turbulence: 0, wind: 1, sizePow: 1, fadeIn: 0.2, fadeOut: 0.5, heatDecay: 6, soft: 0.6, spin: 0, thin: 1, stretch: 0.012, minPixels: 1.1 }),
   };
   const G = {
     spark: glow.type({ drag: 0.7, gravity: -9.8, shape: 1, stretch: 0.04, minPixels: 1.3, flicker: 0.35, sizePow: 1, fadeIn: 0, fadeOut: 0.5 }),
@@ -51,6 +64,11 @@ export function defineTypes(lit, glow) {
     rain: glow.type({ drag: 0, gravity: -9.8, shape: 1, stretch: 0.03, minPixels: 0.9, sizePow: 1, fadeIn: 0.2, fadeOut: 0.6 }),
     // snow / ice crystals: barely fall, tumble and glitter
     snow: glow.type({ drag: 0, gravity: -1.3, turbulence: 2.5, turbScale: 0.3, shape: 1, stretch: 0.045, minPixels: 1.2, flicker: 0.55, sizePow: 1, fadeIn: 0.15, fadeOut: 0.5 }),
+    // a 23 mm muzzle: a short forward cone of burning propellant gas
+    muzzle: glow.type({ drag: 2, gravity: 0, shape: 4, stretch: 0.0025, sizePow: 0.6, fadeIn: 0, fadeOut: 0.5, flicker: 0.4 }),
+    // missile motor flame seen close: a stretched white-yellow tongue
+    motorFlame: glow.type({ drag: 0, gravity: 0, shape: 4, stretch: 0.05, sizePow: 1, fadeIn: 0, fadeOut: 0.5, flicker: 0.35 }),
+    // lightning-lit droplets / far rain curtain
     streak: glow.type({ drag: 0, gravity: 0, shape: 1, stretch: 0.08, minPixels: 1, sizePow: 1, fadeIn: 0.2, fadeOut: 0.4 }),
   };
   return { L, G };
@@ -64,8 +82,9 @@ export const TRAILS = {
   sam: { radius: 1.5, growth: 3.2, life: 40, color: [0.9, 0.89, 0.87], opacity: 5.2, wobble: 14, rise: 0.5, glow: 3.0, wind: 1, spacing: 16 },
   agm: { radius: 0.7, growth: 1.7, life: 30, color: [0.95, 0.95, 0.95], opacity: 4.0, wobble: 9, rise: 0.25, glow: 2.2, wind: 1, spacing: 12 },
   rocket: { radius: 0.35, growth: 0.9, life: 12, color: [0.8, 0.8, 0.8], opacity: 1.8, wobble: 4, rise: 0.2, glow: 1.6, wind: 1, spacing: 9 },
-  flare: { radius: 0.35, growth: 1.0, life: 9, color: [0.95, 0.95, 0.97], opacity: 3.2, wobble: 4, rise: 0.4, glow: 2.6, wind: 1, spacing: 5 },
-  debris: { radius: 0.3, growth: 0.8, life: 5, color: [0.2, 0.19, 0.18], opacity: 4, wobble: 2, rise: 0.6, glow: 0.7, wind: 1, spacing: 4 },
+  flare: { radius: 1.2, growth: 2.2, life: 9, color: [0.95, 0.95, 0.97], opacity: 2.2, wobble: 4, rise: 0.4, glow: 2.6, wind: 1, spacing: 5 },
+  // dark, thin at the piece and swelling behind it, wandering as it tumbles
+  debris: { radius: 0.3, growth: 1.3, life: 7, color: [0.04, 0.038, 0.036], opacity: 3.2, wobble: 6, rise: 0.6, glow: 0, wind: 1, spacing: 4, taper: 6 },
   // Burn trails: the ribbon is only the soft dark core that keeps the trail
   // continuous at range; the billowing body is `soot` particles on top of it.
   wreck: { radius: 1.8, growth: 3.6, life: 30, color: [0.05, 0.047, 0.045], opacity: 4.5, wobble: 18, rise: 1.2, glow: 0, wind: 1, spacing: 9 },
@@ -84,5 +103,7 @@ export const TRAILS = {
   sheet: { radius: 0.3, growth: 2.2, life: 0.035, color: [1, 1, 1], opacity: 0.14, wobble: 0.3, rise: 0, glow: -1, wind: 1, spacing: 3 },
   // dry-thrust exhaust: the faint smoky thread a turbojet leaves at military power
   exhaust: { radius: 0.3, growth: 1.0, life: 2.2, color: [0.3, 0.29, 0.28], opacity: 0.07, wobble: 3, rise: 0.1, glow: 0, wind: 1, spacing: 5 },
-  contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: -1, wind: 1, spacing: 18 },
+  // a clean line that spreads (lump 0: no periodic bulges; the wobble is the
+  // slow drift of the air, not a corkscrew)
+  contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 3, rise: 0, glow: -1, wind: 1, spacing: 18, lump: 0, taper: 25 },
 };

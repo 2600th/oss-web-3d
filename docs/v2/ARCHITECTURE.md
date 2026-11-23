@@ -1127,3 +1127,57 @@ Details and evidence are in `docs/v2/evidence/polish-terrain-2/README.md`.
   - New uniforms on `clouds.u`: `silverG`, `phaseCap`, `glowSoft`, `glowHistory`, `anvilDir`, `anvilReach`, `windShear` and `rainShaft`.
   - New render target `clouds.anvilTarget`. Its pass runs only while `storm > 0`.
   - The erosion is now the Nubis remap. The silver lobe is HG(0.9), capped. Rain shafts are gated to wet cores.
+
+### VFX polish: gun socket, fire ramp, plume, scorches, lightning, prewarm, screen hit (additive unless marked)
+
+Owner paths: `src/vfx/**`, `src/fx/ScreenState.js`, `src/combat/visuals.js`,
+the gun origin in `src/combat/system.js`, `sockets.gun` in `src/flight/Aircraft.js`
+and `tools/vfx/**`. Evidence and write-up: `docs/v2/evidence/polish-vfx/`.
+
+- **Gun socket (changed):** `GUN_MUZZLE` in `src/vfx/core/sockets.js` = (0, -1.31, -2.64) m
+  in model space (+Y up, nose -Z): the GSh-23 barrel exit, measured with
+  `tools/vfx/probe-gun.mjs`.
+  - Combat's bullet origin (`_updateGun`) is now `right*x + up*y + forward*(-z)`.
+    Before, it was 7 m forward at the radome tip.
+  - `Aircraft.sockets.gun` and the VFX muzzle flash read the same constant.
+  - Re-measure if the MiG gondola geometry moves.
+- **Scorches (new):** `vfx.scorches` is a `ScorchRing(32)` (`fxmath.js`):
+  - `add(x, y, z, radius, time)`;
+  - `list(now)`, which returns oldest-first `{ x, y, z, radius, age }`;
+  - `packed`, with vec4 `[x, z, r, birth]`;
+  - `version`.
+
+  Large ground blasts write to it. `VfxSystem` feeds `game.terrain.setScorches(list)`
+  on each new mark and every 4 s after that, for the age fade.
+- **Lightning (new):** `vfx.lightning(position)` draws a branched channel
+  (`Bolts.js`, `makeBolt`) from the cloud base to the ground. It is also bound
+  to `weather:lightning`. Its brightness follows
+  `env.weather.lightning.intensity` each frame.
+- **Prewarm (new):** `vfx.prewarm()` builds every VFX pipeline. It runs on
+  the first 3 frames. `CombatVisuals` does the same for store models (4 frames,
+  1/1000-scale clones in front of the camera).
+- **Fire ramp (changed):** `shared.fireRamp` is now a blackbody ramp,
+  T = 650 + 1050*heat K. Its JS twin is `fxmath.fireColor`. Lit particle
+  colour is scaled by `litKeep(heat)`. Heat values tuned for the old ramp read
+  slightly redder at low heat.
+- **Particle types (additive):** lit types take:
+  - `stretch`: velocity streak;
+  - `windTau`: s, wind ramps in with age;
+  - `minPixels`.
+
+  Glow types take `stretch` and `minPixels`. `spawn()` accepts a negative
+  `age0` to delay a birth.
+- **Trail styles (additive):** `lump`, which is 0 for a smooth tube, and
+  `taper` (s). Trail segments are now cone-traced and near-plane clipped. The
+  style fields are unchanged otherwise.
+- **Shells (new):** `src/vfx/core/Shells.js` has three modes:
+  - `'plume'`: chord-integrated afterburner jet;
+  - `'ring'`: shock ring;
+  - `'vapour'`: condensation cone.
+
+  This replaces the old sprite plume.
+- **Screen hit (changed):** `ScreenState.hitSeverity(severity 0..1)` is new.
+  The edge is `s^1.25` and the smear is `s^2`, with no floor. `hit(fraction)`
+  maps onto it.
+  - `camera/system.js` now passes `player:hit` severity through.
+  - Before, every hit flashed at least 0.35.

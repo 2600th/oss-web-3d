@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { upgradeAircraftMaterials } from '../assets/materials.js';
 import { SurfaceRig, demandsFromFlight } from '../assets/controlSurfaces.js';
+import { GUN_MUZZLE } from '../vfx/core/sockets.js';
 
 const REAL_LENGTH = 15.76; // MiG-21bis overall length, metres
 
@@ -103,7 +104,7 @@ export class Aircraft {
     // [art pass] measured wingtips of mig21.glb (outermost point x ±3.666, y -0.777, z 2.74; tools/blender/probe_lamps.py); the bbox guess floated 0.7 m above and 1.1 m ahead of the wing
     this.sockets.wingtipL.position.set(-3.64, -0.777, 2.74);
     this.sockets.wingtipR.position.set(3.64, -0.777, 2.74);
-    this.sockets.gun.position.set(0, -0.6, -2.5);
+    this.sockets.gun.position.set(GUN_MUZZLE.x, GUN_MUZZLE.y, GUN_MUZZLE.z);
     this.sockets.cockpit.position.set(0, 0.22, -2.95); // measured pilot eye (docs/v2/evidence/assets/cockpit)
     this.loaded = true;
     return this;

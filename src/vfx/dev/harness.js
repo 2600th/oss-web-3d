@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { terrainHeight, raycastTerrain } from '../../world/terrain/heightfield.js';
+import { GUN_MUZZLE } from '../core/sockets.js';
 
 /**
  * Dev-only VFX harness (loaded in dev builds only).
@@ -232,7 +233,7 @@ export function installHarness(vfx, game) {
         while (s.acc >= 1) {
           s.acc -= 1;
           const d = f.fwd.clone().add(V((Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012 - (o.down ?? 0.25), (Math.random() - 0.5) * 0.012)).normalize();
-          vfx.tracer(rel(0, -0.6, -2.5), d.clone().multiplyScalar(1050).add(f.v));
+          vfx.tracer(rel(GUN_MUZZLE.x, GUN_MUZZLE.y, GUN_MUZZLE.z), d.clone().multiplyScalar(1050).add(f.v));
           const t = raycastTerrain(f.p.x, f.p.y, f.p.z, d.x, d.y, d.z, 6000, 30);
           if (Number.isFinite(t)) setTimeout(() => ev.emit('weapon:gunHit', { position: f.p.clone().addScaledVector(d, t), normal: V(0, 1, 0), targetKind: 'terrain' }), (t / 880) * 1000);
         }

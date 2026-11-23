@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import {
-  uniform, texture, screenUV, cameraNear, cameraFar, perspectiveDepthToViewZ, Fn, vec3, float, length, positionView, smoothstep,
+  uniform, texture, screenUV, cameraNear, cameraFar, perspectiveDepthToViewZ, Fn, vec3, float, length, positionView, smoothstep, exp,
 } from 'three/tsl';
+import { FIRE } from './fxmath.js';
 
 const _m = new THREE.Matrix4();
 const _v = new THREE.Vector3();
@@ -207,11 +208,18 @@ export class Shared {
 }
 
 /**
- * Blackbody-ish fire ramp. heat 0 -> black, 0.4 -> deep red, 1 -> orange,
- * 2+ -> yellow-white (clamped so the core stays saturated under tone mapping).
+ * Blackbody fire ramp (TSL twin of `fireColor` in fxmath.js, which documents
+ * the maths): heat -> temperature 650 + 1050 heat K, Planck's colour at
+ * 610 / 550 / 465 nm in the Wien limit, brightness from a softened Wien term.
+ * heat 0 -> black, 0.4 -> dull red, 1 -> orange, 1.7 -> yellow; never pink
+ * or magenta (b <= g <= r everywhere).
  */
 export const fireRamp = Fn(([heat]) => {
-  const h = heat.clamp(0, 1.7);
-  const h2 = h.mul(h);
-  return vec3(h.mul(1.35).add(h2.mul(0.5)), h2.mul(0.52), h2.mul(h2).mul(0.06));
+  const T = heat.clamp(0, FIRE.hMax).mul(FIRE.t1).add(FIRE.t0);
+  const iT = float(1).div(T);
+  const I = exp(float(1 / FIRE.tRef).sub(iT).mul(FIRE.k)).mul(FIRE.gain);
+  return vec3(1, exp(iT.mul(-FIRE.gC)).mul(FIRE.gA), exp(iT.mul(-FIRE.bC)).mul(FIRE.bA)).mul(I);
 });
+
+/** TSL: share of a puff's scattered light kept at `heat` (fxmath.litKeep). */
+export const litKeep = Fn(([heat]) => float(1).sub(heat.clamp(0, 1).mul(0.85)));

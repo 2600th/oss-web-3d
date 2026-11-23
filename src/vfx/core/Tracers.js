@@ -25,7 +25,11 @@ export class Tracers {
     this.shared = shared;
     this.capacity = capacity;
     this.count = 0;
-    this.shutter = 1 / 42; // seconds of flight a streak covers
+    // Seconds of flight a streak covers. At 1/42 s a 30-round/s burst drew
+    // 30 m streaks 35 m apart: one unbroken laser beam. At 1/90 s each round
+    // is a ~14 m dash with a clear gap, which is how gun-camera footage of
+    // tracer reads.
+    this.shutter = 1 / 90;
     this.free = [];        // visual-only rounds: {x,y,z,vx,vy,vz,life,hostile}
 
     const g = new THREE.InstancedBufferGeometry();
@@ -67,6 +71,12 @@ export class Tracers {
     t[i] = x - vx * k; t[i + 1] = y - vy * k; t[i + 2] = z - vz * k; t[i + 3] = 1;
   }
 
+  /** Draw one zero-brightness instance so the pipeline exists before the first burst (VfxSystem.prewarm). */
+  prewarm() {
+    this.geometry.instanceCount = Math.max(1, this.count);
+    this.mesh.visible = true;
+  }
+
   /** `bullets`: CombatWorld's SoA ({n, px, py, pz, vx, vy, vz, hostile, owner}) or null. */
   update(bullets, dt) {
     this.count = 0;
@@ -74,9 +84,10 @@ export class Tracers {
       const n = Math.min(bullets.n, this.capacity);
       for (let i = 0; i < n; i++) {
         const x = bullets.px[i], y = bullets.py[i], z = bullets.pz[i];
-        // the streak must not reach back past the gun that fired it
+        // the streak must not reach back past the gun that fired it (the
+        // muzzle is ~2.6 m ahead of the owner's centre on the MiG)
         const o = bullets.owner?.[i]?.position;
-        const maxLen = o ? _v.set(x, y, z).distanceTo(o) * 0.85 : 1e9;
+        const maxLen = o ? Math.max(0, _v.set(x, y, z).distanceTo(o) - 3) : 1e9;
         this._push(x, y, z, bullets.vx[i], bullets.vy[i], bullets.vz[i], bullets.hostile[i] ? 1 : 0, maxLen);
       }
     }
@@ -134,9 +145,12 @@ export class Tracers {
       const across = exp(vS.mul(vS).mul(-5.5));
       const core = exp(vS.mul(vS).mul(-40));
       // bright head, tail falling away: the eye's (and the shutter's) persistence
-      const along = smoothstep(0, 0.25, vE).mul(mix(float(0.12), float(1), vE.mul(vE))).mul(smoothstep(1, 0.93, vE).mul(0.4).add(0.6));
-      const friendly = vec3(1.0, 0.66, 0.26), hostile = vec3(1.0, 0.24, 0.1);
-      const col = mix(friendly, hostile, vHostile).mul(across.mul(22)).add(vec3(1, 0.93, 0.8).mul(core.mul(vE).mul(26)));
+      // a dim tail and a hot head (the burning compound is at the round's base)
+      const along = smoothstep(0, 0.35, vE).mul(mix(float(0.06), float(1), vE.mul(vE).mul(vE)));
+      const head = exp(float(1).sub(vE).mul(-14)).mul(exp(vS.mul(vS).mul(-12)));
+      const friendly = vec3(1.0, 0.62, 0.22), hostile = vec3(1.0, 0.24, 0.1);
+      const col = mix(friendly, hostile, vHostile).mul(across.mul(18)).add(vec3(1, 0.93, 0.8).mul(core.mul(vE).mul(22)))
+        .add(vec3(1, 0.85, 0.6).mul(head.mul(60)));
       const dist = length(vPos);
       const depthFade = saturate(sh.sceneViewZ().sub(vPos.z.negate()).div(1.5));
       return vec4(col.mul(along).mul(vGain).mul(depthFade).mul(u.fade).mul(sh.cloudVisAt(dist)), 0);
