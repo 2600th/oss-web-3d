@@ -21,7 +21,7 @@ export function defineTypes(lit, glow) {
     wisp: lit.type({ drag: 2.5, gravity: 0, turbulence: 5, turbScale: 0.1, wind: 0, sizePow: 0.6, fadeIn: 0.25, fadeOut: 0.25, heatDecay: 4, soft: 0.6, spin: 0.8, thin: 1 }),
     // smoke shed by something moving fast: decouples from the emitter quickly
     // burning fuel streaming off something fast: flame for a moment, then soot
-    burn: lit.type({ drag: 4, gravity: 1.2, turbulence: 5, turbScale: 0.04, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.45, heatDecay: 6.5, soft: 0.4, spin: 0.6 }),
+    burn: lit.type({ drag: 4, gravity: 1.2, turbulence: 5, turbScale: 0.04, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.45, heatDecay: 13, soft: 0.4, spin: 0.6 }),
     shed: lit.type({ drag: 4.5, gravity: 0.6, turbulence: 4, turbScale: 0.04, wind: 1, sizePow: 0.45, fadeIn: 0.04, fadeOut: 0.4, heatDecay: 2.6, soft: 0.4, spin: 0.5, thin: 0.35 }),
   };
   const G = {
@@ -52,9 +52,9 @@ export const TRAILS = {
   rocket: { radius: 0.35, growth: 0.9, life: 12, color: [0.8, 0.8, 0.8], opacity: 1.8, wobble: 4, rise: 0.2, glow: 1.6, wind: 1, spacing: 9 },
   flare: { radius: 0.35, growth: 1.0, life: 9, color: [0.95, 0.95, 0.97], opacity: 3.2, wobble: 4, rise: 0.4, glow: 2.6, wind: 1, spacing: 5 },
   debris: { radius: 0.3, growth: 0.8, life: 5, color: [0.2, 0.19, 0.18], opacity: 4, wobble: 2, rise: 0.6, glow: 0.7, wind: 1, spacing: 4 },
-  wreck: { radius: 1.6, growth: 3.2, life: 26, color: [0.07, 0.065, 0.06], opacity: 11, wobble: 10, rise: 1.2, glow: 0.8, wind: 1, spacing: 9 },
+  wreck: { radius: 1.6, growth: 3.2, life: 26, color: [0.07, 0.065, 0.06], opacity: 11, wobble: 10, rise: 1.2, glow: 0, wind: 1, spacing: 9 },
   damageLight: { radius: 0.5, growth: 1.3, life: 9, color: [0.55, 0.55, 0.56], opacity: 1.2, wobble: 5, rise: 0.4, glow: 0, wind: 1, spacing: 9 },
-  damageHeavy: { radius: 0.8, growth: 2.2, life: 18, color: [0.08, 0.075, 0.07], opacity: 9, wobble: 8, rise: 0.8, glow: 0.5, wind: 1, spacing: 9 },
+  damageHeavy: { radius: 0.8, growth: 2.2, life: 18, color: [0.08, 0.075, 0.07], opacity: 9, wobble: 8, rise: 0.8, glow: 0, wind: 1, spacing: 9 },
   vortex: { radius: 0.1, growth: 0.22, life: 1.7, color: [1, 1, 1], opacity: 0.55, wobble: 0.8, rise: 0, glow: 0, wind: 1, spacing: 3.5 },
   contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: 0, wind: 1, spacing: 18 },
 };

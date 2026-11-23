@@ -37,6 +37,27 @@ export class Explosions {
 
   debrisCount() { return this.debris.activeCount; }
 
+  /** AA shell burst: a snap of light, a few fragments and a dark puff that hangs. */
+  flak(pos, R, q) {
+    const v = this.vfx, { lit, glow, L, G } = v;
+    const x = pos.x, y = pos.y, z = pos.z;
+    glow.spawn(G.flash, x, y, z, 0, 0, 0, 0.09, R * 2, R * 4, 1, 0.85, 0.6, 1, 30);
+    v.lights.flash(pos, 1, 0.7, 0.4, R * R * 260, R * 40, 0.3);
+    const nPuff = Math.max(3, Math.round(6 * q));
+    for (let i = 0; i < nPuff; i++) {
+      randDir(_d);
+      const sp = R * rnd(1.2, 3.5);
+      lit.spawn(L.smoke, x + _d.x * R * 0.3, y + _d.y * R * 0.3, z + _d.z * R * 0.3, _d.x * sp, _d.y * sp, _d.z * sp,
+        rnd(6, 11), R * 0.8, R * rnd(2.2, 3.4), 0.07, 0.068, 0.066, 0.95, i < 2 ? 1.6 : 0, -rnd(0.1));
+    }
+    const nSpark = Math.round(14 * q);
+    for (let i = 0; i < nSpark; i++) {
+      randDir(_d);
+      const sp = R * rnd(8, 26);
+      glow.spawn(G.spark, x, y, z, _d.x * sp, _d.y * sp, _d.z * sp, rnd(0.25, 0.7), rnd(0.1, 0.2), 0.03, 1, 0.65, 0.25, 1, rnd(6, 16));
+    }
+  }
+
   /** `R` is the fireball radius in metres; everything scales from it. */
   explode(pos, R, kind = 'air', velocity = null) {
     const v = this.vfx, { lit, glow, L, G } = v;
@@ -44,6 +65,7 @@ export class Explosions {
     const dist = cam.distanceTo(pos);
     const lod = dist > 9000 ? 0.35 : dist > 3500 ? 0.65 : 1;
     const q = v.cfg.rate * lod;
+    if (kind === 'flak') return this.flak(pos, R, q);
     const ground = kind === 'ground';
     const ivx = (velocity?.x ?? 0) * 0.3, ivy = (velocity?.y ?? 0) * 0.3, ivz = (velocity?.z ?? 0) * 0.3;
     const big = Math.sqrt(R / 9);

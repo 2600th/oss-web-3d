@@ -97,7 +97,9 @@ export class Heat {
         }
         return n.mul(acc.min(1.5)).mul(0.022);
       })();
-      return src.sample(screenUV.add(offset));
+      // A plain expression, not a texture node: later stages (TRAA) call
+      // convertToTexture on the result and must get a render target of their own.
+      return src.sample(screenUV.add(offset)).xyzw;
     };
   }
 }

@@ -148,7 +148,7 @@ export class AircraftFx {
         this.plumes.add(_p, _back, pl.length * flick, 0.5, pl.core * 0.9, pl.diamonds, pl.glow, 0);
         this.plumes.add(_p, _back, pl.length * 0.82 * flick, 0.5, pl.core * 1.3, pl.diamonds, pl.glow, 1);
         const life = Math.max(dt * 2.5, 0.04);
-        glow.spawn(G.glow, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, 1.5, 1.5, 1, 0.62, 0.3, 1, 0.6 + pl.glow * 7);
+        glow.spawn(G.glow, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, 1.1, 1.1, 1, 0.62, 0.3, 1, 0.2 + pl.glow * 4);
         if (pl.reheat > 0.05) {
           glow.spawn(G.halo, _p.x + _back.x * 2, _p.y + _back.y * 2, _p.z + _back.z * 2, vel.x, vel.y, vel.z, life, 9, 9, 1, 0.5, 0.2, 1, 0.5 * pl.reheat);
           v.lights.request(_p.x + _back.x * 2.5, _p.y + _back.y * 2.5, _p.z + _back.z * 2.5, 1, 0.6, 0.3, 1100 * pl.reheat, 70);

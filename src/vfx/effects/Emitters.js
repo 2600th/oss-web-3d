@@ -323,6 +323,12 @@ export class Emitters {
     if (this.recentBlasts.length > 16) this.recentBlasts.shift();
   }
 
+  /** True when an explosion was already raised here in the last moments (combat emits its own). */
+  hadBlast(pos, radius = 150, window = 0.6) {
+    const now = this.vfx.shared.time;
+    return this.recentBlasts.some((b) => now - b.t < window && b.pos.distanceToSquared(pos) < radius * radius);
+  }
+
   _updatePending() {
     const v = this.vfx, now = v.shared.time;
     for (let i = this.pending.length - 1; i >= 0; i--) {

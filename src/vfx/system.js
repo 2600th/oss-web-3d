@@ -134,12 +134,12 @@ class VfxSystem {
     });
     on('player:destroyed', (p) => {
       const pos = p.position ?? game.flight.position;
-      this.explosion(pos, 'large', 'air', p.velocity);
+      if (!this.emitters.hadBlast(pos)) this.explosion(pos, 'large', 'air', p.velocity);
       this.wreck(pos, p.velocity ?? game.flight.velocity, 1.2);
     });
     on('player:crash', (p) => {
       const pos = p.position ?? game.flight.position;
-      this.explosion(pos, 'large', 'ground', p.velocity);
+      if (!this.emitters.hadBlast(pos)) this.explosion(pos, 'large', 'ground', p.velocity);
       this.spawnFire(pos, { size: 5, duration: 90 });
       this.setDamage(this.aircraft.player, 0);
     });

@@ -73,7 +73,7 @@ export function installHarness(vfx, game) {
 
   function missile({ from, dir, target = null, kind = 'aam', speed = 320, maxSpeed = 850, life = 9, turn = 0.5, explode = true, wander = 0.16 }) {
     const m = {
-      id: `m${nextId++}`, kind, team: 'player', alive: true, age: 0, maxAge: life, owner: null, motor: true,
+      id: `m${nextId++}`, kind, team: 'player', alive: true, age: 0, maxAge: life, owner: null, motor: true, weapon: { id: kind === 'sam' ? 'e_sam' : 'msl', type: 'missile' },
       position: from.clone(), velocity: dir.clone().normalize().multiplyScalar(speed), quaternion: new THREE.Quaternion(),
       seed: Math.random() * 100,
     };
