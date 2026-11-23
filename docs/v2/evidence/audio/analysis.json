@@ -1,0 +1,935 @@
+{
+ "sfx": {
+  "sfx/jet_whine": {
+   "lufs": -20.0,
+   "peak": -10.17,
+   "tp": -10.15,
+   "rms": -21.0,
+   "clip": 0,
+   "centroid": 2267,
+   "dur": 4.4,
+   "kb": 35.8,
+   "seam": 0.42
+  },
+  "sfx/jet_intake": {
+   "lufs": -21.0,
+   "peak": -7.23,
+   "tp": -7.2,
+   "rms": -21.7,
+   "clip": 0,
+   "centroid": 2514,
+   "dur": 4.4,
+   "kb": 26.4,
+   "seam": 0.34
+  },
+  "sfx/jet_roar": {
+   "lufs": -18.1,
+   "peak": -1.29,
+   "tp": -1.28,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 2027,
+   "dur": 6.4,
+   "kb": 74.4,
+   "seam": 0.08
+  },
+  "sfx/jet_rumble": {
+   "lufs": -20.0,
+   "peak": -7.44,
+   "tp": -7.43,
+   "rms": -19.5,
+   "clip": 0,
+   "centroid": 488,
+   "dur": 5.4,
+   "kb": 47.7,
+   "seam": 1.86
+  },
+  "sfx/ab_roar": {
+   "lufs": -17.1,
+   "peak": -1.36,
+   "tp": -1.35,
+   "rms": -19.6,
+   "clip": 0,
+   "centroid": 1222,
+   "dur": 6.4,
+   "kb": 82.5,
+   "seam": 0.13
+  },
+  "sfx/ab_lightoff_1": {
+   "lufs": -15.9,
+   "peak": -0.82,
+   "tp": -0.81,
+   "rms": -15.0,
+   "clip": 0,
+   "centroid": 1228,
+   "dur": 2.4,
+   "kb": 27.1
+  },
+  "sfx/ab_lightoff_2": {
+   "lufs": -15.9,
+   "peak": -0.71,
+   "tp": -0.46,
+   "rms": -14.6,
+   "clip": 0,
+   "centroid": 1223,
+   "dur": 2.4,
+   "kb": 27.5
+  },
+  "sfx/wind": {
+   "lufs": -20.0,
+   "peak": -7.28,
+   "tp": -7.27,
+   "rms": -21.5,
+   "clip": 0,
+   "centroid": 2836,
+   "dur": 8.4,
+   "kb": 76.2,
+   "seam": 0.36
+  },
+  "sfx/buffet": {
+   "lufs": -19.9,
+   "peak": -6.83,
+   "tp": -6.82,
+   "rms": -19.0,
+   "clip": 0,
+   "centroid": 974,
+   "dur": 4.4,
+   "kb": 76.9,
+   "seam": 0.67
+  },
+  "sfx/g_breath_1": {
+   "lufs": -20.9,
+   "peak": -3.74,
+   "tp": -3.74,
+   "rms": -23.0,
+   "clip": 0,
+   "centroid": 1879,
+   "dur": 1.02,
+   "kb": 7.3
+  },
+  "sfx/g_breath_2": {
+   "lufs": -20.7,
+   "peak": -3.82,
+   "tp": -3.81,
+   "rms": -22.7,
+   "clip": 0,
+   "centroid": 1923,
+   "dur": 1.02,
+   "kb": 7.4
+  },
+  "sfx/g_breath_3": {
+   "lufs": -23.1,
+   "peak": -3.81,
+   "tp": -3.78,
+   "rms": -25.2,
+   "clip": 0,
+   "centroid": 1898,
+   "dur": 1.02,
+   "kb": 7.2
+  },
+  "sfx/gun_loop": {
+   "lufs": -10.5,
+   "peak": -0.78,
+   "tp": -0.1,
+   "rms": -14.1,
+   "clip": 0,
+   "centroid": 7954,
+   "dur": 1.247,
+   "kb": 16.7,
+   "seam": 0.27
+  },
+  "sfx/gun_start": {
+   "lufs": -17.9,
+   "peak": -0.96,
+   "tp": -0.55,
+   "rms": -19.7,
+   "clip": 0,
+   "centroid": 1271,
+   "dur": 0.35,
+   "kb": 5.0
+  },
+  "sfx/gun_tail_1": {
+   "lufs": -26.4,
+   "peak": -1.7,
+   "tp": -1.23,
+   "rms": -26.7,
+   "clip": 0,
+   "centroid": 1904,
+   "dur": 1.464,
+   "kb": 13.5
+  },
+  "sfx/gun_tail_2": {
+   "lufs": -28.0,
+   "peak": -1.59,
+   "tp": -1.45,
+   "rms": -28.5,
+   "clip": 0,
+   "centroid": 1940,
+   "dur": 1.449,
+   "kb": 13.4
+  },
+  "sfx/gun_crack_1": {
+   "lufs": -23.6,
+   "peak": -1.55,
+   "tp": -1.27,
+   "rms": -25.8,
+   "clip": 0,
+   "centroid": 4408,
+   "dur": 0.402,
+   "kb": 2.8
+  },
+  "sfx/gun_crack_2": {
+   "lufs": -23.6,
+   "peak": -1.51,
+   "tp": -1.19,
+   "rms": -26.0,
+   "clip": 0,
+   "centroid": 4465,
+   "dur": 0.41,
+   "kb": 2.9
+  },
+  "sfx/gun_crack_3": {
+   "lufs": -23.8,
+   "peak": -1.75,
+   "tp": -1.44,
+   "rms": -26.0,
+   "clip": 0,
+   "centroid": 4378,
+   "dur": 0.393,
+   "kb": 2.7
+  },
+  "sfx/aaa_burst_1": {
+   "lufs": -17.3,
+   "peak": -1.28,
+   "tp": -1.27,
+   "rms": -16.3,
+   "clip": 0,
+   "centroid": 1853,
+   "dur": 2.184,
+   "kb": 12.1
+  },
+  "sfx/aaa_burst_2": {
+   "lufs": -18.4,
+   "peak": -1.28,
+   "tp": -1.28,
+   "rms": -16.2,
+   "clip": 0,
+   "centroid": 806,
+   "dur": 2.195,
+   "kb": 11.6
+  },
+  "sfx/aaa_burst_3": {
+   "lufs": -17.7,
+   "peak": -1.34,
+   "tp": -1.24,
+   "rms": -15.7,
+   "clip": 0,
+   "centroid": 804,
+   "dur": 2.147,
+   "kb": 11.5
+  },
+  "sfx/flak_burst_1": {
+   "lufs": -18.9,
+   "peak": -0.78,
+   "tp": -0.77,
+   "rms": -15.2,
+   "clip": 0,
+   "centroid": 473,
+   "dur": 2.8,
+   "kb": 16.4
+  },
+  "sfx/flak_burst_2": {
+   "lufs": -20.3,
+   "peak": -1.32,
+   "tp": -1.16,
+   "rms": -16.3,
+   "clip": 0,
+   "centroid": 613,
+   "dur": 2.8,
+   "kb": 16.5
+  },
+  "sfx/flak_burst_3": {
+   "lufs": -20.5,
+   "peak": -1.48,
+   "tp": -0.31,
+   "rms": -15.1,
+   "clip": 0,
+   "centroid": 420,
+   "dur": 2.8,
+   "kb": 16.3
+  },
+  "sfx/missile_launch_1": {
+   "lufs": -12.9,
+   "peak": -2.01,
+   "tp": -1.86,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 6433,
+   "dur": 2.8,
+   "kb": 26.8
+  },
+  "sfx/missile_launch_2": {
+   "lufs": -12.2,
+   "peak": -1.04,
+   "tp": -0.2,
+   "rms": -19.4,
+   "clip": 0,
+   "centroid": 6431,
+   "dur": 2.8,
+   "kb": 26.7
+  },
+  "sfx/missile_motor": {
+   "lufs": -20.0,
+   "peak": -5.5,
+   "tp": -5.43,
+   "rms": -22.0,
+   "clip": 0,
+   "centroid": 4254,
+   "dur": 3.4,
+   "kb": 20.3,
+   "seam": 0.45
+  },
+  "sfx/missile_pass_1": {
+   "lufs": -19.3,
+   "peak": -1.34,
+   "tp": -1.24,
+   "rms": -22.7,
+   "clip": 0,
+   "centroid": 4241,
+   "dur": 2.4,
+   "kb": 14.9
+  },
+  "sfx/missile_pass_2": {
+   "lufs": -18.3,
+   "peak": -1.3,
+   "tp": -1.16,
+   "rms": -21.6,
+   "clip": 0,
+   "centroid": 3989,
+   "dur": 2.4,
+   "kb": 14.6
+  },
+  "sfx/sam_launch_1": {
+   "lufs": -15.6,
+   "peak": -0.66,
+   "tp": -0.66,
+   "rms": -18.9,
+   "clip": 0,
+   "centroid": 1953,
+   "dur": 5.0,
+   "kb": 51.2
+  },
+  "sfx/sam_launch_2": {
+   "lufs": -14.4,
+   "peak": -1.23,
+   "tp": -1.13,
+   "rms": -18.5,
+   "clip": 0,
+   "centroid": 2158,
+   "dur": 5.0,
+   "kb": 49.0
+  },
+  "sfx/flare_pop_1": {
+   "lufs": -20.3,
+   "peak": -0.54,
+   "tp": -0.36,
+   "rms": -21.5,
+   "clip": 0,
+   "centroid": 9008,
+   "dur": 1.1,
+   "kb": 7.0
+  },
+  "sfx/flare_pop_2": {
+   "lufs": -19.2,
+   "peak": -1.51,
+   "tp": -1.12,
+   "rms": -20.4,
+   "clip": 0,
+   "centroid": 8944,
+   "dur": 1.1,
+   "kb": 6.9
+  },
+  "sfx/flare_pop_3": {
+   "lufs": -19.2,
+   "peak": -1.5,
+   "tp": -1.5,
+   "rms": -20.5,
+   "clip": 0,
+   "centroid": 8983,
+   "dur": 1.1,
+   "kb": 6.9
+  },
+  "sfx/hit_airframe_1": {
+   "lufs": -14.5,
+   "peak": -0.64,
+   "tp": -0.61,
+   "rms": -17.2,
+   "clip": 0,
+   "centroid": 3164,
+   "dur": 1.049,
+   "kb": 15.3
+  },
+  "sfx/hit_airframe_2": {
+   "lufs": -14.8,
+   "peak": -0.54,
+   "tp": -0.46,
+   "rms": -17.2,
+   "clip": 0,
+   "centroid": 3158,
+   "dur": 0.999,
+   "kb": 15.5
+  },
+  "sfx/hit_airframe_3": {
+   "lufs": -14.9,
+   "peak": -1.08,
+   "tp": -1.01,
+   "rms": -16.9,
+   "clip": 0,
+   "centroid": 3064,
+   "dur": 0.907,
+   "kb": 14.4
+  },
+  "sfx/hit_airframe_4": {
+   "lufs": -15.3,
+   "peak": -0.89,
+   "tp": -0.88,
+   "rms": -17.7,
+   "clip": 0,
+   "centroid": 3128,
+   "dur": 0.951,
+   "kb": 14.7
+  },
+  "sfx/impact_metal_1": {
+   "lufs": -16.7,
+   "peak": -0.59,
+   "tp": -0.58,
+   "rms": -19.7,
+   "clip": 0,
+   "centroid": 3100,
+   "dur": 0.447,
+   "kb": 5.1
+  },
+  "sfx/impact_metal_2": {
+   "lufs": -18.3,
+   "peak": -1.55,
+   "tp": -1.46,
+   "rms": -21.5,
+   "clip": 0,
+   "centroid": 3439,
+   "dur": 0.447,
+   "kb": 3.6
+  },
+  "sfx/impact_metal_3": {
+   "lufs": -17.0,
+   "peak": -1.09,
+   "tp": -0.72,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 3363,
+   "dur": 0.447,
+   "kb": 4.9
+  },
+  "sfx/impact_metal_4": {
+   "lufs": -17.1,
+   "peak": -1.13,
+   "tp": -0.54,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 3346,
+   "dur": 0.446,
+   "kb": 4.8
+  },
+  "sfx/impact_dirt_1": {
+   "lufs": -19.0,
+   "peak": -0.8,
+   "tp": -0.79,
+   "rms": -17.6,
+   "clip": 0,
+   "centroid": 3982,
+   "dur": 0.6,
+   "kb": 4.2
+  },
+  "sfx/impact_dirt_2": {
+   "lufs": -18.4,
+   "peak": -0.89,
+   "tp": -0.86,
+   "rms": -17.0,
+   "clip": 0,
+   "centroid": 3848,
+   "dur": 0.6,
+   "kb": 4.2
+  },
+  "sfx/impact_dirt_3": {
+   "lufs": -18.5,
+   "peak": -0.6,
+   "tp": -0.53,
+   "rms": -17.1,
+   "clip": 0,
+   "centroid": 3893,
+   "dur": 0.6,
+   "kb": 4.2
+  },
+  "sfx/exp_transient_1": {
+   "lufs": -16.1,
+   "peak": -0.61,
+   "tp": -0.49,
+   "rms": -22.1,
+   "clip": 0,
+   "centroid": 3832,
+   "dur": 0.492,
+   "kb": 4.6
+  },
+  "sfx/exp_transient_2": {
+   "lufs": -15.4,
+   "peak": -0.75,
+   "tp": -0.37,
+   "rms": -21.6,
+   "clip": 0,
+   "centroid": 4045,
+   "dur": 0.491,
+   "kb": 4.6
+  },
+  "sfx/exp_transient_3": {
+   "lufs": -15.9,
+   "peak": -0.65,
+   "tp": -0.65,
+   "rms": -22.1,
+   "clip": 0,
+   "centroid": 4072,
+   "dur": 0.496,
+   "kb": 4.8
+  },
+  "sfx/exp_body_1": {
+   "lufs": -19.0,
+   "peak": -1.35,
+   "tp": -1.34,
+   "rms": -19.4,
+   "clip": 0,
+   "centroid": 1082,
+   "dur": 3.2,
+   "kb": 31.6
+  },
+  "sfx/exp_body_2": {
+   "lufs": -17.1,
+   "peak": -0.7,
+   "tp": -0.7,
+   "rms": -17.3,
+   "clip": 0,
+   "centroid": 1218,
+   "dur": 3.2,
+   "kb": 31.4
+  },
+  "sfx/exp_body_3": {
+   "lufs": -22.3,
+   "peak": -0.88,
+   "tp": -0.87,
+   "rms": -21.6,
+   "clip": 0,
+   "centroid": 1054,
+   "dur": 3.2,
+   "kb": 34.0
+  },
+  "sfx/exp_body_small_1": {
+   "lufs": -21.4,
+   "peak": -1.06,
+   "tp": -1.06,
+   "rms": -21.8,
+   "clip": 0,
+   "centroid": 958,
+   "dur": 1.8,
+   "kb": 17.3
+  },
+  "sfx/exp_body_small_2": {
+   "lufs": -21.6,
+   "peak": -1.21,
+   "tp": -1.2,
+   "rms": -22.0,
+   "clip": 0,
+   "centroid": 854,
+   "dur": 1.8,
+   "kb": 18.7
+  },
+  "sfx/exp_tail_1": {
+   "lufs": -20.7,
+   "peak": -2.3,
+   "tp": -2.3,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 171,
+   "dur": 6.0,
+   "kb": 93.8
+  },
+  "sfx/exp_tail_2": {
+   "lufs": -22.1,
+   "peak": -2.21,
+   "tp": -2.2,
+   "rms": -20.3,
+   "clip": 0,
+   "centroid": 166,
+   "dur": 6.0,
+   "kb": 94.2
+  },
+  "sfx/exp_debris_1": {
+   "lufs": -20.6,
+   "peak": -3.47,
+   "tp": -3.42,
+   "rms": -26.8,
+   "clip": 0,
+   "centroid": 3469,
+   "dur": 3.2,
+   "kb": 35.2
+  },
+  "sfx/exp_debris_2": {
+   "lufs": -20.0,
+   "peak": -3.26,
+   "tp": -3.26,
+   "rms": -26.0,
+   "clip": 0,
+   "centroid": 3264,
+   "dur": 3.2,
+   "kb": 35.8
+  },
+  "sfx/exp_far_1": {
+   "lufs": -22.3,
+   "peak": -0.96,
+   "tp": -0.95,
+   "rms": -19.5,
+   "clip": 0,
+   "centroid": 87,
+   "dur": 7.0,
+   "kb": 137.2
+  },
+  "sfx/exp_far_2": {
+   "lufs": -19.1,
+   "peak": -1.09,
+   "tp": -1.08,
+   "rms": -20.6,
+   "clip": 0,
+   "centroid": 83,
+   "dur": 7.0,
+   "kb": 129.4
+  },
+  "sfx/exp_fireball": {
+   "lufs": -15.0,
+   "peak": -2.83,
+   "tp": -2.83,
+   "rms": -18.7,
+   "clip": 0,
+   "centroid": 1479,
+   "dur": 2.2,
+   "kb": 21.0
+  },
+  "sfx/enemy_jet": {
+   "lufs": -18.8,
+   "peak": -1.56,
+   "tp": -1.54,
+   "rms": -18.4,
+   "clip": 0,
+   "centroid": 1854,
+   "dur": 4.4,
+   "kb": 25.9,
+   "seam": 0.61
+  },
+  "sfx/jet_flyby_1": {
+   "lufs": -19.5,
+   "peak": -1.31,
+   "tp": -1.31,
+   "rms": -20.7,
+   "clip": 0,
+   "centroid": 1873,
+   "dur": 4.2,
+   "kb": 28.6
+  },
+  "sfx/jet_flyby_2": {
+   "lufs": -18.8,
+   "peak": -1.36,
+   "tp": -1.36,
+   "rms": -20.1,
+   "clip": 0,
+   "centroid": 1916,
+   "dur": 4.2,
+   "kb": 26.6
+  },
+  "sfx/jet_flyby_3": {
+   "lufs": -18.4,
+   "peak": -1.22,
+   "tp": -1.2,
+   "rms": -20.3,
+   "clip": 0,
+   "centroid": 1934,
+   "dur": 4.2,
+   "kb": 27.0
+  },
+  "sfx/radio_open_1": {
+   "lufs": -19.2,
+   "peak": -2.75,
+   "tp": -2.74,
+   "rms": -15.5,
+   "clip": 0,
+   "centroid": 3546,
+   "dur": 0.12,
+   "kb": 1.2
+  },
+  "sfx/radio_open_2": {
+   "lufs": -19.8,
+   "peak": -2.12,
+   "tp": -2.11,
+   "rms": -16.2,
+   "clip": 0,
+   "centroid": 3624,
+   "dur": 0.12,
+   "kb": 1.2
+  },
+  "sfx/radio_close_1": {
+   "lufs": -16.7,
+   "peak": -1.91,
+   "tp": -1.91,
+   "rms": -15.8,
+   "clip": 0,
+   "centroid": 3631,
+   "dur": 0.22,
+   "kb": 1.7
+  },
+  "sfx/radio_close_2": {
+   "lufs": -17.2,
+   "peak": -3.15,
+   "tp": -3.14,
+   "rms": -16.6,
+   "clip": 0,
+   "centroid": 3658,
+   "dur": 0.22,
+   "kb": 1.7
+  },
+  "sfx/radio_static": {
+   "lufs": -28.2,
+   "peak": -14.4,
+   "tp": -14.34,
+   "rms": -30.2,
+   "clip": 0,
+   "centroid": 3635,
+   "dur": 3.8,
+   "kb": 18.6,
+   "seam": 0.85
+  },
+  "sfx/ui_click": {
+   "lufs": -31.5,
+   "peak": -6.09,
+   "tp": -5.86,
+   "rms": -31.6,
+   "clip": 0,
+   "centroid": 4586,
+   "dur": 0.21,
+   "kb": 1.6
+  },
+  "sfx/ui_hover": {
+   "lufs": -29.4,
+   "peak": -11.99,
+   "tp": -11.84,
+   "rms": -29.5,
+   "clip": 0,
+   "centroid": 3190,
+   "dur": 0.2,
+   "kb": 2.0
+  },
+  "sfx/ui_confirm": {
+   "lufs": -20.6,
+   "peak": -6.17,
+   "tp": -6.15,
+   "rms": -20.2,
+   "clip": 0,
+   "centroid": 1799,
+   "dur": 0.6,
+   "kb": 3.7
+  },
+  "sfx/ui_back": {
+   "lufs": -19.0,
+   "peak": -6.06,
+   "tp": -6.05,
+   "rms": -19.4,
+   "clip": 0,
+   "centroid": 1085,
+   "dur": 0.45,
+   "kb": 2.6
+  },
+  "sfx/ui_error": {
+   "lufs": -14.4,
+   "peak": -5.82,
+   "tp": -5.81,
+   "rms": -13.4,
+   "clip": 0,
+   "centroid": 435,
+   "dur": 0.5,
+   "kb": 3.5
+  },
+  "sfx/ui_kill": {
+   "lufs": -18.8,
+   "peak": -6.13,
+   "tp": -5.88,
+   "rms": -20.9,
+   "clip": 0,
+   "centroid": 3299,
+   "dur": 0.85,
+   "kb": 6.3
+  },
+  "sfx/ui_hit": {
+   "lufs": -33.2,
+   "peak": -8.42,
+   "tp": -8.15,
+   "rms": -33.0,
+   "clip": 0,
+   "centroid": 4711,
+   "dur": 0.24,
+   "kb": 1.7
+  },
+  "sfx/amb_wind": {
+   "lufs": -24.0,
+   "peak": -10.14,
+   "tp": -10.13,
+   "rms": -24.9,
+   "clip": 0,
+   "centroid": 799,
+   "dur": 12.4,
+   "kb": 111.5,
+   "seam": 0.04
+  },
+  "sfx/cloud_rush": {
+   "lufs": -22.0,
+   "peak": -11.69,
+   "tp": -11.66,
+   "rms": -26.4,
+   "clip": 0,
+   "centroid": 2943,
+   "dur": 6.4,
+   "kb": 58.7,
+   "seam": 1.1
+  }
+ },
+ "music": {
+  "sting_complete": {
+   "lufs": -14.0,
+   "peak": -3.29,
+   "tp": -3.19,
+   "rms": -19.7,
+   "clip": 0,
+   "dur": 9.795,
+   "kb": 126.2
+  },
+  "menu": {
+   "lufs": -16.0,
+   "peak": -1.33,
+   "tp": -1.32,
+   "rms": -18.7,
+   "clip": 0,
+   "dur": 96.4,
+   "kb": 1226.2,
+   "seam": 1.25,
+   "edgeRmsDelta": 1.54
+  },
+  "briefing": {
+   "lufs": -17.0,
+   "peak": -2.4,
+   "tp": -2.39,
+   "rms": -19.2,
+   "clip": 0,
+   "dur": 40.4,
+   "kb": 554.4,
+   "seam": 0.33,
+   "edgeRmsDelta": -0.18
+  },
+  "cruise": {
+   "lufs": -18.0,
+   "peak": -6.26,
+   "tp": -6.25,
+   "rms": -20.6,
+   "clip": 0,
+   "dur": 64.4,
+   "kb": 816.9,
+   "seam": 0.65,
+   "edgeRmsDelta": 3.49
+  },
+  "combat_1": {
+   "lufs": -16.5,
+   "peak": -3.09,
+   "tp": -3.07,
+   "rms": -16.0,
+   "clip": 0,
+   "dur": 55.257,
+   "kb": 644.0,
+   "seam": 0.6,
+   "edgeRmsDelta": -0.17
+  },
+  "combat_2": {
+   "lufs": -16.0,
+   "peak": -1.52,
+   "tp": -1.51,
+   "rms": -17.0,
+   "clip": 0,
+   "dur": 55.257,
+   "kb": 616.6,
+   "seam": 0.5,
+   "edgeRmsDelta": -0.41
+  },
+  "combat_3": {
+   "lufs": -15.5,
+   "peak": -1.55,
+   "tp": -1.55,
+   "rms": -16.8,
+   "clip": 0,
+   "dur": 55.257,
+   "kb": 672.1,
+   "seam": 0.37,
+   "edgeRmsDelta": -0.09
+  },
+  "ace": {
+   "lufs": -15.6,
+   "peak": -1.41,
+   "tp": -1.38,
+   "rms": -16.5,
+   "clip": 0,
+   "dur": 38.8,
+   "kb": 492.0,
+   "seam": 4.83,
+   "edgeRmsDelta": -0.89
+  },
+  "victory": {
+   "lufs": -15.0,
+   "peak": -2.25,
+   "tp": -2.24,
+   "rms": -18.6,
+   "clip": 0,
+   "dur": 34.8,
+   "kb": 464.5
+  },
+  "defeat": {
+   "lufs": -17.0,
+   "peak": -5.21,
+   "tp": -5.19,
+   "rms": -20.6,
+   "clip": 0,
+   "dur": 31.664,
+   "kb": 434.8
+  },
+  "memorial": {
+   "lufs": -17.0,
+   "peak": -3.59,
+   "tp": -3.51,
+   "rms": -20.0,
+   "clip": 0,
+   "dur": 83.13,
+   "kb": 1080.9
+  },
+  "sting_failed": {
+   "lufs": -16.0,
+   "peak": -4.48,
+   "tp": -4.47,
+   "rms": -21.5,
+   "clip": 0,
+   "dur": 14.0,
+   "kb": 169.6
+  }
+ },
+ "bytes": {
+  "webm": 9491174,
+  "m4a": 12369196
+ }
+}

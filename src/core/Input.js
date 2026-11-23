@@ -1,168 +1,233 @@
-import { isTouchDevice } from './Settings.js';
-
 /**
- * The input the player almost certainly has, before they have used any.
+ * Keyboard + mouse / gamepad / touch input, normalised into
  *
- * Guarded because isTouchDevice() reads `navigator` and `matchMedia` directly,
- * and Input is constructed in tests that provide neither. A device we cannot
- * interrogate is assumed to have a keyboard, which is the safe default: it is
- * what the briefing used to show everyone anyway.
- */
-function detectModality() {
-  try {
-    return isTouchDevice() ? 'touch' : 'keyboard';
-  } catch {
-    return 'keyboard';
-  }
-}
-
-/**
- * Keyboard / gamepad / touch input, normalised into flight axes.
+ *   axes      `pitch`, `roll`, `yaw` (-1..1, smoothed; +pitch = nose down,
+ *             +roll = right, +yaw = right), `throttle` (0..1), `brake` (0..1)
+ *   intent    `{turn, climb, yaw, speed, boost, brake, throttle}` — the
+ *             semantic version the assisted (Standard) controller flies from
+ *   actions   `input.actions.<name>` is true while held
+ *   pressed   `input.pressed.<name>` is true for exactly one frame (the frame
+ *             after the press), readable by any number of systems
+ *   look      `{x, y}` right stick, for the camera owner
  *
- * Axes are smoothed toward their target rather than snapping. A jet's stick is
- * not a switch, and raw digital keys applied straight to a rate controller feel
- * like a spreadsheet. The smoothing time constants here are part of the flight
- * feel, not a UI nicety.
+ * Everything is driven from ONE data table, `DEFAULT_BINDINGS`. Rebinding is
+ * `input.rebind(action, {keys, pad, mouse})`; the map persists in localStorage.
  *
- * There is deliberately no mouse-flying path. One existed here — a `mouseMode`
- * flag, a mousemove listener and a branch that overrode pitch and roll from the
- * cursor — but nothing ever set the flag, so it was unreachable from the first
- * commit. Wiring it up properly would mean pointer lock (a free cursor over a
- * fullscreen canvas cannot express a centred stick), and pointer lock needs a
- * click to enter, which is the same click the title sequence uses to skip. A
- * half-wired input mode is worse than none, so the path is gone rather than
- * left as scaffolding: the game is flown on keys, a pad, or glass.
+ * Touch (the UI owner's TouchControls) drives the same state through
+ * `setTouchAxes`, `setTouchThrottle`, `setAction(name, held)` and
+ * `pressAction(name)`. The older `pressTouch(code)` / `setTouchBoost` /
+ * `toggleTouchRecon` entry points still work and map onto actions.
+ *
+ * Node-safe: constructed in tests with a fake event target.
  */
 
-const AXIS_ATTACK = 7.0; // how fast a key press reaches full deflection
-const AXIS_RELEASE = 9.5; // how fast it centres again
+/** Standard-mapping gamepad button indices. */
+export const PAD = {
+  A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 9,
+  L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15,
+};
 
+/**
+ * The one control table. `keys` are KeyboardEvent.code values, `mouse` are
+ * button indices (canvas only), `pad` are standard-mapping button indices.
+ * Stick axes are fixed: left stick flies, right stick looks.
+ */
+export const DEFAULT_BINDINGS = {
+  pitchDown:    { label: 'Nose down',        keys: ['KeyW', 'ArrowUp'] },
+  pitchUp:      { label: 'Nose up',          keys: ['KeyS', 'ArrowDown'] },
+  rollLeft:     { label: 'Roll / turn left', keys: ['KeyA', 'ArrowLeft'] },
+  rollRight:    { label: 'Roll / turn right', keys: ['KeyD', 'ArrowRight'] },
+  yawLeft:      { label: 'Yaw left',         keys: ['KeyQ'], pad: [PAD.LB] },
+  yawRight:     { label: 'Yaw right',        keys: ['KeyE'], pad: [PAD.RB] },
+  throttleUp:   { label: 'Accelerate / afterburner', keys: ['ShiftLeft', 'ShiftRight'], pad: [PAD.RT] },
+  brake:        { label: 'Decelerate / airbrake (hold + pull = high-G turn)', keys: ['ControlLeft', 'KeyZ'], pad: [PAD.LT] },
+  fireMissile:  { label: 'Fire missile / special', keys: ['Space'], mouse: [2], pad: [PAD.B] },
+  fireGun:      { label: 'Gun',              keys: ['KeyF'], mouse: [0], pad: [PAD.A] },
+  switchWeapon: { label: 'Switch weapon',    keys: ['KeyR'], pad: [PAD.X] },
+  flares:       { label: 'Flares',           keys: ['KeyX'], pad: [PAD.L3] },
+  targetNext:   { label: 'Next target',      keys: ['Tab', 'KeyT'], pad: [PAD.Y] },
+  camera:       { label: 'Camera',           keys: ['KeyC'], pad: [PAD.BACK] },
+  lookTarget:   { label: 'Look at target (hold)', keys: ['KeyG'], pad: [PAD.R3] },
+  missileCam:   { label: 'Missile camera on/off', keys: ['KeyB'], pad: [PAD.RIGHT] },
+  optic:        { label: 'Recon optic (hold)', keys: ['KeyV'], pad: [PAD.UP] },
+  controlMode:  { label: 'Standard / Expert controls', keys: ['KeyM'], pad: [PAD.DOWN] },
+  pause:        { label: 'Pause',            keys: ['Escape', 'KeyP'], pad: [PAD.START] },
+  confirm:      { label: 'Confirm',          keys: ['Enter'], pad: [PAD.A] },
+  back:         { label: 'Back',             keys: ['Backspace'], pad: [PAD.B] },
+};
+
+export const ACTIONS = Object.keys(DEFAULT_BINDINGS);
+export const CONTROL_MODES = ['standard', 'expert'];
+
+const STORAGE_KEY = 'safedsagar.v2.controls';
+const AXIS_ATTACK = 9.0; // how fast a key press reaches full deflection
+const AXIS_RELEASE = 11.0; // how fast it centres again
+const CRUISE_THROTTLE = 0.8; // released lever; just under the reheat detent
+const IDLE_THROTTLE = 0.12;
 const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
 
-/**
- * Is this keystroke being typed into a text field rather than flown with?
- *
- * The listener is on `window`, so anything typed into a control in the UI layer
- * bubbles up to it. Until the leaderboard there were no text fields anywhere in
- * the experience and it never mattered; with one, it mattered twice over.
- * Recording the key meant Enter in the callsign field also reached the debrief's
- * `consumePress('Enter')` and restarted the sortie in the same frame the score
- * was saved — the player never saw their rank. Suppressing the key meant Space
- * was preventDefaulted, so a callsign with a space in it could not be typed at
- * all, even though sanitiseName accepts one.
- */
 function isTextEntry(node) {
   if (!node) return false;
   if (TEXT_ENTRY_TAGS.has(node.tagName)) return true;
   return node.isContentEditable === true;
 }
 
+function cloneBindings(src) {
+  const out = {};
+  for (const [name, b] of Object.entries(src)) {
+    out[name] = { label: b.label, keys: [...(b.keys ?? [])], mouse: [...(b.mouse ?? [])], pad: [...(b.pad ?? [])] };
+  }
+  return out;
+}
+
+function storage() {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
+
 export class Input {
-  constructor(target = window) {
+  constructor(target = globalThis.window) {
+    this.enabled = true;
+    /** When true, bound keys are preventDefault-ed even inside Ctrl chords. */
+    this.capture = false;
+    this.bindings = cloneBindings(DEFAULT_BINDINGS);
+    this.mode = 'standard';
+    /** false: S / stick-back pulls the nose up (flight convention). */
+    this.invertPitch = false;
+    this._loadPrefs();
+
     this.keys = new Set();
+    this.mouseButtons = new Set();
     this.pitch = 0;
     this.roll = 0;
     this.yaw = 0;
-    this.throttle = 0.72;
+    this.throttle = CRUISE_THROTTLE;
     this.brake = 0;
-    this.reconHeld = false;
-    this.enabled = true;
-    this.intent = {
-      turn: 0,
-      climb: 0,
-      speed: 0,
-      boost: false,
-      brake: 0,
-      throttle: 0.72,
-    };
-    /**
-     * What the briefing should describe, before anything has been pressed.
-     *
-     * This defaulted to 'keyboard' and only became 'touch' once the player
-     * actually touched a control — but Game pushes it into the briefing at
-     * build time, which overrode the coarse-pointer choice Screens had already
-     * made. Every phone player therefore opened on a legend of W, Shift, Esc
-     * and Tab for a device with none of them, and only saw the real controls
-     * after flying with them. Seed it from the device instead.
-     */
-    this.modality = detectModality();
+    this.look = { x: 0, y: 0 };
+    this.modality = 'keyboard';
+    this.intent = { turn: 0, climb: 0, yaw: 0, speed: 0, boost: false, brake: 0, throttle: CRUISE_THROTTLE };
 
-    // Touch state. `touchActive` latches on first use so a desktop session is
-    // never affected by these being present.
-    this.touchActive = false;
-    this.touchRecon = false;
-    this.touchBoost = false;
+    this.actions = {};
+    this.pressed = {};
+    for (const a of ACTIONS) { this.actions[a] = false; this.pressed[a] = false; }
+    this._edgeQueue = new Set(); // actions pressed since the last update()
+    this._consumed = new Set();
+    this._virtual = new Set(); // actions held by touch / script
+    this._pressedCodes = new Set(); // legacy consumePress(code)
+    this._padPrev = [];
+    this._pad = null;
+
     this._touchPitch = null;
     this._touchRoll = null;
     this._touchThrottle = null;
-
-    this._pitchTarget = 0;
-    this._rollTarget = 0;
-    this._yawTarget = 0;
-
-    // Edge-triggered actions consumed once per frame by the game.
-    this._pressed = new Set();
-
-    // Sampled once per update(); see the getter below.
-    this._pad = null;
-    this._padReleaseQuarantined = false;
-    this._reconWasHeld = false;
+    this.touchActive = false;
+    this.touchBoost = false;
+    this.touchRecon = false;
+    this._pitchTarget = this._rollTarget = this._yawTarget = 0;
 
     this._onKeyDown = (e) => {
+      if (isTextEntry(e.target) || e.metaKey) return;
+      const bound = this._actionsForKey(e.code);
+      if (bound.length && (this.capture || (!e.ctrlKey && !e.altKey))) e.preventDefault?.();
       if (e.repeat) return;
-      // Keys typed into a text field are text, not controls: neither recorded
-      // nor suppressed. Checked before `keys.add` so a field cannot leave a
-      // key stuck down either.
-      if (isTextEntry(e.target)) return;
-      // Command is refused outright. macOS does not deliver keyup for a
-      // character key while Command is held, so anything recorded during a Cmd
-      // chord could stay in `keys` for the rest of the session and fly the
-      // aircraft on its own.
-      if (e.metaKey) return;
-      /**
-     * What the briefing should describe, before anything has been pressed.
-     *
-     * This defaulted to 'keyboard' and only became 'touch' once the player
-     * actually touched a control — but Game pushes it into the briefing at
-     * build time, which overrode the coarse-pointer choice Screens had already
-     * made. Every phone player therefore opened on a legend of W, Shift, Esc
-     * and Tab for a device with none of them, and only saw the real controls
-     * after flying with them. Seed it from the device instead.
-     */
-    this.modality = detectModality();
+      this.modality = 'keyboard';
       this.keys.add(e.code);
-      this._pressed.add(e.code);
-      // Suppressing the default is what would swallow a browser shortcut;
-      // recording the key does not. Modifier chords therefore remain browser
-      // actions. Shift is excluded because it is itself a flight binding and
-      // forms no browser accelerator with Space or Tab.
-      if (PREVENT_DEFAULT.has(e.code) && !e.ctrlKey && !e.altKey) e.preventDefault();
+      this._pressedCodes.add(e.code);
+      for (const a of bound) this._edgeQueue.add(a);
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
-    this._onBlur = () => this.releaseAll();
-    this._onVisibilityChange = () => {
-      if (this._document.hidden) this.releaseAll();
+    this._onMouseDown = (e) => {
+      if (e.target?.tagName !== 'CANVAS') return;
+      this.modality = 'keyboard';
+      this.mouseButtons.add(e.button);
+      for (const [name, b] of Object.entries(this.bindings)) if (b.mouse.includes(e.button)) this._edgeQueue.add(name);
     };
+    this._onMouseUp = (e) => this.mouseButtons.delete(e.button);
+    this._onContextMenu = (e) => { if (e.target?.tagName === 'CANVAS') e.preventDefault?.(); };
+    this._onBlur = () => this.releaseAll();
+    this._onVisibilityChange = () => { if (this._document?.hidden) this.releaseAll(); };
 
-    target.addEventListener('keydown', this._onKeyDown);
-    target.addEventListener('keyup', this._onKeyUp);
-    target.addEventListener('blur', this._onBlur);
-    this._document = target.document ?? globalThis.document ?? null;
-    this._document?.addEventListener('visibilitychange', this._onVisibilityChange);
-    this._target = target;
+    this._target = target ?? null;
+    this._document = target?.document ?? globalThis.document ?? null;
+    if (target?.addEventListener) {
+      target.addEventListener('keydown', this._onKeyDown);
+      target.addEventListener('keyup', this._onKeyUp);
+      target.addEventListener('mousedown', this._onMouseDown);
+      target.addEventListener('mouseup', this._onMouseUp);
+      target.addEventListener('contextmenu', this._onContextMenu);
+      target.addEventListener('blur', this._onBlur);
+    }
+    this._document?.addEventListener?.('visibilitychange', this._onVisibilityChange);
   }
 
-  // ------------------------------------------------------------- touch --
-  //
-  // Touch writes into the same targets the keyboard does, so the smoothing,
-  // the flight model and the game state machine never learn which input is
-  // driving. The only difference is that touch axes are analogue and arrive
-  // pre-shaped, so update() must not overwrite them with key state.
+  // ------------------------------------------------------------ bindings --
 
-  /**
-   * @param {number|null} pitch  null when the stick is released
-   * @param {number|null} roll
-   */
+  _actionsForKey(code) {
+    const out = [];
+    for (const [name, b] of Object.entries(this.bindings)) if (b.keys.includes(code)) out.push(name);
+    return out;
+  }
+
+  /** Replace the bindings of one action; any of keys / pad / mouse. */
+  rebind(action, { keys, pad, mouse } = {}) {
+    const b = this.bindings[action];
+    if (!b) return false;
+    if (keys) b.keys = [...keys];
+    if (pad) b.pad = [...pad];
+    if (mouse) b.mouse = [...mouse];
+    this._savePrefs();
+    return true;
+  }
+
+  resetBindings() {
+    this.bindings = cloneBindings(DEFAULT_BINDINGS);
+    this._savePrefs();
+  }
+
+  setMode(mode) {
+    this.mode = mode === 'expert' ? 'expert' : 'standard';
+    this._savePrefs();
+    return this.mode;
+  }
+
+  _loadPrefs() {
+    try {
+      const raw = storage()?.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (CONTROL_MODES.includes(p.mode)) this.mode = p.mode;
+      this.invertPitch = p.invertPitch === true;
+      for (const [name, b] of Object.entries(p.bindings ?? {})) {
+        if (!this.bindings[name]) continue;
+        for (const f of ['keys', 'pad', 'mouse']) if (Array.isArray(b[f])) this.bindings[name][f] = [...b[f]];
+      }
+    } catch { /* corrupt prefs: keep defaults */ }
+  }
+
+  _savePrefs() {
+    try {
+      const bindings = {};
+      for (const [n, b] of Object.entries(this.bindings)) bindings[n] = { keys: b.keys, pad: b.pad, mouse: b.mouse };
+      storage()?.setItem(STORAGE_KEY, JSON.stringify({ mode: this.mode, invertPitch: this.invertPitch, bindings }));
+    } catch { /* storage unavailable */ }
+  }
+
+  // --------------------------------------------------------- touch/script --
+
+  /** Hold or release an action from an on-screen control or a script. */
+  setAction(name, held) {
+    if (!(name in this.actions)) return;
+    if (held) {
+      if (!this._virtual.has(name)) this._edgeQueue.add(name);
+      this._virtual.add(name);
+    } else this._virtual.delete(name);
+  }
+
+  /** One-shot press of an action (edge only). */
+  pressAction(name) {
+    if (name in this.actions) this._edgeQueue.add(name);
+  }
+
+  /** @param {number|null} pitch +1 = nose down; null releases the stick. */
   setTouchAxes(pitch, roll) {
     if (pitch !== null) this.modality = 'touch';
     this.touchActive = pitch !== null;
@@ -170,204 +235,180 @@ export class Input {
     this._touchRoll = roll;
   }
 
+  /** Absolute throttle lever (0..1); null returns to hold-to-accelerate. */
   setTouchThrottle(t) {
-    this.modality = 'touch';
+    if (t !== null) this.modality = 'touch';
     this._touchThrottle = t;
   }
 
-  // Only a *press* claims the modality. Releasing does not: the touch layer
-  // clears held input on mode change, on blur and when it disables itself,
-  // and a release that announced "touch" would relabel a desktop session's
-  // control legend with drag gestures before the player ever touched a
-  // screen — which is exactly what setEnabled(false) did on every load.
   setTouchBoost(held) {
     if (held === true) this.modality = 'touch';
     this.touchBoost = held === true;
+    this.setAction('throttleUp', held === true);
   }
 
   toggleTouchRecon() {
     this.modality = 'touch';
     this.touchRecon = !this.touchRecon;
-    this.touchActive = true;
+    this.setAction('optic', this.touchRecon);
   }
 
-  /** Drop all held touch input; used on blur, capture loss and sortie start. */
   releaseTouch() {
     this.touchActive = false;
     this._touchPitch = null;
     this._touchRoll = null;
   }
 
-  /** Fire an edge-triggered action from an on-screen button. */
+  /** Legacy: fire an edge by key code from an on-screen button. */
   pressTouch(code) {
     this.modality = 'touch';
-    this.touchActive = true;
-    this._pressed.add(code);
+    this._pressedCodes.add(code);
+    for (const a of this._actionsForKey(code)) this._edgeQueue.add(a);
   }
 
-  /** True once, on the frame a key went down. */
-  consumePress(code) {
-    if (!this._pressed.has(code)) return false;
-    this._pressed.delete(code);
+  // ---------------------------------------------------------------- edges --
+
+  /** True once per press, for the first caller. Use `pressed` to share. */
+  consume(action) {
+    if (!this.pressed[action] || this._consumed.has(action)) return false;
+    this._consumed.add(action);
     return true;
   }
 
-  anyPress() {
-    return this._pressed.size > 0;
+  /** Legacy: true once, on the frame a raw key code went down. */
+  consumePress(code) {
+    return this._pressedCodes.delete(code);
   }
+
+  anyPress() { return this._pressedCodes.size > 0 || this._edgeQueue.size > 0; }
 
   clearPresses() {
-    this._pressed.clear();
+    this._pressedCodes.clear();
+    this._edgeQueue.clear();
+    for (const a of ACTIONS) this.pressed[a] = false;
   }
 
-  /**
-   * Clear every transient input source without changing the positional
-   * throttle. Lifecycle safety releases (blur, pause, visibility and dispose)
-   * must not silently move the Direct-mode throttle lever.
-   */
   releaseAll() {
     this.keys.clear();
-    this._pressed.clear();
+    this.mouseButtons.clear();
+    this._virtual.clear();
+    this.clearPresses();
     this._pitchTarget = this._rollTarget = this._yawTarget = 0;
     this.touchActive = false;
     this.touchRecon = false;
     this.touchBoost = false;
-    this._touchPitch = null;
-    this._touchRoll = null;
-    this._touchThrottle = null;
-    this._pad = null;
-    this._padReleaseQuarantined = true;
-    this._reconWasHeld = false;
-    this.reconHeld = false;
-    this.brake = 0;
+    this._touchPitch = this._touchRoll = null;
     this.pitch = this.roll = this.yaw = 0;
+    this.brake = 0;
+    for (const a of ACTIONS) this.actions[a] = false;
     setNeutralIntent(this.intent, this.throttle);
   }
 
-  /** Reset transient input and the throttle baseline for a new sortie. */
-  resetForLaunch(throttle = 0.72) {
+  resetForLaunch(throttle = CRUISE_THROTTLE) {
     this.releaseAll();
-    this.throttle = Number.isFinite(throttle) ? Math.min(1, Math.max(0, throttle)) : 0.72;
-    setNeutralIntent(this.intent, this.throttle);
+    this._touchThrottle = null;
+    this.throttle = Number.isFinite(throttle) ? Math.min(1, Math.max(0, throttle)) : CRUISE_THROTTLE;
   }
 
-  /**
-   * The active gamepad, as sampled at the top of this frame's update().
-   *
-   * navigator.getGamepads() is not a cheap accessor: the spec requires it to
-   * return a *fresh* array of freshly snapshotted Gamepad objects on every
-   * call, so reading it twice a frame — once for the axes, once for the recon
-   * button — allocated two arrays and two pad snapshots per frame for the whole
-   * session. Sampling once and caching costs nothing and cannot go stale within
-   * a frame, since the browser only refreshes pad state between tasks anyway.
-   */
-  get gamepad() {
-    return this._pad;
-  }
+  get gamepad() { return this._pad; }
 
   _sampleGamepad() {
-    if (!navigator.getGamepads) return null;
-    const pads = navigator.getGamepads();
-    // Indexed rather than for..of: the iterator protocol allocates too, and
-    // this runs every frame.
+    const nav = globalThis.navigator;
+    if (!nav?.getGamepads) return null;
+    const pads = nav.getGamepads();
     for (let i = 0; i < pads.length; i++) {
       const p = pads[i];
-      if (p && p.connected) return p;
+      if (p && p.connected && p.mapping !== 'xr-standard') return p;
     }
     return null;
   }
 
-  update(dt, verticalMode = 'upToClimb') {
-    this._pad = this._sampleGamepad();
-    if (this._padReleaseQuarantined) {
-      if (!this._pad || isPadNeutral(this._pad)) this._padReleaseQuarantined = false;
-      else this._pad = null;
-    }
-    const invertAnalogue = verticalMode === 'upToDive' || verticalMode === true;
-    const intent = this.intent;
-    setNeutralIntent(intent, this.throttle);
+  // --------------------------------------------------------------- update --
 
+  update(dt) {
+    const pad = this._pad = this._sampleGamepad();
+
+    // Held state per action, and pad edges.
+    for (const name of ACTIONS) {
+      const b = this.bindings[name];
+      let held = this._virtual.has(name);
+      for (let i = 0; !held && i < b.keys.length; i++) held = this.keys.has(b.keys[i]);
+      for (let i = 0; !held && i < b.mouse.length; i++) held = this.mouseButtons.has(b.mouse[i]);
+      if (pad) {
+        for (let i = 0; i < b.pad.length; i++) {
+          const idx = b.pad[i];
+          const down = (pad.buttons[idx]?.value ?? 0) > 0.35 || pad.buttons[idx]?.pressed === true;
+          if (down) held = true;
+        }
+      }
+      this.actions[name] = this.enabled && held;
+    }
+    if (pad) {
+      for (let i = 0; i < pad.buttons.length; i++) {
+        const down = (pad.buttons[i]?.value ?? 0) > 0.35 || pad.buttons[i]?.pressed === true;
+        if (down && !this._padPrev[i]) {
+          this.modality = 'gamepad';
+          for (const [name, b] of Object.entries(this.bindings)) if (b.pad.includes(i)) this._edgeQueue.add(name);
+        }
+        this._padPrev[i] = down;
+      }
+    }
+
+    // Publish edges for this frame.
+    this._consumed.clear();
+    for (const a of ACTIONS) this.pressed[a] = this._edgeQueue.has(a);
+    this._edgeQueue.clear();
+
+    const intent = this.intent;
     if (!this.enabled) {
       this._pitchTarget = this._rollTarget = this._yawTarget = 0;
-      this.reconHeld = false;
-      this._reconWasHeld = false;
+      this.brake = 0;
+      setNeutralIntent(intent, this.throttle);
     } else {
-      const k = this.keys;
-      let p = (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0);
-      let r = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
-      let y = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
-      let analogueVertical = false;
-      intent.climb = p ? -p : 0;
-      intent.turn = r;
-      intent.speed = k.has('KeyX') ? -1 : 0;
-      intent.boost = k.has('ShiftLeft') || k.has('ShiftRight') || this.touchBoost;
+      const a = this.actions;
+      let p = (a.pitchDown ? 1 : 0) - (a.pitchUp ? 1 : 0);
+      let r = (a.rollRight ? 1 : 0) - (a.rollLeft ? 1 : 0);
+      const y = (a.yawRight ? 1 : 0) - (a.yawLeft ? 1 : 0);
+      let accel = a.throttleUp ? 1 : 0;
+      let brake = a.brake ? 1 : 0;
 
-      const pad = this._pad;
       if (pad) {
         const ax0 = deadzone(pad.axes[0] ?? 0);
         const ax1 = deadzone(pad.axes[1] ?? 0);
-        if (ax0) {
-          r = ax0;
-          intent.turn = ax0;
-        }
-        if (ax1) {
-          p = ax1;
-          analogueVertical = true;
-          intent.climb = invertAnalogue ? ax1 : -ax1;
-        }
-        const lt = pad.buttons[6]?.value ?? 0;
-        const rt = pad.buttons[7]?.value ?? 0;
-        if (rt > 0.02 || lt > 0.02) {
-          const triggerSpeed = rt - lt;
-          intent.speed = triggerSpeed;
-          this.throttle = Math.min(1, Math.max(0, this.throttle + triggerSpeed * dt * 1.1));
-        }
-        const yawAxis = deadzone(pad.axes[2] ?? 0);
-        if (yawAxis) y = yawAxis;
-        if (ax0 || ax1 || yawAxis || rt > 0.02 || lt > 0.02 || hasPressedButton(pad.buttons)) {
-          this.modality = 'gamepad';
-        }
+        if (ax0) r = ax0;
+        if (ax1) p = -ax1; // stick back (positive axis) = nose up
+        this.look.x = deadzone(pad.axes[2] ?? 0);
+        this.look.y = deadzone(pad.axes[3] ?? 0);
+        accel = Math.max(accel, pad.buttons[PAD.RT]?.value ?? 0);
+        brake = Math.max(brake, pad.buttons[PAD.LT]?.value ?? 0);
+        if (ax0 || ax1) this.modality = 'gamepad';
+      } else {
+        this.look.x = this.look.y = 0;
       }
-
-      // Touch overrides, applied last so an on-screen stick wins over the keys
-      // rather than being averaged with them — but ONLY while a thumb is
-      // actually down.
-      //
-      // This used to latch: touchActive was set on first use and never cleared,
-      // and release stored zeroes rather than clearing the axes, so from the
-      // first touch onward every frame overwrote pitch and roll with 0. On a
-      // tablet with a keyboard, or a touchscreen laptop, one tap disabled the
-      // keyboard and the gamepad for the rest of the session.
       if (this.touchActive && this._touchPitch !== null) {
         p = this._touchPitch;
-        r = this._touchRoll;
-        analogueVertical = true;
-        intent.climb = invertAnalogue ? p : -p;
-        intent.turn = r;
+        r = this._touchRoll ?? 0;
       }
-      // Throttle is a position rather than a rate, so the last touched value
-      // does persist — but only until a key moves it, which the clauses below
-      // are free to do.
-      if (this._touchThrottle !== null) {
-        this.throttle = this._touchThrottle;
-        this._touchThrottle = null;
-      }
+      if (this.invertPitch) p = -p;
 
-      this._pitchTarget = analogueVertical && invertAnalogue ? -p : p;
+      this._pitchTarget = p;
       this._rollTarget = r;
       this._yawTarget = y;
 
-      if (k.has('ShiftLeft') || k.has('ShiftRight')) {
-        this.throttle = Math.min(1, this.throttle + dt * 0.62);
-      }
-      if (k.has('KeyX')) {
-        this.throttle = Math.max(0, this.throttle - dt * 0.62);
-      }
-      this.brake = k.has('KeyZ') ? 1 : 0;
-      this.reconHeld = k.has('Space') || !!pad?.buttons[5]?.value || this.touchRecon === true;
-      if (this.reconHeld && !this._reconWasHeld) this._pressed.add('Space');
-      this._reconWasHeld = this.reconHeld;
-      intent.brake = this.brake;
+      // Arcade lever: hold to accelerate (into reheat), hold to brake, release
+      // to return to cruise. A touch lever, when present, is absolute instead.
+      let throttleTarget;
+      if (this._touchThrottle !== null && !accel && !brake) throttleTarget = this._touchThrottle;
+      else throttleTarget = CRUISE_THROTTLE + accel * (1 - CRUISE_THROTTLE) - brake * (CRUISE_THROTTLE - IDLE_THROTTLE);
+      this.throttle += (throttleTarget - this.throttle) * (1 - Math.exp(-6 * dt));
+      this.brake = brake;
+
+      intent.turn = r;
+      intent.climb = -p;
+      intent.yaw = y;
+      intent.speed = accel - brake;
+      intent.boost = accel > 0.5;
+      intent.brake = brake;
       intent.throttle = this.throttle;
     }
 
@@ -378,37 +419,27 @@ export class Input {
 
   dispose() {
     this.releaseAll();
-    this._target.removeEventListener('keydown', this._onKeyDown);
-    this._target.removeEventListener('keyup', this._onKeyUp);
-    this._target.removeEventListener('blur', this._onBlur);
-    this._document?.removeEventListener('visibilitychange', this._onVisibilityChange);
+    const t = this._target;
+    if (t?.removeEventListener) {
+      t.removeEventListener('keydown', this._onKeyDown);
+      t.removeEventListener('keyup', this._onKeyUp);
+      t.removeEventListener('mousedown', this._onMouseDown);
+      t.removeEventListener('mouseup', this._onMouseUp);
+      t.removeEventListener('contextmenu', this._onContextMenu);
+      t.removeEventListener('blur', this._onBlur);
+    }
+    this._document?.removeEventListener?.('visibilitychange', this._onVisibilityChange);
   }
 }
 
 function setNeutralIntent(intent, throttle) {
   intent.turn = 0;
   intent.climb = 0;
+  intent.yaw = 0;
   intent.speed = 0;
   intent.boost = false;
   intent.brake = 0;
   intent.throttle = throttle;
-}
-
-function hasPressedButton(buttons) {
-  for (let i = 0; i < buttons.length; i++) {
-    if (buttons[i]?.value) return true;
-  }
-  return false;
-}
-
-function isPadNeutral(pad) {
-  for (let i = 0; i < pad.axes.length; i++) {
-    if (deadzone(pad.axes[i] ?? 0)) return false;
-  }
-  for (let i = 0; i < pad.buttons.length; i++) {
-    if ((pad.buttons[i]?.value ?? 0) > 0.02) return false;
-  }
-  return true;
 }
 
 /** Analogue stick deadzone, rescaled so the usable range still reaches 1. */
@@ -416,20 +447,7 @@ function deadzone(v) {
   return Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86;
 }
 
-const PREVENT_DEFAULT = new Set([
-  'Space',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-  'Tab',
-]);
-
-/**
- * Frame-rate independent approach. Using a plain lerp with a per-frame alpha
- * makes control response depend on frame rate, which is exactly the kind of
- * thing that makes a game feel different on two machines.
- */
+/** Frame-rate independent approach toward the commanded deflection. */
 function approach(current, target, dt) {
   const rate = Math.abs(target) > Math.abs(current) ? AXIS_ATTACK : AXIS_RELEASE;
   return current + (target - current) * (1 - Math.exp(-rate * dt));
