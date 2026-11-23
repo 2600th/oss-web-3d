@@ -29,6 +29,13 @@ export const QUALITY = {
 export function pickTier(backend) {
   const q = new URLSearchParams(location.search).get('quality');
   if (q && QUALITY[q]) return q;
+  // [ui] The player's saved choice (src/core/Settings.js, key `tier`; null =
+  // auto). Read here because terrain buffers are sized from the tier before
+  // any system exists, so a settings change can only fully apply on reload.
+  try {
+    const saved = JSON.parse(localStorage.getItem('safed-sagar.settings.v3') ?? 'null')?.tier;
+    if (saved && QUALITY[saved]) return saved;
+  } catch { /* storage unavailable: fall through to auto */ }
   if (backend !== 'webgpu') return 'low';
   const coarse = matchMedia('(pointer: coarse)').matches;
   if (coarse) return 'low';
