@@ -27,7 +27,8 @@ import { TILE_SLOPE } from '../terrain/textures.js';
 //             2010), at three scales; calm and fast reaches are anisotropic
 //             (streamwise streaks), rapids are isotropic chop
 //   specular  three's GGX for the key light (sun glint by day, moon at night)
-//             and the PMREM sky for reflections, F0 0.04 Schlick. Roughness
+//             and the PMREM sky for reflections (three's F0 0.04, scaled to
+//             water's 0.02 through the AO input, `riverReflection`). Roughness
 //             grows with the pixel footprint so the ripples the mips average
 //             away become glitter width instead of aliasing (Toksvig 2004 /
 //             LEAN mapping idea): one broad sun path at 10 km, sparkle at 50 m
