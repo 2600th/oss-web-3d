@@ -13,6 +13,8 @@
 //    VolumetricCloud "Shadow Tracing Distance" (default 15 km): the cloud shadow
 //    map only integrates a bounded length of the sun ray.
 
+import { SHADOW_MAX } from '../terrain/shadowConst.js';
+
 /** Angular diameter of the sun and of the full moon seen from the Earth (degrees). */
 export const SUN_ANGULAR_DIAMETER = 0.533;
 export const MOON_ANGULAR_DIAMETER = 0.518;
@@ -130,10 +132,14 @@ export function cloudShadowSpan(base, top, sunY, refY, maxPath = CLOUD_SHADOW_PA
 
 /**
  * How strongly the terrain's heightfield shadow applies to a receiver `agl`
- * metres above the DEM ground: fully near the ground (units, props, the
- * aircraft on a low pass), fading out where the 8-bit sweep saturates.
+ * metres above the DEM ground.
+ * [terrain-2] The sweep is R16F metres since the ground pass, clamped at
+ * SHADOW_MAX (8 km) above the ground, so it is exact at any height a receiver
+ * can be at: the reach is the whole range, fading only over its last 500 m
+ * (it was 36-46 m, where the old 8-bit sweep saturated at 47.75 m). Nothing in
+ * the game reads this any more: `env.terrainShadow` applies at every height.
  */
-export const SWEEP_REACH = { full: 36, none: 46 }; // the 8-bit sweep saturates at 47.75 m (shadowConst.js)
+export const SWEEP_REACH = { full: SHADOW_MAX - 500, none: SHADOW_MAX };
 
 export function sweepReach(agl, full = SWEEP_REACH.full, none = SWEEP_REACH.none) {
   if (agl <= full) return 1;

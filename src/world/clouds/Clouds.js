@@ -143,6 +143,16 @@ export class Clouds {
       diffuse: uniform(0.035),
       // Rain shafts under storm cells (0 = none).
       rain: uniform(0),
+      // [terrain-2] forward-scattering lobe, rim softness toward the sun,
+      // history weight there, anvil shear direction (unit, world xz) and reach
+      silverG: uniform(0.9),
+      phaseCap: uniform(1.7),
+      glowSoft: uniform(2.5),
+      glowHistory: uniform(0.45),
+      anvilDir: uniform(new THREE.Vector2(0.9, 0.44)),
+      anvilReach: uniform(5200),
+      windShear: uniform(new THREE.Vector2(9, 4)),
+      rainShaft: uniform(1),
     };
 
     // --- static inputs -----------------------------------------------------
@@ -179,6 +189,9 @@ export class Clouds {
     this.skipRadius = DILATE_TEXELS * WEATHER_EXTENT / wres;
     const sres = low ? 256 : 512;
     this.shadowTarget = rt(sres, sres, 'Clouds.shadow');
+    // [terrain-2] storm anvil shelf (see _anvilPass)
+    this.anvilTarget = rt(wres, wres, 'Clouds.anvil');
+    this.anvilTarget.texture.wrapS = this.anvilTarget.texture.wrapT = THREE.RepeatWrapping;
     this.probeTarget = rt(1, 1, 'Clouds.probe');
     this.marchTarget = rt(1, 1, 'Clouds.march', { type: THREE.HalfFloatType, count: 2 });
     this.history = [
@@ -210,6 +223,8 @@ export class Clouds {
     this._weatherMaterial = this._material('Clouds.weatherRaw', this._weatherPass());
     this._dilateMaterial = this._material('Clouds.weather', this._dilatePass());
     this._shadowMaterial = this._material('Clouds.shadow', this._shadowPass());
+    this._anvilMaterial = this._material('Clouds.anvil', this._anvilPass());
+    this._anvilClear = true;
     this._probeMaterial = this._material('Clouds.probe', this._probePass());
     this._weatherAge = 1e9;
     this._probePending = false;
@@ -248,12 +263,14 @@ export class Clouds {
    * Cloud density 0..1 at world position p with altitude h (h includes the
    * planet-curvature drop). `detail` adds the high-frequency erosion.
    */
-  _density(p, h, w, detail, { interiorOut = null, reliefOut = null, near = null, near2 = null, lod = null, fade = null } = {}) {
+  _density(p, h, w, detail, { interiorOut = null, reliefOut = null, near = null, near2 = null, lod = null, fade = null, glow = null, anvil = null } = {}) {
     const u = this.u;
     // `lod` fades the detail AND widens the rim (long march steps); `fade`
-    // only fades the detail (light taps far from the camera).
+    // only fades the detail (light taps far from the camera). [terrain-2]
+    // `glow` (0..1, rays toward the sun) softens and frays the rim; `anvil`
+    // (0..1, from anvilTarget) spreads a storm cell's top downwind.
     const dfade = lod ?? fade;
-    const { hn } = this._heights(h, w);
+    const { hf, hn } = this._heights(h, w);
     const sh = texture3D(this.shapeTarget.texture, p.mul(vec3(1 / SHAPE_TILE, 1.2 / SHAPE_TILE, 1 / SHAPE_TILE)).add(u.windShape), 0);
     // Low-frequency body (Perlin-Worley, 2 %..98 % measured 0.48..0.88), then
     // carve the creases between Worley billows (0.7-1.4 km) out of it so the
@@ -299,7 +316,11 @@ export class Clouds {
         }
       };
       if (dfade) If(dfade.lessThan(0.99), sample); else sample();
-      n.subAssign(erode);
+      // [terrain-2] Nubis-style remap erosion (Schneider 2015, 2017): the
+      // detail eats the thin outside of the shape far more than its core, so
+      // rims fray into wisps while the bodies stay dense. It was a plain
+      // subtraction, which carved cores and rims alike and left hard edges.
+      n.assign(n.sub(erode).div(max(float(1).sub(erode.mul(0.85)), 0.2)));
       rag = erode.div(u.detailStrength).sub(0.5).mul(u.baseRag);
       // > 0 where the erosion pushes the surface out (a hanging pouch), < 0 in a recess.
       if (reliefOut) reliefOut.assign(float(0.5).sub(erode.div(u.detailStrength)));
@@ -314,20 +335,42 @@ export class Clouds {
     let lift = w.b.mul(260).add(sh.g.sub(0.45).mul(420));
     if (rag) lift = lift.add(rag);
     // The column narrows toward a rounded top.
-    const profile = smoothstep(0, 260, h.sub(u.base).sub(lift)).mul(float(1).sub(smoothstep(0.18, 1.0, hn)));
+    let top = float(1).sub(smoothstep(0.18, 1.0, hn));
+    let cov = w.r;
+    if (anvil) {
+      // [terrain-2] Anvil: the storm top spreads downwind as a flat, smooth
+      // shelf between ~70 % and 95 % of the layer, whatever the local column
+      top = max(top, anvil.mul(smoothstep(0.66, 0.78, hf)).mul(float(1).sub(smoothstep(0.9, 0.99, hf))));
+      cov = max(cov, anvil.mul(0.82).mul(smoothstep(0.62, 0.74, hf)));
+    }
+    const profile = smoothstep(0, 260, h.sub(u.base).sub(lift)).mul(top);
     // Re-centre: measured median of the carved noise is ~0.16, spread ~0.75.
     n.assign(saturate(n.add(0.2).div(0.75)));
-    const cov = w.r;
     // Coverage is the threshold the shape noise has to clear (kept below 1 so
     // the noise sculpts the cores too); the short ramp gives dense bodies with
     // a soft rim.
     const m = n.mul(profile).sub(float(1).sub(cov)).toVar();
     // Far away the rim is widened to about one march step (a prefiltered edge).
-    const d = saturate(m.div(lod ? u.softness.add(lod.mul(0.28)) : u.softness));
+    // [terrain-2] and toward the sun, where a thin rim is the brightest thing
+    // in the frame and a hard one aliases into blocks at march resolution
+    let soft = lod ? u.softness.add(lod.mul(0.28)) : u.softness;
+    if (glow) soft = soft.mul(glow.mul(u.glowSoft).add(1));
+    const d = saturate(m.div(soft)).toVar();
+    if (detail && rag) {
+      // [terrain-2] wisps: in the outer rim the density follows the detail
+      // noise (fibres and holes) instead of a smooth ramp
+      const wisp = smoothstep(0.15, 0.75, float(0.5).sub(rag.div(u.baseRag)).add(0.25));
+      d.mulAssign(mix(wisp, float(1), smoothstep(0, soft.mul(2.5), m)));
+    }
     // How far past the threshold: ~0 at the rim and in creases, ~1 in the cores.
     if (interiorOut) interiorOut.assign(saturate(m.div(0.45)));
     // Denser toward the top and in storm cells.
     return d.mul(mix(float(0.65), float(1.15), saturate(hn))).mul(w.b.mul(u.storm).add(1));
+  }
+
+  /** [terrain-2] Anvil shelf strength at world position p (0..1, times the storm level). */
+  _anvilAt(p) {
+    return texture(this.anvilTarget.texture, p.xz.div(WEATHER_EXTENT).add(0.5), 0).r.mul(this.u.storm);
   }
 
   /* --------------------------------------------------------------- passes */
@@ -381,6 +424,39 @@ export class Clouds {
         }
       }
       return vec4(c.rgb, m);
+    })();
+  }
+
+  /**
+   * [terrain-2] Anvil pass (storms only): how much storm-cell top lies upwind
+   * of each texel within `anvilReach`. A thunderhead's top runs into the
+   * tropopause and is sheared downwind into a flat shelf (cumulonimbus
+   * incus); the march spreads the top of the layer there (_density `anvil`).
+   */
+  _anvilPass() {
+    const u = this.u;
+    const raw = this.weatherRaw.texture;
+    const TAPS = 8;
+    return Fn(() => {
+      const st = uv();
+      const side = vec2(u.anvilDir.y.negate(), u.anvilDir.x);
+      const acc = float(0).toVar();
+      let wsum = 0;
+      for (let k = 0; k < TAPS; k++) {
+        const f = k / (TAPS - 1);
+        // the shelf fans out as it goes downwind
+        for (const l of [-1, 0, 1]) {
+          const q = st.sub(u.anvilDir.mul(u.anvilReach.mul(f).div(WEATHER_EXTENT)))
+            .add(side.mul(u.anvilReach.mul(0.12 + 0.3 * f).mul(l).div(WEATHER_EXTENT)));
+          const c = texture(raw, q);
+          // a tall, wet, well-covered cell
+          const cell = smoothstep(0.4, 0.75, c.r.div(u.covMax)).mul(smoothstep(0.5, 0.85, c.g)).mul(c.b.mul(0.6).add(0.4));
+          const wgt = (1 - 0.5 * f) * (l === 0 ? 1 : 0.6);
+          acc.addAssign(cell.mul(wgt));
+          wsum += wgt;
+        }
+      }
+      return vec4(smoothstep(0.08, 0.5, acc.div(wsum)), 0, 0, 1);
     })();
   }
 
@@ -494,15 +570,25 @@ export class Clouds {
 
       const blue = fract(texture(this.blueTexture, block.add(0.5).div(64), 0).r.add(u.jitter)).toVar();
       const cosT = dot(dir, u.sunDir).toVar();
+      // [terrain-2] Rays within ~25 degrees of the sun: the glow region, where
+      // the rims are brightest and the frame shows any aliasing first.
+      const glow = smoothstep(0.88, 0.995, cosT).mul(smoothstep(-0.05, 0.05, u.sunDir.y)).toVar();
       // Octave multiple scattering (Wrenninge 2013): attenuation a, contribution b,
-      // eccentricity c all halve per octave. Dual-lobe HG phase per octave.
+      // eccentricity c all halve per octave. Dual-lobe HG phase per octave
+      // (Hillaire 2016: a forward and a back lobe).
+      // [terrain-2] forward weight 0.72 -> 0.62: the back lobe carries the
+      // sunlit faces seen with the sun behind the camera
       const phases = [];
       for (let o = 0; o < OCTAVES; o++) {
         const c = 0.5 ** o;
-        phases.push(mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.72).toVar());
+        phases.push(min(mix(hg(cosT, -0.25 * c), hg(cosT, 0.8 * c), 0.62), u.phaseCap).toVar());
       }
-      // A narrow forward lobe for the silver lining when looking toward the sun.
-      const silver = hg(cosT, 0.96).mul(u.silver).toVar();
+      // The silver lining: a narrow forward lobe, only on optically thin rims.
+      // [terrain-2] g 0.96 -> 0.9 and capped (`phaseCap`): HG(0.96) peaks at
+      // ~97 sr^-1, so every thin rim facing the sun clipped to a flat white
+      // plateau whose block-shaped edge was the march resolution.
+      const silverG = u.silverG;
+      const silver = min(float(1).sub(silverG.mul(silverG)).div(pow(max(float(1).add(silverG.mul(silverG)).sub(cosT.mul(silverG).mul(2)), 1e-4), 1.5)).mul(1 / (4 * Math.PI)), u.phaseCap).mul(u.silver).toVar();
 
       // Step length: fine for the first couple of kilometres (near-field detail
       // needs samples closer together than its features), the tier's base step
@@ -510,7 +596,10 @@ export class Clouds {
       // The first tens of metres step in metres, so that what is 15 m from the
       // camera (your own aircraft in chase view) is fogged by the cloud
       // between you and it rather than popping clear of it.
-      const stepAt = (tt) => max(min(u.stepMin, max(min(u.stepNear, tt.mul(0.3).add(3)), tt.mul(0.03))), tt.mul(u.stepGrow));
+      // [terrain-2] 35 % shorter steps in the sun-glow region (more samples
+      // across each bright rim, less depth noise to resolve temporally)
+      const glowStep = float(1).sub(glow.mul(0.35));
+      const stepAt = (tt) => max(min(u.stepMin, max(min(u.stepNear, tt.mul(0.3).add(3)), tt.mul(0.03))), tt.mul(u.stepGrow)).mul(glowStep);
       const t = t0.add(blue.mul(stepAt(t0))).toVar();
       const T = float(1).toVar();
       const S = vec3(0).toVar();
@@ -529,14 +618,19 @@ export class Clouds {
         const h = p.y.add(t.mul(t).mul(hk)).toVar();
         const w = this._weatherAt(p).toVar();
         const { hf, hn } = this._heights(h, w);
-        If(hf.greaterThan(w.a.add(0.03)), () => {
+        // [terrain-2] the anvil shelf of storm cells (0 without a storm)
+        const an = float(0).toVar();
+        If(u.storm.greaterThan(0.01).and(hf.greaterThan(0.6)), () => { an.assign(this._anvilAt(p)); });
+        const hnA = select(an.greaterThan(0.02), min(hn, 0.99), hn);
+        const covA = max(w.r, an);
+        If(hf.greaterThan(max(w.a, an).add(0.03)), () => {
           // No cloud within skipRadius reaches this height: stride freely.
           const adv = max(max(dtBase.mul(2), this.skipRadius), t.mul(0.05));
           t.addAssign(adv);
           lastAdv.assign(adv);
           wasEmpty.assign(1);
           fineLeft.assign(0);
-        }).ElseIf(w.r.lessThan(0.015).or(hn.greaterThan(1)).or(hf.lessThan(0)), () => {
+        }).ElseIf(covA.lessThan(0.015).or(hnA.greaterThan(1)).or(hf.lessThan(0)), () => {
           const adv = select(fineLeft.greaterThan(0.5), dt, dtBase.mul(1.6));
           t.addAssign(adv);
           lastAdv.assign(adv);
@@ -548,7 +642,7 @@ export class Clouds {
           const near2 = float(1).sub(smoothstep(700, 2200, t));
           const lod = saturate(dtBase.sub(90).div(200));
           const relief = float(0).toVar();
-          const d = this._density(p, h, w, true, { interiorOut: interior, reliefOut: relief, near, near2, lod }).toVar();
+          const d = this._density(p, h, w, true, { interiorOut: interior, reliefOut: relief, near, near2, lod, glow, anvil: an }).toVar();
           const hit = d.greaterThan(0.003);
           If(hit.and(wasEmpty.greaterThan(0.5)).and(lastAdv.greaterThan(1)), () => {
             // Just crossed into cloud from empty air: the surface lies somewhere in
@@ -609,10 +703,13 @@ export class Clouds {
             // The light under a cloud comes in sideways (bright ground and haze
             // toward the horizon), so what hangs lowest catches it and the
             // recesses between do not: shade the base by its own relief.
-            const pouch = mix(float(1), clamp(relief.mul(u.baseRelief).add(0.85), 0.35, 1.35), float(1).sub(smoothstep(0.0, 0.5, hs)));
+            const pouch = mix(float(1), clamp(relief.mul(u.baseRelief).add(0.85), 0.62, 1.35), float(1).sub(smoothstep(0.0, 0.5, hs)));
             const amb = u.ambTop.mul(topVis).add(u.ambBot.mul(botVis).mul(column).mul(pouch)).mul(u.ambScale).add(u.flashColor.mul(u.flashAmb));
             // Storm cells absorb: darker bases.
-            const absorb = float(1).sub(u.storm.mul(w.b.mul(0.4).add(0.3)).mul(float(1).sub(hs.mul(0.75))));
+            // [terrain-2] a storm cell is darker still under its core (it was
+            // 0.3-0.7 at most): the base of a thunderhead in the reference
+            // photographs is slate grey against lit flanks
+            const absorb = float(1).sub(u.storm.mul(w.b.mul(0.45).add(0.35)).mul(float(1).sub(hs.mul(0.8))).mul(mix(float(0.75), float(1), w.r.div(u.covMax))));
             // Deep multiple scattering: light that has lost all direction still
             // fills the interior, more so near the top (keeps the inside of a
             // sunlit cloud bright when you fly through it).
@@ -654,22 +751,39 @@ export class Clouds {
         const ra = select(below, float(0), select(rB.valid.and(rB.hi.greaterThan(0)), max(rB.lo, 0), BIG)).toVar();
         const rb = min(min(rB.hi, sceneDist), 45000).toVar();
         If(rb.greaterThan(ra.add(50)), () => {
-          const N = 6;
-          const seg = rb.sub(ra).div(N).toVar();
+          // [terrain-2] Readable shafts: rain only under the dense, wet cores
+          // (it was any cloud over 30 % cover), denser toward the ground than
+          // just under the base (virga evaporating), slanted downwind by the
+          // drops' fall (~7 m/s), and streaked by a finer copy of the weather
+          // noise. 10 samples above the low tier (6 before), and backlit rain
+          // catches a little of the sun.
+          const N = this.low ? 6 : 10;
+          const span = rb.sub(ra).toVar(); // samples crowd toward the camera: shafts a few km away resolve
           const tauR = float(0).toVar();
           const tMid = float(0).toVar();
+          const slant = u.windShear.div(7).toVar(); // metres downwind per metre of fall
           for (let i = 0; i < N; i++) {
-            const tt = ra.add(seg.mul(blue.add(i))).toVar();
+            const fi = blue.add(i).div(N);
+            const tt = ra.add(span.mul(fi.mul(fi))).toVar();
+            const dl = span.mul(fi.mul(2).add(0.5 / N)).div(N);
             const rp = cam.add(dir.mul(tt)).toVar();
-            const rw = this._weatherAt(rp);
-            const streak = texture(this.weatherTarget.texture, rp.xz.div(WEATHER_EXTENT / 11).add(u.windWeather.mul(11)), 0).r;
-            const wet = saturate(rw.r.sub(0.3).div(0.3)).mul(rw.b.mul(0.7).add(0.3)).mul(smoothstep(0.1, 0.6, streak));
-            tauR.addAssign(wet);
-            tMid.addAssign(wet.mul(tt));
+            const fall = max(u.base.sub(rp.y), 0).toVar();
+            // where this drop left the cloud base
+            const src = rp.xz.sub(slant.mul(fall)).toVar();
+            const rw = texture(this.weatherTarget.texture, src.div(WEATHER_EXTENT).add(0.5), 0);
+            const streak = texture(this.weatherTarget.texture, src.div(WEATHER_EXTENT / 11).add(u.windWeather.mul(11)), 0).r;
+            const fine = texture(this.weatherTarget.texture, src.div(WEATHER_EXTENT / 37).add(vec2(0.37, 0.71)), 0).r;
+            const core = smoothstep(0.42, 0.72, rw.r.div(u.covMax)).mul(rw.b.mul(0.75).add(0.25));
+            const shafts = smoothstep(0.32, 0.58, streak.mul(0.65).add(fine.mul(0.35)));
+            const virga = smoothstep(0, 900, fall).mul(0.6).add(0.4);
+            const wet = core.mul(shafts).mul(virga).mul(u.rainShaft);
+            tauR.addAssign(wet.mul(dl));
+            tMid.addAssign(wet.mul(dl).mul(tt));
           }
           tMid.assign(tMid.div(max(tauR, 1e-4)));
-          const Tr = exp(tauR.mul(seg).mul(u.rain).mul(-1.2e-4)).toVar();
-          const rainCol = u.ambTop.mul(0.55).add(u.ambBot.mul(0.45)).mul(0.8).add(u.flashColor.mul(u.flashAmb));
+          const Tr = exp(tauR.mul(u.rain).mul(-4e-4)).toVar();
+          const rainSun = u.sunE.mul(u.sunScale).mul(min(hg(cosT, 0.6), 1.5)).mul(0.012);
+          const rainCol = u.ambTop.mul(0.5).add(u.ambBot.mul(0.4)).mul(0.5).add(rainSun).add(u.flashColor.mul(u.flashAmb));
           const wr = float(1).sub(Tr).toVar();
           If(below, () => {
             // rain lies in front of the cloud above it
@@ -774,7 +888,7 @@ export class Clouds {
       }
       const hasCloud = frontD.lessThan(1e5);
       frontD.assign(select(hasCloud, frontD, curAux.r));
-      const dir = this._ray(st);
+      const dir = this._ray(st).toVar();
       const world = u.camPos.add(dir.mul(frontD.mul(1000)));
       const pv = u.prevView.mul(vec4(world, 1)).toVar();
       const puv = getScreenPosition(pv.xyz, u.prevProj).toVar();
@@ -810,7 +924,11 @@ export class Clouds {
 
       // Close cloud changes fast on screen: let new samples in sooner there.
       const nearK = select(hasCloud, float(1).sub(smoothstep(1.5, 7, frontD)), float(0));
-      const bFresh = max(mix(u.blendFresh, u.blendNear, nearK), u.blendBoost);
+      // [terrain-2] toward the sun keep more history (not for near cloud,
+      // whose parallax needs the fresh samples): the bright rims there are
+      // where frame-to-frame noise and the march blocks showed most
+      const glowR = smoothstep(0.88, 0.995, dot(dir, u.sunDir)).mul(float(1).sub(nearK));
+      const bFresh = max(mix(u.blendFresh, u.blendNear, nearK).mul(float(1).sub(glowR.mul(u.glowHistory))), u.blendBoost);
       const bStale = max(u.blendStale, u.blendBoost.mul(0.6));
       const freshOut = mix(clamped, cur, select(valid, bFresh, float(1)));
       const staleOut = select(valid, mix(clamped, curLin, bStale), curLin);
@@ -984,7 +1102,18 @@ export class Clouds {
         this._quad.material = this._dilateMaterial;
         renderer.setRenderTarget(this.weatherTarget);
         this._quad.render(renderer);
+        // [terrain-2] the anvil shelf, only while there is a storm (cleared once after)
+        if (u.storm.value > 0.01 || this._anvilClear) {
+          this._anvilClear = u.storm.value > 0.01;
+          this._quad.material = this._anvilMaterial;
+          renderer.setRenderTarget(this.anvilTarget);
+          this._quad.render(renderer);
+        }
+        // anvils shear downwind
+        const wl = Math.hypot(this.wind.x, this.wind.z);
+        if (wl > 0.5) u.anvilDir.value.set(this.wind.x / wl, this.wind.z / wl);
       }
+      u.windShear.value.set(this.wind.x, this.wind.z);
       const texel = SHADOW_EXTENT / this.shadowTarget.width;
       const cx = Math.round(camera.position.x / texel) * texel;
       const cz = Math.round(camera.position.z / texel) * texel;
@@ -1019,7 +1148,7 @@ export class Clouds {
   resetHistory() { this.u.reset.value = 1; }
 
   dispose() {
-    for (const t of [this.shapeTarget, this.detailTarget, this.cirrusTarget, this.weatherRaw, this.weatherTarget, this.shadowTarget,
+    for (const t of [this.shapeTarget, this.detailTarget, this.cirrusTarget, this.weatherRaw, this.weatherTarget, this.shadowTarget, this.anvilTarget,
       this.probeTarget, this.marchTarget, ...this.history]) t.dispose();
     this.ridgeTexture.dispose();
     this.blueTexture.dispose();

@@ -215,6 +215,29 @@ export function detailHeight(x, z) {
     + DETAIL.LEDGE * smooth(DETAIL.LEDGE_LO, DETAIL.LEDGE_HI, ab) * smooth(DETAIL.LEDGE_GATE_LO, DETAIL.LEDGE_GATE_HI, c);
 }
 
+/**
+ * [terrain-2] The unit detail tile at a detail.js layer, filtered like the GPU
+ * sampler: for CPU twins of shading-only terms (snow line, see snow.js).
+ */
+export function tileLayerHeight(L, x, z) {
+  return state.tile ? tileAt(L, x, z) : 0;
+}
+
+const RAW_TILE = { cos: 1, sin: 0, size: 1, ox: 0, oz: 0 };
+/**
+ * [terrain-2] The shader's fall-line streak term (material.js, `streak`) for a
+ * ground gradient (gx, gz), near the camera (no distance fade), inside the DEM.
+ */
+export function streakAt(x, y, z, gx, gz) {
+  const g2 = gx * gx + gz * gz;
+  if (!state.tile || g2 <= 0.06) return 0;
+  const wx = gx * gx;
+  const wz = gz * gz;
+  const sx = tileAt(RAW_TILE, z / 330, y / 2500);
+  const sz = tileAt(RAW_TILE, x / 330 + 0.37, y / 2500 + 0.5);
+  return ((sx * wx + sz * wz) / (wx + wz)) * smooth(0.06, 0.3, g2);
+}
+
 /** Procedural mountains beyond all measured terrain. */
 function surround(x, z) {
   if (!state.tile) return SURROUND.BASE;

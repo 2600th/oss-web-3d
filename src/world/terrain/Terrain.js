@@ -1,11 +1,11 @@
 import * as THREE from 'three/webgpu';
-import { Fn, vec3, vec4, float, uniform, positionLocal, positionWorld, max, abs, clamp, fract, uv } from 'three/tsl';
+import { Fn, vec3, vec4, float, uniform, uniformArray, texture, varyingProperty, positionLocal, positionWorld, max, abs, clamp, fract, uv } from 'three/tsl';
 import { DEM, terrainHeight, waterHeight, riverEdge } from './heightfield.js';
 import { AMP_MAX, SURROUND } from './detail.js';
-import { buildTerrainTextures } from './textures.js';
+import { buildTerrainTextures, fillGround } from './textures.js';
 import { makeTerrainNodes } from './nodes.js';
 import { TerrainLayers } from './layers.js';
-import { buildTerrainMaterial, applyShadowHooks } from './material.js';
+import { buildTerrainMaterial, applyShadowHooks, SCORCH_MAX } from './material.js';
 import { ShadowSweep } from './shadowSweep.js';
 
 /**
@@ -60,6 +60,13 @@ export const VIEW_LAYER = 1;
 export const SHADOW_LAYER = 2;
 const VIEW_MASK = 1 << VIEW_LAYER;
 const SHADOW_MASK = 1 << SHADOW_LAYER;
+// [terrain-2] AO texture until the post chain's GTAO is bound: rg = (1, 1)
+// means "ao 1 at distance -1", which never matches a surface (see material.js).
+const AO_PLACEHOLDER = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([255, 255, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.needsUpdate = true;
+  return t;
+})();
 
 export class Terrain {
   /**
@@ -96,7 +103,10 @@ export class Terrain {
     const release = (tex, ready = () => true) => {
       tex.onUpdate = () => { if (ready() && tex.image?.data) tex.image.data = null; };
     };
-    for (const k of ['height', 'outer', 'amp', 'tile', 'surf', 'river', 'outerSurf']) if (this.textures[k]) release(this.textures[k]);
+    for (const k of ['height', 'outer', 'amp', 'tile', 'outerSurf']) if (this.textures[k]) release(this.textures[k]);
+    // [terrain-2] the land array keeps its CPU copy until the ground layer is in
+    this._groundReady = false;
+    release(this.textures.land, () => this._groundReady);
     release(this.layers.albedo, () => this.layers.loaded);
     release(this.layers.nrm, () => this.layers.loaded);
     this.shadow = new ShadowSweep(DEM);
@@ -116,7 +126,19 @@ export class Terrain {
       shadowOn: uniform(1),
       shadowCamPos: uniform(new THREE.Vector3()),
       shadowRange: uniform(new THREE.Vector2(-1e9, 1e9)), // near, far of the sun shadow camera along the light
+      // [terrain-2] screen-space GTAO from the post chain (bindNearAO); a 1x1
+      // placeholder that never matches a surface until then
+      aoTex: texture(AO_PLACEHOLDER),
+      aoStrength: uniform(0),
+      /** 0..1: the heightfield near-field AO (ground layer R). */
+      nearAO: uniform(1),
+      /** Scorch marks (x, z, radius, strength); see setScorches. */
+      scorch: uniformArray(Array.from({ length: SCORCH_MAX }, () => new THREE.Vector4()), 'vec4'),
+      scorchCount: uniform(0, 'int'),
     };
+    // [terrain-2] the displacement amplitude reaches the fragment stage as a
+    // varying (one sampled texture fewer there)
+    this._vAmp = varyingProperty('float', 'terrainAmp');
     /** Per-object level data: (centre x, centre z, cell size, unused). */
     this._level = uniform(new THREE.Vector4()).onObjectUpdate(({ object }, self) => {
       const v = object.userData.level;
@@ -124,7 +146,7 @@ export class Terrain {
     });
 
     this.material = buildTerrainMaterial({
-      DEM, tex: this.textures, nodes: this.nodes, layers: this.layers, uniforms: this.uniforms, quality: this.tier,
+      DEM, tex: this.textures, nodes: { ...this.nodes, ampFrag: this._vAmp }, layers: this.layers, uniforms: this.uniforms, quality: this.tier,
     });
     this.material.positionNode = this._positionNode();
     this._shadowNode = applyShadowHooks(this.material, env, this.uniforms);
@@ -136,6 +158,8 @@ export class Terrain {
 
     /** Resolves when the PBR layer textures are in (the terrain renders flat-coloured until then). */
     this.ready = this.layers.load().catch((e) => { console.warn('[terrain] layer textures failed to load', e); });
+    /** [terrain-2] Resolves when the ground layer (near AO, fans, moisture, fields) is in. */
+    this.groundReady = this._buildGround();
 
     this._frustum = new THREE.Frustum();
     this._pv = new THREE.Matrix4();
@@ -154,7 +178,8 @@ export class Terrain {
     const start = N / 2 - W - 2; // alpha reaches 1 at N/2 - 2 cells: the border, whatever the snap phase
     const u = this.uniforms;
     const lvl = this._level;
-    const heightAt = this.nodes.heightAt;
+    const { heightAt, ampAt, innerWeight } = this.nodes;
+    const vAmp = this._vAmp;
     return Fn(() => {
       const g = positionLocal.xz; // integer grid coordinates in the level
       const cell = lvl.z;
@@ -163,6 +188,7 @@ export class Terrain {
       const alpha = clamp(d.sub(start).div(W), 0, 1);
       const odd = fract(g.mul(0.5)).mul(2); // 1 on odd lattice lines
       const wm = g.sub(odd.mul(alpha)).mul(cell).add(lvl.xy);
+      vAmp.assign(ampAt(wm, innerWeight(wm)));
       return vec3(wm.x, heightAt(wm), wm.y);
     })();
   }
@@ -407,6 +433,80 @@ export class Terrain {
     if (env?.sun?.color) u.sunColor.value.copy(env.sun.color);
     if (env?.ambient?.color) u.skyColor.value.copy(env.ambient.color).multiplyScalar(env.ambient.intensity ?? 1);
     u.skyReflect.value = this._scene?.environment ? 0 : 1;
+  }
+
+  /**
+   * [terrain-2] Build the ground-data layer (groundData.js) in a worker and
+   * upload it into the `land` array. Until then the layer is neutral (open
+   * sky, no fans, dry, no fields). Without workers (node tests) it is skipped.
+   */
+  _buildGround() {
+    if (typeof Worker === 'undefined' || !DEM.ready || !DEM.data) { this._groundReady = true; return Promise.resolve(false); }
+    return new Promise((resolve) => {
+      let worker;
+      try {
+        worker = new Worker(new URL('./groundWorker.js', import.meta.url), { type: 'module' });
+      } catch (e) {
+        console.warn('[terrain] ground worker unavailable', e);
+        this._groundReady = true;
+        resolve(false);
+        return;
+      }
+      worker.onmessage = (e) => {
+        worker.terminate();
+        this._groundReady = true;
+        const ok = fillGround(this.textures.land, e.data.data);
+        this.stats.groundMs = Math.round(e.data.ms);
+        resolve(ok);
+      };
+      worker.onerror = (e) => {
+        console.warn('[terrain] ground worker failed', e.message ?? e);
+        worker.terminate();
+        this._groundReady = true;
+        this.textures.land.needsUpdate = true; // lets the CPU copy go
+        resolve(false);
+      };
+      const drain = DEM.planes?.drain;
+      worker.postMessage({
+        H: DEM.data, n: DEM.res, cellX: DEM.cellX, cellZ: DEM.cellZ,
+        river: DEM.river, riverMin: DEM.riverMin, riverStep: DEM.riverStep,
+        drain: drain?.data ?? null, drainMin: DEM.meta?.drain?.log10Min, drainMax: DEM.meta?.drain?.log10Max,
+      });
+    });
+  }
+
+  /**
+   * [terrain-2] Hand the terrain the post chain's near-field AO (`post.ao`, a
+   * NearFieldAO, or null). Cheap to call every frame: it only swaps the
+   * texture when it changed and copies the intensity. The terrain samples it
+   * itself because the scene-pass AO context skips `terrainLit` materials.
+   */
+  bindNearAO(ao) {
+    const t = ao && ao.enabled !== false ? ao.gtao?._aoRenderTarget?.texture ?? null : null;
+    const u = this.uniforms;
+    const want = t ?? AO_PLACEHOLDER;
+    if (u.aoTex.value !== want) u.aoTex.value = want;
+    u.aoStrength.value = t ? (ao.u?.intensity?.value ?? 1) : 0;
+  }
+
+  /**
+   * [terrain-2] Burn rings at impact sites. `items`: iterable of
+   * { x, z, radius, age } (age in seconds), oldest first. Strength fades from
+   * 1 to 0 over `life` seconds; the newest SCORCH_MAX live ones are kept.
+   */
+  setScorches(items, { life = 600 } = {}) {
+    const arr = this.uniforms.scorch.array;
+    let n = 0;
+    const list = items ? Array.from(items) : [];
+    for (let i = list.length - 1; i >= 0 && n < SCORCH_MAX; i--) {
+      const s = list[i];
+      const k = 1 - Math.min(1, Math.max(0, (s.age ?? 0) / life));
+      if (!(k > 0) || !(s.radius > 0)) continue;
+      arr[n++].set(s.x, s.z, s.radius, k);
+    }
+    for (let i = n; i < SCORCH_MAX; i++) arr[i].set(0, 0, 0, 0);
+    this.uniforms.scorchCount.value = n;
+    return n;
   }
 
   addTo(scene) {

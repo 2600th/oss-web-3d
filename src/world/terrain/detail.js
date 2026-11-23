@@ -36,6 +36,8 @@ export const DETAIL = {
   /** Shading-only layer (too small to displace; it only bends the normal). */
   D: layer(47, 0.9, 0.13, 0.57),
   D_GAIN: 0.07,
+  /** [terrain-2] Shading-only: breaks the snow line into patches (snow.js PATCH). */
+  SNOW_PATCH: layer(97, 0.4, 0.27, 0.81),
 };
 
 /** Metres of displacement at amp byte 255. */
