@@ -27,6 +27,29 @@ def _rrect(hw, y0, y1, z, c):
             (-hw, y1 - c, z), (-hw, y0 + c, z)]
 
 
+def _rr(hw, y0, y1, z, r, n=3):
+    """Rounded rectangle (plan), counter-clockwise from the rear left: the
+    corners are arcs of n segments, so the cab reads as pressed steel with
+    radiused corners that catch the light, not as a folded box."""
+    out = []
+    for cx, cy, a0 in ((hw - r, y0 + r, -90), (hw - r, y1 - r, 0), (-hw + r, y1 - r, 90), (-hw + r, y0 + r, 180)):
+        for k in range(n + 1):
+            a = math.radians(a0 + 90 * k / n)
+            out.append((cx + r * math.cos(a), cy + r * math.sin(a), z))
+    return out
+
+
+def bolt(p, loc, rot=(0, 0, 0), r=0.013, m=None):
+    """Hex bolt head / rivet (LOD0 only)."""
+    d = p.detail
+    p.detail = 1
+    p.cyl(r, 0.010, m or mat('steel'), loc=loc, rot=rot, seg=6)
+    p.detail = d
+
+
+PAINT = dict(dirt=0.6, mud=0.8)      # body colour: dust from the sills up, mud thrown over the lower panels
+
+
 def _chassis(p, burnt, missing=()):
     st = mat('steel', mud=0.85)
     # ladder frame: two channel rails and cross-members
@@ -44,7 +67,13 @@ def _chassis(p, burnt, missing=()):
             state = None
             if burnt:
                 state = 'flat' if (i, s) == (0, -1) else 'burnt'
-            wheel(p, R_TYRE, W_TYRE, (s * TRACK, y, R_TYRE), hub='olive', axis='x', seg=18, outer=s, mud=0.6, state=state)
+            wheel(p, R_TYRE, W_TYRE, (s * TRACK, y, R_TYRE), hub='olive', axis='x', seg=20, outer=s, mud=0.6, state=state)
+            hx = s * (TRACK + 0.105)
+            p.cyl(0.105, 0.11, mat('olive', dirt=0.6, mud=0.5), loc=(hx, y, R_TYRE), rot=(0, 90, 0), seg=12, bevel=0.012)
+            p.cyl(0.045, 0.05, st, loc=(hx + s * 0.06, y, R_TYRE), rot=(0, 90, 0), seg=8)
+            for k in range(8):
+                a = math.radians(22.5 + 45 * k)
+                bolt(p, (hx + s * 0.058, y + 0.078 * math.cos(a), R_TYRE + 0.078 * math.sin(a)), rot=(0, 90, 0), r=0.012, m=st)
     # front suspension: leaf packs and dampers
     for s in (1, -1):
         leaf_spring(p, s * 0.42, AXLES[0], 0.74, 1.35, st, up=1)
@@ -68,7 +97,14 @@ def _chassis(p, burnt, missing=()):
     p.detail = 0
     p.box((0.50, 1.25, 0.42), st, loc=(0, 2.35, 0.98), skip=('+z',))
     # front bumper on its horns, guards, tow hooks
-    p.box((2.40, 0.11, 0.22), st, loc=(0, 3.745, 0.90))
+    p.box((2.42, 0.035, 0.25), st, loc=(0, 3.795, 0.90), bevel=0.008)
+    for z in (1.012, 0.788):
+        p.box((2.42, 0.15, 0.03), st, loc=(0, 3.735, z), bevel=0.006)
+    for s in (1, -1):
+        p.box((0.03, 0.15, 0.25), st, loc=(s * 1.20, 3.735, 0.90))
+        for x in (0.34, 0.50, 1.05):
+            for z in (0.84, 0.96):
+                bolt(p, (s * x, 3.815, z), rot=(-90, 0, 0), m=st)
     for s in (1, -1):
         p.box((0.10, 0.34, 0.14), st, loc=(s * 0.42, 3.60, 0.98), skip=('-y',))
         p.detail = 1
@@ -88,13 +124,13 @@ def _chassis(p, burnt, missing=()):
     p.tube([(0.74, 1.05, 0.80), (0.95, 0.90, 0.82), (1.12, 0.85, 1.05), (1.12, 0.85, 2.62)], 0.05, st, seg=7)
     p.cyl(0.072, 0.50, mat('gunmetal'), loc=(1.12, 0.85, 2.30), seg=8, cap=False)  # perforated heat shield
     # left: fuel tank on two straps; right: battery box and air reservoirs
-    p.cyl(0.29, 1.05, mat('olive', mud=0.6), loc=(-0.90, 0.28, 0.93), rot=(-90, 0, 0), seg=14, bevel=0.03)
+    p.cyl(0.29, 1.05, mat('olive', **PAINT), loc=(-0.90, 0.28, 0.93), rot=(-90, 0, 0), seg=14, bevel=0.03)
     p.detail = 1
     for y in (0.0, 0.56):
         p.cyl(0.298, 0.05, st, loc=(-0.90, y, 0.93), rot=(-90, 0, 0), seg=14, cap=False)
     p.cyl(0.05, 0.07, st, loc=(-1.02, 0.55, 1.20), rot=(0, -25, 0), seg=8)  # filler
     p.detail = 0
-    p.box((0.42, 0.56, 0.36), mat('olive', mud=0.6), loc=(0.92, 0.28, 0.96))
+    p.box((0.42, 0.56, 0.36), mat('olive', **PAINT), loc=(0.92, 0.28, 0.96), bevel=0.015)
     p.detail = 1
     p.box((0.44, 0.58, 0.03), st, loc=(0.92, 0.28, 1.15))
     p.cyl(0.095, 0.62, st, loc=(0.90, 0.28, 0.68), rot=(-90, 0, 0), seg=8)   # air reservoir
@@ -102,18 +138,22 @@ def _chassis(p, burnt, missing=()):
 
 
 def _cab(p, doors, burnt):
-    paint = mat('olive', mud=0.55)
+    paint = mat('olive', **PAINT)
     glass = mat('black') if burnt else mat('glass')
     gasket = mat('rubber', dirt=0.1)
     st = mat('steel', mud=0.5)
-    # shell: floor to belt, a crease, tumblehome to a crowned roof
+    # shell: sill, floor to belt, a pressed belt crease, tumblehome, and a roof that rolls over in three steps
     secs = [
-        _rrect(1.03, 0.80, 2.30, 1.20, 0.06),
-        _rrect(1.03, 0.80, 2.30, 2.00, 0.06),
-        _rrect(1.02, 0.81, 2.29, 2.04, 0.06),
-        _rrect(0.95, 0.86, 2.10, 2.58, 0.08),
-        _rrect(0.88, 0.94, 2.02, 2.685, 0.11),
-        _rrect(0.70, 1.10, 1.86, 2.72, 0.14),
+        _rr(1.01, 0.82, 2.28, 1.17, 0.09),
+        _rr(1.03, 0.80, 2.30, 1.22, 0.10),
+        _rr(1.03, 0.80, 2.30, 1.98, 0.10),
+        _rr(1.045, 0.79, 2.31, 2.01, 0.10),
+        _rr(1.02, 0.81, 2.29, 2.05, 0.10),
+        _rr(0.95, 0.86, 2.10, 2.56, 0.12),
+        _rr(0.93, 0.88, 2.075, 2.635, 0.14),
+        _rr(0.885, 0.925, 2.03, 2.688, 0.17),
+        _rr(0.79, 1.01, 1.945, 2.718, 0.21),
+        _rr(0.60, 1.16, 1.80, 2.730, 0.24),
     ]
     p.loft(secs, paint, smooth=True)
     # roof drip rail
@@ -126,16 +166,28 @@ def _cab(p, doors, burnt):
     nrm = V((0, math.cos(rake * D2R), math.sin(rake * D2R)))
     c = V((0, 2.195, 2.31))
     for s in (1, -1):
-        p.box((0.82, 0.012, 0.47), gasket, loc=tuple(c + V((s * 0.43, 0, 0)) + nrm * 0.004), rot=(rake, 0, 0), skip=('-y',))
-        p.box((0.76, 0.012, 0.41), glass, loc=tuple(c + V((s * 0.43, 0, 0)) + nrm * 0.010), rot=(rake, 0, 0), skip=('-y',))
+        p.box((0.78, 0.012, 0.47), gasket, loc=tuple(c + V((s * 0.415, 0, 0)) + nrm * 0.004), rot=(rake, 0, 0), skip=('-y',))
+        p.box((0.72, 0.012, 0.41), glass, loc=tuple(c + V((s * 0.415, 0, 0)) + nrm * 0.010), rot=(rake, 0, 0), skip=('-y',))
         if not burnt:
             p.detail = 1
             p.box((0.016, 0.012, 0.34), mat('black'), loc=tuple(c + V((s * 0.43 - 0.10, -0.045, -0.13)) + nrm * 0.022), rot=(rake, 62, 0))
             p.detail = 0
+    # windscreen frame: a pressed surround standing proud of the glass, centre pillar, corner screws
+    up = V((0, -math.sin(rake * D2R), math.cos(rake * D2R)))
+    for sg in (1, -1):
+        p.box((1.72, 0.05, 0.045), paint, loc=tuple(c + up * (sg * 0.262) + nrm * 0.018), rot=(rake, 0, 0), bevel=0.01)
+        p.box((0.045, 0.05, 0.57), paint, loc=tuple(c + V((sg * 0.84, 0, 0)) + nrm * 0.018), rot=(rake, 0, 0), bevel=0.01)
+        for sx in (1, -1):
+            bolt(p, tuple(c + V((sx * 0.84, 0, 0)) + up * (sg * 0.262) + nrm * 0.046), rot=(rake - 90, 0, 0), r=0.010, m=st)
+    p.box((0.055, 0.055, 0.50), paint, loc=tuple(c + nrm * 0.020), rot=(rake, 0, 0), bevel=0.01)
+    # cowl vent under the screen
+    p.detail = 1
+    p.box((0.50, 0.03, 0.05), st, loc=tuple(c - up * 0.34 + nrm * 0.012), rot=(rake, 0, 0))
+    p.detail = 0
     # side and rear glazing
     lean = math.degrees(math.atan2(0.07, 0.54))
     for s in (1, -1):
-        for (y, w, h) in ((1.70, 0.82, 0.40), (1.02, 0.22, 0.36)):
+        for (y, w, h) in ((1.68, 0.78, 0.40), (1.06, 0.20, 0.36)):
             p.box((0.012, w + 0.06, h + 0.06), gasket, loc=(s * 0.989, y, 2.31), rot=(0, -s * lean, 0), skip=('-x' if s > 0 else '+x',))
             p.box((0.012, w, h), glass, loc=(s * 0.995, y, 2.31), rot=(0, -s * lean, 0), skip=('-x' if s > 0 else '+x',))
     back = math.degrees(math.atan2(0.05, 0.54))
@@ -144,12 +196,21 @@ def _cab(p, doors, burnt):
     # doors: a proud skin with handle and hinges (separate parts so the wreck can open one)
     for s in (1, -1):
         d = Part()
-        d.box((0.018, 1.04, 0.76), paint, loc=(s * 1.036, 1.70, 1.62), skip=('-x' if s > 0 else '+x',))
+        inner = '-x' if s > 0 else '+x'
+        # shut line: a dark gap all round, then the door skin standing proud with radiused edges
+        d.box((0.010, 1.10, 0.84), mat('black'), loc=(s * 1.033, 1.66, 1.61), skip=(inner,))
+        d.box((0.030, 1.05, 0.79), paint, loc=(s * 1.043, 1.66, 1.61), skip=(inner,), bevel=0.012)
+        d.box((0.012, 0.99, 0.035), paint, loc=(s * 1.060, 1.66, 1.50), skip=(inner,), bevel=0.006)   # pressed swage
+        # handle in a dished recess, and the lock
+        d.box((0.006, 0.19, 0.075), mat('black'), loc=(s * 1.059, 1.27, 1.86), skip=(inner,))
+        d.box((0.022, 0.15, 0.022), st, loc=(s * 1.072, 1.27, 1.865), bevel=0.005)
         d.detail = 1
-        d.box((0.022, 0.13, 0.03), st, loc=(s * 1.052, 1.30, 1.90))
-        for z in (1.40, 1.86):
-            d.box((0.03, 0.05, 0.09), paint, loc=(s * 1.045, 2.225, z))
+        d.cyl(0.013, 0.01, st, loc=(s * 1.062, 1.27, 1.80), rot=(0, 90, 0), seg=6)
         d.detail = 0
+        # two barrel hinges on the front edge
+        for z in (1.36, 1.86):
+            d.cyl(0.020, 0.11, st, loc=(s * 1.058, 2.195, z), seg=8)
+            d.box((0.012, 0.09, 0.07), paint, loc=(s * 1.060, 2.14, z))
         doors.append((s, d))
     # steps under each door, hung from the cab
     for s in (1, -1):
@@ -171,26 +232,47 @@ def _cab(p, doors, burnt):
         p.box((0.05, 0.62, 0.016), paint, loc=(s * 0.34, 1.48, 2.722))
     p.box((0.07, 0.10, 0.06), st, loc=(0, 1.92, 2.735))
     p.detail = 0
-    p.cyl(0.26, 0.035, paint, loc=(0, 1.42, 2.728), seg=12)
+    p.cyl(0.25, 0.045, paint, loc=(0, 1.42, 2.738), seg=16)
+    p.torus(0.255, 0.020, paint, loc=(0, 1.42, 2.742), seg=16, rseg=5)
+    p.cyl(0.215, 0.012, paint, loc=(0, 1.42, 2.768), seg=16)
+    p.box((0.16, 0.05, 0.03), st, loc=(0, 1.16, 2.752))
+    p.detail = 1
+    p.box((0.10, 0.02, 0.03), st, loc=(0, 1.60, 2.785))
+    for k in range(6):
+        a = math.radians(30 + 60 * k)
+        bolt(p, (0.235 * math.cos(a), 1.42 + 0.235 * math.sin(a), 2.764), r=0.009, m=st)
+    p.detail = 0
     # air intake stack with a mushroom cap, right front corner
     p.cyl(0.055, 0.86, paint, loc=(0.985, 2.38, 2.28), seg=8)
     p.cyl(0.10, 0.09, paint, loc=(0.985, 2.38, 2.74), seg=10, r2=0.05)
 
 
 def _nose(p, hood, burnt):
-    paint = mat('olive', mud=0.55)
+    paint = mat('olive', **PAINT)
+    wing = mat('olive', dirt=0.7, mud=1.0)
     st = mat('steel', mud=0.6)
     blk = mat('black')
 
-    def sec(y, w, zt, c=0.11, zb=1.18):
-        return [(-w, y, zb), (w, y, zb), (w, y, zt - c), (w - c, y, zt), (-w + c, y, zt), (-w, y, zt - c)]
+    def sec(y, w, zt, c=0.13, zb=1.18, peak=0.035):
+        """Bonnet section: rolled shoulders and a raised centre crease."""
+        pts = [(-w, y, zb), (w, y, zb), (w, y, zt - c)]
+        for a in (30, 60):
+            pts.append((w - c + c * math.cos(a * D2R), y, zt - c + c * math.sin(a * D2R)))
+        pts += [(w - c, y, zt), (0.045, y, zt + peak * 0.8), (0.0, y, zt + peak), (-0.045, y, zt + peak * 0.8), (-w + c, y, zt)]
+        for a in (60, 30):
+            pts.append((-w + c - c * math.cos(a * D2R), y, zt - c + c * math.sin(a * D2R)))
+        pts.append((-w, y, zt - c))
+        return pts
     # bonnet: tapers and drops toward the radiator
-    hood.loft([sec(2.30, 0.80, 1.96), sec(3.00, 0.75, 1.91), sec(3.50, 0.69, 1.83), sec(3.585, 0.65, 1.77, 0.13)], paint, smooth=True)
+    hood.loft([sec(2.30, 0.80, 1.96), sec(2.65, 0.78, 1.945), sec(3.00, 0.75, 1.91), sec(3.36, 0.71, 1.86), sec(3.52, 0.685, 1.82, 0.14),
+               sec(3.585, 0.65, 1.76, 0.15, peak=0.02)], paint, smooth=True)
     hood.detail = 1
     hood.box((0.035, 1.24, 0.012), paint, loc=(0, 2.93, 1.925), rot=(-5.5, 0, 0))   # centre hinge
     for s in (1, -1):
-        for k in range(5):  # side louvres
-            hood.box((0.014, 0.05, 0.24), paint, loc=(s * (0.775 - k * 0.011), 2.56 + k * 0.115, 1.55), rot=(0, 0, s * -4))
+        for k in range(7):  # side louvres: pressed slats standing out of the panel, raked back
+            hood.box((0.030, 0.045, 0.26), paint, loc=(s * (0.792 - k * 0.0095), 2.50 + k * 0.095, 1.55), rot=(0, 0, s * -28), bevel=0.006)
+        for k in range(6):  # panel rivets along the bonnet side
+            bolt(hood, (s * (0.795 - k * 0.019), 2.42 + k * 0.20, 1.30), rot=(0, 90, 0), r=0.010, m=st)
         hood.box((0.03, 0.07, 0.05), st, loc=(s * 0.74, 3.25, 1.40))             # bonnet catch
     hood.detail = 0
     if burnt:
@@ -216,20 +298,32 @@ def _nose(p, hood, burnt):
         p.torus(0.10, 0.012, st, loc=(s * 0.875, 3.67, 1.50), rot=(90, 0, 0), seg=10, rseg=4)  # lamp guard
         p.detail = 0
         # wing: flat-topped, angular, turned-down outer edge
-        prof = [(3.50, 1.04), (3.31, 1.36), (2.96, 1.455), (2.18, 1.455), (1.93, 1.24), (1.90, 0.98)]
-        grid = [[(s * 0.63, y, z) for (y, z) in prof], [(s * 1.20, y, z) for (y, z) in prof],
-                [(s * 1.225, y, z - 0.07) for (y, z) in prof]]
-        p.sheet(grid, paint, thick=0.03, smooth=False, away=(None, AXLES[0], R_TYRE))
+        # wing: a pressed arch over the wheel with a crowned top, a rolled outer lip and a front valance
+        prof = []
+        for k in range(11):
+            a = math.radians(20 + 126 * k / 10)
+            prof.append((2.60 + 0.93 * math.cos(a), 0.60 + 0.87 * math.sin(a) ** 0.8))
+
+        def inward(y, z, d):
+            dy, dz = y - 2.60, z - 0.60
+            n = math.hypot(dy, dz)
+            return (y - dy / n * d, z - dz / n * d)
+        grid = [[(s * 0.63, y, z - 0.012) for (y, z) in prof],
+                [(s * 0.92, y, z + 0.012) for (y, z) in prof],
+                [(s * 1.185, y, z - 0.008) for (y, z) in prof],
+                [(s * 1.232, *inward(y, z, 0.030)) for (y, z) in prof],
+                [(s * 1.240, *inward(y, z, 0.085)) for (y, z) in prof]]
+        p.sheet(grid, wing, thick=0.03, smooth=True, rim=True)
         p.detail = 1
         p.box((0.05, 0.06, 0.30), st, loc=(s * 0.66, 2.10, 1.28))   # wing stay
         p.detail = 0
 
 
 def _bed(p, tail, burnt, r_):
-    wood = mat('olive', mud=0.5, kind='paintwood')
+    wood = mat('olive', dirt=0.6, mud=0.7, kind='paintwood')
     floor = mat('timber', dirt=0.6)
     st = mat('steel', mud=0.6)
-    paint = mat('olive', mud=0.5)
+    paint = mat('olive', **PAINT)
     L = BED_Y0 - BED_Y1
     yc = (BED_Y0 + BED_Y1) / 2
     p.box((BED_HW * 2, L, 0.07), floor, loc=(0, yc, BED_Z - 0.035))
@@ -268,7 +362,7 @@ def _bed(p, tail, burnt, r_):
         p.box((0.16, 0.05, 0.10), mat('black') if burnt else mat('lens_red', dirt=0.4), loc=(s * 1.02, BED_Y1 + 0.03, 1.30))
         if not burnt:
             p.sheet([[(s * 0.78, -3.12, 1.38), (s * 1.24, -3.12, 1.38)], [(s * 0.78, -3.16, 0.86), (s * 1.24, -3.16, 0.86)]],
-                    mat('rubber', mud=0.9), thick=0.012, smooth=False)
+                    mat('rubber', mud=0.9), thick=0.02, smooth=False, rim=True)
 
 
 def _tilt(p, r_):
@@ -306,7 +400,7 @@ def _tilt(p, r_):
             flare = 0.02 * lowness                # the hem stands off the boards
             row.append((x - nx * d + (1 if x > 0 else -1) * flare, y, z - nz * d))
         grid.append(row)
-    p.sheet(grid, canvas, smooth=True, away=(0.0, None, BED_Z + 0.75))
+    p.sheet(grid, canvas, thick=0.028, smooth=True, rim=True)   # a real hem: the canvas has thickness seen edge-on
     for j, sgn in ((0, 1), (nrings - 1, -1)):   # end walls, billowed a little
         y = grid[j][0][1]
         p.fan(grid[j], (0.0, y + sgn * 0.05, (z_hem + z_eave + rise) / 2), canvas, away=(0.0, y - sgn, BED_Z + 0.9))
@@ -354,7 +448,7 @@ def _bows(p, r_, burnt):
                      for j in range(3)] for i in range(4)]
             if k == 3:
                 grid = [[(-x, yy, zz) for (x, yy, zz) in row][::-1] for row in grid]
-            p.sheet(grid, mat('canvas_dark'), thick=0.012, smooth=True)
+            p.sheet(grid, mat('canvas_dark'), thick=0.02, smooth=True, rim=True)
 
 
 def _cargo(p, r_):
@@ -385,6 +479,8 @@ def truck(covered=False, destroyed=False):
               (', burnt out: tyres gone, bare tilt bows' if destroyed else (' with canvas tilt' if covered else ', open bed with cargo')) +
               '. One mesh node `body`; socket `exhaust` at the stack.')
     A.ground_plane()
+    bleach = kit.KINDS['paint']['bleach']
+    kit.KINDS['paint']['bleach'] = 0.20
     r_ = rng(41 if destroyed else 7)
     p, hood, tail = Part(), Part(), Part()
     doors = []
@@ -422,6 +518,7 @@ def truck(covered=False, destroyed=False):
         # down on its rims, slewed, nose in the dirt on the side with the wheel gone
         p.transform(M((0, 0, -0.165)) @ M(rot=(1.6, 3.2, 0)))
     A.mesh('body', p)
+    kit.KINDS['paint']['bleach'] = bleach
     A.socket('exhaust', (1.12, 0.85, 2.65))
     if destroyed:
         debris(A, seed=41, n=14, radius=4.5)
