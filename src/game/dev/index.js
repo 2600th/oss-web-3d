@@ -8,6 +8,8 @@
 //   window.__bot(true|false|'god'), window.__game.dev
 import { Bot } from './Bot.js';
 import { terrainHeight } from '../../world/terrain/heightfield.js';
+import { CLOUD } from '../../ai/brain.js';
+import { ROUGH_AIR } from '../../ai/Fighter.js';
 
 const fmt = (n, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : '--');
 const clock = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '--:--');
@@ -15,6 +17,9 @@ const clock = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.
 export function install(game) {
   const q = new URLSearchParams(location.search);
   const dev = { bot: null, overlay: null };
+  // Live AI tuning tables (the same module instances the game uses, so an
+  // A/B run can switch a behaviour off without a reload): dev.tuning.CLOUD.lock = 1.
+  dev.tuning = { CLOUD, ROUGH_AIR };
 
   dev.setBot = (on) => {
     if (on) {

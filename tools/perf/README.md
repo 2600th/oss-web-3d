@@ -45,6 +45,7 @@ DevTools snippet. Results and the latest numbers are in
 | `ab.js` | A/B cost of one scene component at a time (hide, measure, restore) from the GPU total. Use for things inside the main scene pass, and on WebGL2 |
 | `imgdiff.mjs` | pixel diff of two screenshots, to show a perf change is invisible |
 | `sortie.js` | flies a full mission with the dev bot (invulnerable) plus assisted kills, until the debrief. Used for the WebGL2 runs. The dev bot alone loops `weapon:switch` and never finishes a strike phase |
+| `balance.js` + `balance-table.mjs` | difficulty measurement: batches of real bot sorties (`dev.run`, damage on, headless stepping) with per-run telemetry (kills by time, health by phase, minimum health, top-ups, first night contact, escaped trucks); the table script prints win rate, time, damage, failures and phase timing. Used for `docs/v2/evidence/polish-balance/` |
 | `cycles.js` | N x (sortie, debrief, retry) then quit to menu. Records heap, `renderer.info.memory`, scene size, listeners and VFX counts per step in `window.__cycleRows` |
 | `heapsummary.mjs`, `heapbuffers.mjs` | `.heapsnapshot` analysis: largest groups; largest ArrayBuffers with retainer chains (`DEPTH=` env) |
 | `loadprobe.js` + `loadreport.js` | cold-load milestones and bytes by type. Pass the probe as `navigate_page({ initScript })`, then run the report. Boot stage marks are in `window.__boot` |
