@@ -154,17 +154,51 @@ export class UI {
     this.show(this.settings.memorialSeen ? 'title' : 'memorial');
   }
 
+  /**
+   * Keep the boot loader up until the world is really on screen:
+   * terrain pack (main.js, before systems) -> ground textures
+   * (`game.terrain.ready`) -> pipelines compiled on the first frames that
+   * draw them. Pipeline compilation stalls the frame loop, so "first good
+   * frame" = after textures are in, three consecutive frames under 100 ms
+   * apart. A 15 s cap after textures keeps a slow GPU from hanging here.
+   * Called from lateUpdate, which runs inside every animation frame.
+   */
+  _bootTick() {
+    const boot = globalThis.__ssBoot;
+    const now = performance.now();
+    if (!this._bootT) {
+      this._bootT = { ready: false, readyAt: 0, last: now, good: 0, frames: 0 };
+      const ready = this.game.terrain?.ready;
+      Promise.resolve(ready).then(() => {
+        this._bootT.ready = true;
+        this._bootT.readyAt = performance.now();
+        boot?.set('textures', 1);
+      });
+    }
+    const b = this._bootT;
+    const gap = now - b.last;
+    b.last = now;
+    if (!b.ready) {
+      boot?.set('shaders', 0);
+      return;
+    }
+    b.frames++;
+    b.good = gap < 100 ? b.good + 1 : 0;
+    // creeps while frames compile, completes on the steady run
+    boot?.set('shaders', Math.min(0.9, b.frames / 12) + (b.good / 3) * 0.1);
+    if (b.good >= 3 || now - b.readyAt > 15000) {
+      boot?.set('shaders', 1);
+      this._bootDone();
+    }
+  }
+
   update(dt) {
     if (this.mock && this.screen === 'sortie') this.mock.update(dt);
   }
 
   lateUpdate(dt) {
     this._t += dt;
-    if (!this._booted) {
-      this._frames = (this._frames ?? 0) + 1;
-      globalThis.__ssBoot?.set('shaders', Math.min(1, this._frames / 3));
-      if (this._frames >= 3) this._bootDone();
-    }
+    if (!this._booted) this._bootTick();
     if (MENU_SCREENS.has(this.screen) || this.screen === 'boot') this._titleCamera(dt);
     // HUD animation runs on wall-clock time: slow motion, a kill cam or a
     // frozen sim (timeScale 0) must not stall callouts, fades and blinks.

@@ -83,7 +83,7 @@ export function reliefColor(h, shade, minH = 2479, maxH = 5947) {
  * cartographic convention) so ridges read the way a pilot expects on a chart.
  * Contour lines every `contour` metres are darkened.
  */
-export function bakeRelief(sample, bounds, size, { contour = 500, minH, maxH } = {}) {
+export function bakeRelief(sample, bounds, size, { contour = 500, minH, maxH, water = null } = {}) {
   const px = new Uint8ClampedArray(size * size * 4);
   const { minX, maxX, minZ, maxZ } = bounds;
   const sx = (maxX - minX) / size;
@@ -115,6 +115,14 @@ export function bakeRelief(sample, bounds, size, { contour = 500, minH, maxH } =
       const band = Math.floor(h / contour);
       const isLine = band !== Math.floor(hr / contour) || band !== Math.floor(hd / contour);
       const f = isLine ? 0.62 : 1;
+      // rivers: a cold, flat blue (readable as "water" at radar size)
+      if (water && water(minX + (i + 0.5) * sx, minZ + (j + 0.5) * sz)) {
+        px[k * 4] = 52;
+        px[k * 4 + 1] = 104;
+        px[k * 4 + 2] = 138;
+        px[k * 4 + 3] = 255;
+        continue;
+      }
       px[k * 4] = r * f;
       px[k * 4 + 1] = g * f;
       px[k * 4 + 2] = b * f;

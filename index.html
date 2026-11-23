@@ -54,18 +54,22 @@
     <script>
       /*
        * Boot progress. Real hooks, not a timer:
-       *  - terrain / aircraft: byte progress of the DEM and the .glb files,
-       *    read by teeing fetch() responses for those URLs while booting;
-       *  - renderer / systems / shaders: reported by src/ui/system.js as each
-       *    stage of src/main.js completes (createSystem runs after the
-       *    renderer and DEM are ready, init after the aircraft has loaded,
-       *    and "shaders" after the first frames have compiled and drawn).
+       *  - terrain / textures / aircraft: byte progress of the terrain pack
+       *    (assets/terrain/*.stp), the ground layer textures
+       *    (assets/textures/terrain/) and the .glb models, read by teeing
+       *    fetch() responses for those URLs while booting;
+       *  - renderer / systems: reported by src/ui/system.js as each stage of
+       *    src/main.js completes (createSystem runs after the renderer and the
+       *    terrain pack are ready);
+       *  - textures complete when game.terrain.ready resolves, and "shaders"
+       *    fills while the first frames after that compile; the loader fades
+       *    only once frames arrive at a steady rate (src/ui/UI.js).
        * Exposed as window.__ssBoot = { set(stage, 0..1, label?), done() }.
        */
       (function () {
-        var W = { renderer: 0.12, terrain: 0.42, aircraft: 0.26, systems: 0.08, shaders: 0.12 };
-        var st = { renderer: 0, terrain: 0, aircraft: 0, systems: 0, shaders: 0 };
-        var files = { terrain: {}, aircraft: {} };
+        var W = { renderer: 0.06, terrain: 0.4, textures: 0.14, aircraft: 0.14, systems: 0.04, shaders: 0.22 };
+        var st = { renderer: 0, terrain: 0, textures: 0, aircraft: 0, systems: 0, shaders: 0 };
+        var files = { terrain: {}, textures: {}, aircraft: {} };
         var finished = false;
         var nativeFetch = window.fetch;
         var raf = 0;
@@ -98,7 +102,9 @@
         }
         window.fetch = function (input) {
           var url = typeof input === 'string' ? input : (input && input.url) || '';
-          var key = /dem\.u16/.test(url) ? 'terrain' : /\.glb(\?|$)/.test(url) ? 'aircraft' : null;
+          var key = /\/assets\/terrain\/[^?]*\.stp(\?|$)/.test(url) ? 'terrain'
+            : /\/assets\/textures\/terrain\//.test(url) ? 'textures'
+            : /\.glb(\?|$)/.test(url) ? 'aircraft' : null;
           var p = nativeFetch.apply(this, arguments);
           if (finished || !key || typeof ReadableStream === 'undefined') return p;
           return p.then(function (res) {
@@ -145,7 +151,8 @@
       <p class="b-mark" aria-label="Safed Sagar"><span>Safed</span><span>Sagar</span></p>
       <ol aria-label="Loading">
         <li data-k="renderer">Graphics device <b></b></li>
-        <li data-k="terrain">Terrain, SRTM 90 &times; 88 km <b></b></li>
+        <li data-k="terrain">Terrain, SRTM elevation <b></b></li>
+        <li data-k="textures">Ground textures <b></b></li>
         <li data-k="aircraft">MiG-21 Bison <b></b></li>
         <li data-k="systems">Systems <b></b></li>
         <li data-k="shaders">Shaders and first frame <b></b></li>
