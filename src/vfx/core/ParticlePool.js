@@ -5,10 +5,10 @@ import {
   saturate,
 } from 'three/tsl';
 import { Ring, DirtyRanges } from './ring.js';
-import { fireRamp } from './shared.js';
+import { fireRamp, litKeep } from './shared.js';
 
-const MAX_TYPES = 24;
-const TYPE_STRIDE = 3; // vec4 rows per type
+const MAX_TYPES = 28;
+const TYPE_STRIDE = 4; // vec4 rows per type
 // The type index rides in the life channel (type * LIFE_SPAN + life) so the
 // compute pass needs only four buffers: three's WebGL2 fallback runs compute as
 // transform feedback, which allows at most four separate outputs.
@@ -29,7 +29,9 @@ const LIFE_SPAN = 64;
  *
  * Two flavours share all of that and differ only in the material:
  *   'lit'  — six-way-lightmap smoke/fire, premultiplied alpha (smoke occludes,
- *            fire adds), sun + sky lit, soft depth fade.
+ *            fire glows from inside it), sun + sky lit, soft depth fade,
+ *            optionally stretched along its motion (soot torn off a burning
+ *            jet, rain).
  *   'glow' — additive sparks, flashes, rings, flames, tracers; velocity
  *            stretched, with a minimum on-screen size so distant lights read.
  */
@@ -71,20 +73,28 @@ export class ParticlePool {
 
   /**
    * Register a particle type. Common: drag (1/s), gravity (m/s², +up = buoyant),
-   * turbulence (m/s²), turbScale (1/m), wind (0..1 coupling), sizePow, fadeIn,
-   * fadeOut (fractions of life). lit: heatDecay (1/s), soft (depth-fade scale),
-   * spin (rad/s), thin (0 = self-shadowed smoke, 1 = bright vapour). glow: shape (0 dot, 1 spark, 2 ring, 3 flash, 4 flame),
-   * stretch (s of motion blur), minPixels, flicker.
+   * turbulence (m/s²), turbScale (1/m), wind (0..1 coupling), windTau (s: the
+   * wind coupling ramps in as 1 - exp(-age / windTau), so a hot column climbs
+   * before the wind leans it over; 0 = full coupling from birth), sizePow,
+   * fadeIn, fadeOut (fractions of life).
+   * lit: heatDecay (1/s), soft (depth-fade scale), spin (rad/s), thin (0 =
+   * self-shadowed smoke, 1 = bright vapour), stretch (s of motion blur along
+   * the on-screen velocity; 0 = round and randomly rotated), minPixels (an
+   * on-screen floor that keeps the total coverage, not the opacity).
+   * glow: shape (0 dot, 1 spark, 2 ring, 3 flash, 4 flame), stretch (s of
+   * motion blur), minPixels, flicker.
    */
   type(p = {}) {
     const i = this.types.length;
     if (i >= MAX_TYPES) throw new Error('vfx: too many particle types');
     this.types.push(p);
     const r = i * TYPE_STRIDE;
+    const lit = this.flavour === 'lit';
     this._table[r].set(p.drag ?? 0.5, p.gravity ?? 0, p.turbulence ?? 0, p.turbScale ?? 0.05);
     this._table[r + 1].set(p.wind ?? 0, p.sizePow ?? 0.5, p.fadeIn ?? 0.05, p.fadeOut ?? 0.5);
-    if (this.flavour === 'lit') this._table[r + 2].set(p.heatDecay ?? 2, p.soft ?? 0.35, p.spin ?? 0.3, p.thin ?? 0);
+    if (lit) this._table[r + 2].set(p.heatDecay ?? 2, p.soft ?? 0.35, p.spin ?? 0.3, p.thin ?? 0);
     else this._table[r + 2].set(p.shape ?? 0, p.stretch ?? 0, p.minPixels ?? 0, p.flicker ?? 0);
+    this._table[r + 3].set(lit ? (p.stretch ?? 0) : 0, p.windTau ?? 0, lit ? (p.minPixels ?? 0) : 0, 0);
     return i;
   }
 
@@ -137,6 +147,16 @@ export class ParticlePool {
     if (live) renderer.compute(this.computeNode);
   }
 
+  /**
+   * Make sure the draw and compute pipelines exist before gameplay needs them
+   * (see VfxSystem.prewarm): draw one dead slot and run the step once.
+   */
+  prewarm(renderer) {
+    this.mesh.count = Math.max(1, this.mesh.count);
+    this.mesh.visible = true;
+    renderer.compute(this.computeNode);
+  }
+
   _buildCompute() {
     const { time, dt, wind } = this.shared.u;
     const { spawnA, spawnB, statePos, stateVel, table } = this;
@@ -157,8 +177,11 @@ export class ParticlePool {
         const ti = int(typeF.add(0.5)).mul(TYPE_STRIDE);
         const t0 = table.element(ti);
         const t1 = table.element(ti.add(1));
+        const t3 = table.element(ti.add(3));
         const vel = v.xyz.toVar();
-        const target = wind.mul(t1.x);
+        // wind coupling, ramped in over windTau seconds (t3.y; 0 = from birth)
+        const ramp = select(t3.y.greaterThan(0), float(1).sub(exp(age.div(t3.y.max(1e-3)).negate())), float(1));
+        const target = wind.mul(t1.x.mul(ramp));
         vel.assign(target.add(vel.sub(target).mul(exp(t0.x.mul(dt).negate()))));
         vel.y.addAssign(t0.y.mul(dt));
         // cheap divergence-light turbulence: two octaves of phase-shifted sines
@@ -207,13 +230,32 @@ export class ParticlePool {
     const ti = int(typeF.add(0.5)).mul(TYPE_STRIDE);
     const T1 = this.table.element(ti.add(1));
     const T2 = this.table.element(ti.add(2));
+    const T3 = this.table.element(ti.add(3));
     const seed = hash(float(instanceIndex).add(A.w.mul(61.7)));
     const seed2 = hash(float(instanceIndex).mul(3).add(A.w.mul(17.3)).add(11));
     const size = mix(C.x, C.y, pow(t, T1.y));
     const fade = t.add(1e-4).div(T1.z.max(1e-4)).clamp(0, 1).mul(smoothstep(T1.w.min(0.999), 1, t).oneMinus());
     const center = P.xyz;
     const dist = length(center.sub(u.camPos)).max(0.01);
-    return { u, A, B, C, D, P, V, age, life, t, alive, T1, T2, seed, seed2, size, fade, center, dist };
+    return { u, A, B, C, D, P, V, age, life, t, alive, T1, T2, T3, seed, seed2, size, fade, center, dist };
+  }
+
+  /**
+   * On-screen motion of a particle, in metres at its depth (with perspective:
+   * something coming straight at the camera but off to one side still sweeps
+   * outward), as a 2D direction and length in the camera's right/up basis.
+   */
+  _screenMotion(c) {
+    const u = c.u;
+    const vrel = c.V.xyz.sub(u.camVel);
+    const rel = c.center.sub(u.camPos);
+    const depth = dot(rel, u.camFwd).max(0.5);
+    const along = dot(vrel, u.camFwd);
+    const s2 = vec2(dot(vrel, u.camRight), dot(vrel, u.camUp))
+      .sub(vec2(dot(rel, u.camRight), dot(rel, u.camUp)).div(depth).mul(along));
+    const sl = length(s2);
+    const dir2 = select(sl.greaterThan(1e-3), s2.div(sl.max(1e-3)), vec2(1, 0));
+    return { sl, dir2 };
   }
 
   _blend(material, additive) {
@@ -238,26 +280,41 @@ export class ParticlePool {
     const material = new THREE.NodeMaterial();
     this._blend(material, false);
 
+    // Orientation: a random spin, or (stretch > 0) along the on-screen motion.
+    const stretch = c.T3.x, minPx = c.T3.z;
+    const { sl, dir2 } = this._screenMotion(c);
     const angle = c.seed.mul(6.283).add(c.seed2.sub(0.5).mul(c.T2.z).mul(c.age));
-    const ca = cos(angle), sa = sin(angle);
-    const axisX = u.camRight.mul(ca).add(u.camUp.mul(sa));
-    const axisY = u.camUp.mul(ca).sub(u.camRight.mul(sa));
+    const rot = vec2(cos(angle), sin(angle));
+    const streaky = stretch.greaterThan(0);
+    const d = select(streaky, dir2, rot);
+    const axisX = u.camRight.mul(d.x).add(u.camUp.mul(d.y));
+    const axisY = u.camUp.mul(d.x).sub(u.camRight.mul(d.y));
     // keep big sprites from slamming through the camera, and drop sub-pixel ones
     const nearFade = smoothstep(0.6, c.size.mul(0.7).add(1.2), c.dist);
-    const px = c.size.div(c.dist.mul(u.pixelAngle));
+    const minSize = minPx.mul(u.pixelAngle).mul(c.dist);
+    const size = max(c.size, minSize);
+    const px = size.div(c.dist.mul(u.pixelAngle));
     const farFade = smoothstep(0.35, 1.3, px);
+    // a minimum-size floor spreads the same coverage over more pixels
+    // (a stretched sprite is a line: widening it spreads its coverage linearly)
+    const cover = select(minPx.greaterThan(0), c.size.div(size).pow(select(stretch.greaterThan(0), float(1), float(2))), float(1));
+    // (at most 14 widths, but never under a metre and a half: rain drops)
+    const streak = sl.mul(stretch).min(max(size.mul(14), 1.5)).min(c.dist.mul(0.45));
+    const lenX = size.add(streak);
     const vis = c.fade.mul(nearFade).mul(farFade);
-    const draw = select(c.alive.and(vis.greaterThan(0.002)), c.size, 0);
+    const draw = select(c.alive.and(vis.greaterThan(0.002)), float(1), float(0));
     material.positionNode = c.center
-      .add(axisX.mul(positionGeometry.x.mul(draw)))
-      .add(axisY.mul(positionGeometry.y.mul(draw)));
+      .sub(axisX.mul(streak.mul(0.5)).mul(draw))
+      .add(axisX.mul(positionGeometry.x.mul(lenX).mul(draw)))
+      .add(axisY.mul(positionGeometry.y.mul(size).mul(draw)));
 
-    const vVis = varying(vis);
+    // a stretched puff keeps its area's worth of smoke, loosely
+    const vVis = varying(vis.mul(cover).mul(size.div(lenX).pow(select(streaky, float(0.25), float(0.5)))));
     const vLight = varying(vec3(dot(u.sunDir, axisX), dot(u.sunDir, axisY), dot(u.sunDir, u.camFwd.negate())));
     const vColor = varying(c.D);
     const vHeat = varying(c.C.z.mul(exp(c.age.mul(c.T2.x).negate())));
     const vCell = varying(floor(c.seed2.mul(15.999)));
-    const vSoft = varying(c.size.mul(c.T2.y).max(0.25));
+    const vSoft = varying(size.mul(c.T2.y).max(0.25));
     const vT = varying(c.t);
     const vThin = varying(c.T2.w);
     const vShadow = varying(sh.cloudShadow(c.center));
@@ -294,9 +351,11 @@ export class ParticlePool {
       // lit like the trails' condensation (Shared.vapourLight)
       const water = smoothstep(0.95, 1, vThin);
       const waterLit = sh.vapourLight(sunLit.mul(2).sub(1), L.z.negate(), vShadow).mul(detail);
-      const lit = vColor.rgb.mul(mix(smokeLit, waterLit, water)).mul(gain);
       // fire: hot in the dense core, cooling to soot over life
       const heat = vHeat.mul(tb.a.mul(1.6).add(0.2)).mul(dn.mul(0.8).add(0.6));
+      // A hot puff is soot glowing from inside: its scattered light goes with
+      // the heat (adding fire on top of brightly lit smoke read pink and peach).
+      const lit = vColor.rgb.mul(mix(smokeLit, waterLit, water)).mul(gain).mul(litKeep(heat));
       const fire = fireRamp(heat).mul(shaped);
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(vSoft));
       const k = vVis.mul(depthFade).mul(u.fade).mul(sh.cloudVis()).mul(sh.nearFade(length(positionView)));
@@ -314,18 +373,7 @@ export class ParticlePool {
     this._blend(material, true);
 
     const shape = c.T2.x, stretch = c.T2.y, minPx = c.T2.z, flicker = c.T2.w;
-    const vrel = c.V.xyz.sub(u.camVel);
-    // Motion across the screen, in metres at the particle's depth, with
-    // perspective: something coming straight at the camera but off to one
-    // side still sweeps outward (rain and cloud droplets at flying speed
-    // radiate from the point you are flying towards).
-    const rel = c.center.sub(u.camPos);
-    const depth = dot(rel, u.camFwd).max(0.5);
-    const along = dot(vrel, u.camFwd);
-    const s2 = vec2(dot(vrel, u.camRight), dot(vrel, u.camUp))
-      .sub(vec2(dot(rel, u.camRight), dot(rel, u.camUp)).div(depth).mul(along));
-    const sl = length(s2);
-    const dir2 = select(sl.greaterThan(1e-3), s2.div(sl.max(1e-3)), vec2(1, 0));
+    const { sl, dir2 } = this._screenMotion(c);
     // (never longer than a fraction of its distance: a streak a metre from
     // the lens would otherwise be a line across the whole screen)
     const streak = sl.mul(stretch).min(c.size.mul(60).add(4)).min(c.dist.mul(0.45));
