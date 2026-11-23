@@ -29,6 +29,17 @@ export function springStep(state, target, freq, zeta, dt) {
   return state.x;
 }
 
+/**
+ * How hard a `player:hit` lands, 0..1. Combat sends `severity` (sqrt of the
+ * fraction of full health over a quarter: a stray round ~0.37, a missile
+ * ~1); older payloads carry only `damage`, in hit points of a 100-point jet.
+ */
+export function hitSeverity(p = {}) {
+  if (Number.isFinite(p.severity)) return clamp(p.severity, 0, 1);
+  const frac = Number.isFinite(p.fraction) ? p.fraction : (p.damage ?? 10) / 100;
+  return clamp(Math.sqrt(Math.max(0, frac) / 0.25), 0, 1);
+}
+
 /** Chase distance grows a little with speed so 900 km/h reads as fast, not as "same jet, smaller". */
 export function chaseDistance(airspeed) {
   return 16.5 + smoothstep(120, 420, airspeed) * 4.5;

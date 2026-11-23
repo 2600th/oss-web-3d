@@ -98,6 +98,22 @@ export function stemWeights(level, n = 3, law = 'linear') {
   return out;
 }
 
+/**
+ * How urgent the missiles coming at us are, 0..1, from the HUD's `threats`
+ * ({distance, missile: {speed}}): the shortest time to impact, 0 at 5 s or
+ * more, 1 at 1 s or less. Drives the missile alert's beep rate.
+ */
+export function missileUrgency(threats) {
+  let tti = Infinity;
+  for (const t of threats ?? []) {
+    const d = t?.distance;
+    if (!Number.isFinite(d)) continue;
+    tti = Math.min(tti, d / Math.max(t.missile?.speed ?? t.speed ?? 450, 100));
+  }
+  if (!Number.isFinite(tti)) return 0;
+  return Math.min(1, Math.max(0, (5 - tti) / 4));
+}
+
 /** dB <-> linear */
 export const dbToGain = (db) => Math.pow(10, db / 20);
 export const gainToDb = (g) => (g <= 1e-9 ? -180 : 20 * Math.log10(g));
