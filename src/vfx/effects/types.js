@@ -71,11 +71,18 @@ export const TRAILS = {
   wreck: { radius: 1.8, growth: 3.6, life: 30, color: [0.05, 0.047, 0.045], opacity: 4.5, wobble: 18, rise: 1.2, glow: 0, wind: 1, spacing: 9 },
   damageLight: { radius: 0.5, growth: 1.3, life: 9, color: [0.55, 0.55, 0.56], opacity: 1.2, wobble: 5, rise: 0.4, glow: 0, wind: 1, spacing: 9 },
   damageHeavy: { radius: 1.0, growth: 2.6, life: 22, color: [0.055, 0.052, 0.05], opacity: 4, wobble: 15, rise: 0.8, glow: 0, wind: 1, spacing: 9 },
-  // wingtip vortex cores: thin, bright, a couple of seconds of twisting thread
-  vortex: { radius: 0.11, growth: 0.3, life: 2.6, color: [1, 1, 1], opacity: 1.0, wobble: 1.6, rise: 0, glow: 0, wind: 1, spacing: 3 },
-  // condensation rolling off the inner wing in a hard pull: wide, soft, gone in a moment
-  sheet: { radius: 0.3, growth: 3, life: 0.11, color: [1, 1, 1], opacity: 0.17, wobble: 0.5, rise: 0, glow: 0, wind: 1, spacing: 3 },
+  // Condensation (glow: -1 = water lighting, see Shared.vapourLight).
+  // Wingtip vortex cores: a thread a few centimetres thick at the tip that
+  // spreads to a few tens of centimetres and is gone in about a second, and
+  // translucent all the way (a fresh core lets about half the light through).
+  // It was 0.11 m growing 0.3 m/sqrt(s) for 2.6 s at optical depth 1: by the
+  // end a 1.5-2 m opaque rope.
+  vortex: { radius: 0.045, growth: 0.13, life: 1.25, color: [1, 1, 1], opacity: 0.6, wobble: 0.5, rise: 0, glow: -1, wind: 1, spacing: 2.5 },
+  // condensation rolling off the inner wing in a hard pull: soft, and gone
+  // within about one wingspan behind the trailing edge (it was 0.11 s, a 40 m
+  // flat band at combat speed)
+  sheet: { radius: 0.3, growth: 2.2, life: 0.035, color: [1, 1, 1], opacity: 0.14, wobble: 0.3, rise: 0, glow: -1, wind: 1, spacing: 3 },
   // dry-thrust exhaust: the faint smoky thread a turbojet leaves at military power
   exhaust: { radius: 0.3, growth: 1.0, life: 2.2, color: [0.3, 0.29, 0.28], opacity: 0.07, wobble: 3, rise: 0.1, glow: 0, wind: 1, spacing: 5 },
-  contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: 0, wind: 1, spacing: 18 },
+  contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: -1, wind: 1, spacing: 18 },
 };

@@ -32,6 +32,7 @@ export class Shared {
       sunColor: uniform(new THREE.Color(3, 2.9, 2.7)),                    // colour * intensity
       skyColor: uniform(new THREE.Color(0.5, 0.7, 1.0)),                  // ambient from above
       groundColor: uniform(new THREE.Color(0.4, 0.35, 0.3)),              // ambient from below
+      horizonColor: uniform(new THREE.Color(0.6, 0.75, 0.95)),            // sky radiance at the horizon (vapour lighting)
       wind: uniform(new THREE.Vector3(7, 0, 3)),                          // m/s, world
       camPos: uniform(new THREE.Vector3()),
       camRight: uniform(new THREE.Vector3(1, 0, 0)),
@@ -77,6 +78,42 @@ export class Shared {
     this.nearFade = Fn(([dist]) => smoothstep(this.u.nearClip, this.u.nearClip.mul(1.8).add(1e-3), dist));
     /** TSL: (worldPos) -> 0..1 sun reaching that point through the clouds. */
     this.cloudShadow = env?.cloudShadow ?? Fn(([p]) => float(1).add(p.x.mul(0)));
+
+    /**
+     * TSL: radiance of condensation (wingtip vortices, wing vapour, the
+     * vapour cone, contrails, cloud wisps) per unit colour.
+     *   ndl     cosine between the surface normal and the sun (-1..1)
+     *   cosSun  cosine between the view ray and the sun (1 = looking at it)
+     *   shadow  sun visibility (cloud shadow), 0..1
+     *
+     * Water droplets scatter almost without absorbing, so a vapour thread is
+     * not a dark tube with a lit side the way soot is. Three terms:
+     *   - sun: irradiance / pi (a white diffuser in sunlight), wrapped round
+     *     the tube; the side away from the sun keeps ~30 % because a vortex
+     *     core a few tens of centimetres thick is translucent;
+     *   - a forward-scattering lobe when looking toward the sun (droplets
+     *     scatter strongly forward: the silver edge in backlit photos);
+     *   - the whole sky dome and the ground, unweighted: multiple scattering
+     *     sees light from every direction.
+     * The trail shader used the sun irradiance itself (not / pi) against
+     * 0.34 x the sky radiance, so at a low sun a trail was ~100x more
+     * sun-lit than sky-lit: saturated orange on one side, near-black on the
+     * other, i.e. thick brown rope at dawn.
+     */
+    const INV_PI = 1 / Math.PI;
+    this.vapourLight = Fn(([ndl, cosSun, shadow]) => {
+      const u = this.u;
+      const wrap = ndl.mul(0.5).add(0.5).clamp(0, 1);
+      // a rim, not a lit half: the body of a thread seen side-on (wrap 0.5)
+      // gets ~0.2 of the sun, the limb facing it all of it
+      const diffuse = wrap.pow(3).mul(0.9).add(0.08);
+      const forward = cosSun.clamp(0, 1).pow(6).mul(1.2);
+      // ambient: the average of the zenith (irradiance / pi) and the horizon
+      // band, which is what a thread hanging in open air mostly sees
+      const sky = u.skyColor.add(u.horizonColor).mul(0.5);
+      return u.sunColor.mul(shadow).mul(diffuse.add(forward).mul(INV_PI))
+        .add(sky.mul(1.3)).add(u.groundColor.mul(0.6));
+    });
   }
 
   async load(base = './assets/vfx/') {
@@ -128,6 +165,9 @@ export class Shared {
         // as the radiance a white diffuser would show (E / pi).
         u.sunColor.value.setRGB(e[0], e[1], e[2]);
         u.skyColor.value.setRGB(sky[0] / Math.PI, sky[1] / Math.PI, sky[2] / Math.PI);
+        const hz = env.skyAmbient.horizon;
+        if (hz) u.horizonColor.value.setRGB(hz[0], hz[1], hz[2]);
+        else u.horizonColor.value.copy(u.skyColor.value);
         const up = Math.max(u.sunDir.value.y, 0) * (0.25 + 0.75 * THREE.MathUtils.clamp(env.sunVisibility ?? 1, 0, 1));
         u.groundColor.value.setRGB(
           GROUND_ALBEDO[0] * (e[0] * up + sky[0]) / Math.PI,
@@ -144,6 +184,7 @@ export class Shared {
           u.skyColor.value.copy(amb.color).multiplyScalar(amb.intensity ?? 1);
           u.groundColor.value.copy(u.skyColor.value).multiplyScalar(0.6);
         }
+        u.horizonColor.value.copy(u.skyColor.value);
       }
       // Inside cloud the sun is gone and the light is the cloud's own white
       // fill (the cloud shadow map only describes the air below the layer).
@@ -151,6 +192,7 @@ export class Shared {
       if (ic > 0) {
         u.sunColor.value.multiplyScalar(1 - 0.6 * ic);
         u.skyColor.value.multiplyScalar(1 + 3 * ic);
+        u.horizonColor.value.multiplyScalar(1 + 3 * ic);
         u.groundColor.value.multiplyScalar(1 + 5 * ic);
       }
       if (env.wind?.isVector3) u.wind.value.copy(env.wind);
