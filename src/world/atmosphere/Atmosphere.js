@@ -53,8 +53,8 @@ export class Atmosphere {
       haze: uniform(this.params.haze),
       apMaxDist: uniform(160000), // metres covered by the aerial-perspective slices
       sunDiscGain: uniform(260),
-      /** Extra artistic gain on in-scattering (1 = physical). */
-      apStrength: uniform(1),
+      /** Artistic gain on in-scattering (1 = physical); a touch more reads better at game scale. */
+      apStrength: uniform(1.15),
     };
 
     const mk = (w, h) => {
