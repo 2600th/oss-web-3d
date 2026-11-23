@@ -5,33 +5,165 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0a0d12" />
-    <title>Safed Sagar — A Reconnaissance Flight Experience</title>
+    <meta name="theme-color" content="#071015" />
+    <title>Safed Sagar</title>
     <meta
       name="description"
-      content="Fly a MiG-21 reconnaissance sortie through the high Himalayas. A fictional flight experience inspired by the courage of the Indian Armed Forces."
+      content="Arcade air combat in a MiG-21 over the real terrain of the Kargil Himalaya. A fictional game inspired by the courage of the Indian Armed Forces."
     />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0d12'/%3E%3Cpath d='M16 4l2.1 12.2 9.9 3.6-9.9 1.3-1 8.9-1.1-8.9L4 19.8l9.9-3.6z' fill='%23e8eef6'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23071015'/%3E%3Cpath d='M16 4l2.1 12.2 9.9 3.6-9.9 1.3-1 8.9-1.1-8.9L4 19.8l9.9-3.6z' fill='%23d6f6ff'/%3E%3C/svg%3E"
     />
+    <link rel="preload" href="./fonts/b612-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="./fonts/b612-mono-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="./fonts/big-shoulders-display-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <style>
+      /* Self-hosted OFL faces (public/fonts, notices in THIRD_PARTY_NOTICES.txt).
+         Declared here rather than in styles.css so the boot loader has them
+         before any module has run. */
+      @font-face { font-family: 'SS B612'; src: url('./fonts/b612-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+      @font-face { font-family: 'SS B612'; src: url('./fonts/b612-latin-700-normal.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+      @font-face { font-family: 'SS B612 Mono'; src: url('./fonts/b612-mono-latin-400-normal.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+      @font-face { font-family: 'SS B612 Mono'; src: url('./fonts/b612-mono-latin-700-normal.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+      @font-face { font-family: 'SS Shoulders'; src: url('./fonts/big-shoulders-display-latin-600-normal.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+      @font-face { font-family: 'SS Shoulders'; src: url('./fonts/big-shoulders-display-latin-800-normal.woff2') format('woff2'); font-weight: 800; font-display: swap; }
+
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #071015; }
+      #boot {
+        position: fixed; inset: 0; z-index: 9000; display: grid; align-content: end;
+        padding: max(28px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right))
+          max(36px, env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
+        background: radial-gradient(120% 90% at 85% 0%, #10232d 0%, #071015 62%);
+        color: #e9f1f4; font: 400 13px/1.5 'SS B612', system-ui, sans-serif;
+        transition: opacity 600ms cubic-bezier(.2,.8,.2,1);
+      }
+      #boot.done { opacity: 0; pointer-events: none; }
+      #boot .b-mark { font: 800 clamp(48px, 9vw, 112px)/.84 'SS Shoulders', 'Arial Narrow', sans-serif; text-transform: uppercase; margin: 0 0 22px; letter-spacing: -0.005em; }
+      #boot .b-mark span { display: block; }
+      #boot ol { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 4px; max-width: 30rem; }
+      #boot li { display: grid; grid-template-columns: 1fr auto; gap: 16px; color: #7f95a1; font: 400 12px/1.6 'SS B612 Mono', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; }
+      #boot li[data-state="run"] { color: #e9f1f4; }
+      #boot li[data-state="ok"] { color: #a9bcc6; }
+      #boot li[data-state="ok"] b { color: #9fe6ff; }
+      #boot b { font-weight: 700; }
+      #boot .b-bar { height: 3px; max-width: 30rem; background: rgba(214,246,255,.16); overflow: hidden; }
+      #boot .b-bar i { display: block; height: 100%; background: #9fe6ff; transform-origin: 0 50%; transform: scaleX(0); transition: transform 240ms linear; }
+      @media (prefers-reduced-motion: reduce) { #boot, #boot .b-bar i { transition: none; } }
+    </style>
+    <script>
+      /*
+       * Boot progress. Real hooks, not a timer:
+       *  - terrain / aircraft: byte progress of the DEM and the .glb files,
+       *    read by teeing fetch() responses for those URLs while booting;
+       *  - renderer / systems / shaders: reported by src/ui/system.js as each
+       *    stage of src/main.js completes (createSystem runs after the
+       *    renderer and DEM are ready, init after the aircraft has loaded,
+       *    and "shaders" after the first frames have compiled and drawn).
+       * Exposed as window.__ssBoot = { set(stage, 0..1, label?), done() }.
+       */
+      (function () {
+        var W = { renderer: 0.12, terrain: 0.42, aircraft: 0.26, systems: 0.08, shaders: 0.12 };
+        var st = { renderer: 0, terrain: 0, aircraft: 0, systems: 0, shaders: 0 };
+        var files = { terrain: {}, aircraft: {} };
+        var finished = false;
+        var nativeFetch = window.fetch;
+        var raf = 0;
+        function render() {
+          raf = 0;
+          var root = document.getElementById('boot');
+          if (!root) return;
+          var p = 0;
+          for (var k in W) p += W[k] * Math.min(1, st[k]);
+          root.querySelector('.b-bar i').style.transform = 'scaleX(' + p.toFixed(3) + ')';
+          root.querySelector('.b-bar').setAttribute('aria-valuenow', String(Math.round(p * 100)));
+          var rows = root.querySelectorAll('li');
+          for (var i = 0; i < rows.length; i++) {
+            var key = rows[i].getAttribute('data-k');
+            var v = st[key];
+            rows[i].setAttribute('data-state', v >= 1 ? 'ok' : v > 0 ? 'run' : 'wait');
+            rows[i].querySelector('b').textContent = v >= 1 ? 'OK' : v > 0 ? Math.round(v * 100) + '%' : '';
+          }
+        }
+        function set(k, v) {
+          if (!(k in st)) return;
+          st[k] = Math.max(st[k], Math.min(1, v));
+          if (!raf) raf = requestAnimationFrame(render);
+        }
+        function track(key, url, loaded, total) {
+          files[key][url] = [loaded, total];
+          var l = 0, t = 0;
+          for (var u in files[key]) { l += files[key][u][0]; t += files[key][u][1]; }
+          if (t > 0) set(key, Math.min(0.97, l / t));
+        }
+        window.fetch = function (input) {
+          var url = typeof input === 'string' ? input : (input && input.url) || '';
+          var key = /dem\.u16/.test(url) ? 'terrain' : /\.glb(\?|$)/.test(url) ? 'aircraft' : null;
+          var p = nativeFetch.apply(this, arguments);
+          if (finished || !key || typeof ReadableStream === 'undefined') return p;
+          return p.then(function (res) {
+            var total = Number(res.headers.get('content-length')) || 0;
+            if (!res.body || !total) return res;
+            var reader = res.body.getReader();
+            var loaded = 0;
+            var stream = new ReadableStream({
+              pull: function (c) {
+                return reader.read().then(function (r) {
+                  if (r.done) { track(key, url, total, total); c.close(); return; }
+                  loaded += r.value.byteLength;
+                  track(key, url, Math.min(loaded, total), total);
+                  c.enqueue(r.value);
+                });
+              },
+              cancel: function (reason) { return reader.cancel(reason); },
+            });
+            return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers });
+          });
+        };
+        window.__ssBoot = {
+          set: set,
+          done: function () {
+            if (finished) return;
+            finished = true;
+            for (var k in st) st[k] = 1;
+            render();
+            window.fetch = nativeFetch;
+            var root = document.getElementById('boot');
+            if (!root) return;
+            root.classList.add('done');
+            setTimeout(function () { root.remove(); }, 700);
+          },
+        };
+      })();
+    </script>
     <link rel="stylesheet" href="./src/ui/styles.css" />
   </head>
   <body>
-    <canvas id="viewport"></canvas>
+    <canvas id="viewport" aria-label="Flight view"></canvas>
     <div id="ui"></div>
+    <div id="boot" aria-live="polite">
+      <p class="b-mark" aria-label="Safed Sagar"><span>Safed</span><span>Sagar</span></p>
+      <ol aria-label="Loading">
+        <li data-k="renderer">Graphics device <b></b></li>
+        <li data-k="terrain">Terrain, SRTM 90 &times; 88 km <b></b></li>
+        <li data-k="aircraft">MiG-21 Bison <b></b></li>
+        <li data-k="systems">Systems <b></b></li>
+        <li data-k="shaders">Shaders and first frame <b></b></li>
+      </ol>
+      <div class="b-bar" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+    </div>
     <div
       id="boot-status"
       role="alert"
       aria-live="assertive"
       hidden
-      style="position:fixed;inset:0;z-index:10000;display:none;place-content:center;gap:1rem;padding:2rem;text-align:center;background:#05080cf2;color:#e8eef6;font:500 1rem/1.5 system-ui,sans-serif"
+      style="position:fixed;inset:0;z-index:10000;display:none;place-content:center;gap:1rem;padding:2rem;text-align:center;background:#071015f2;color:#e9f1f4;font:400 1rem/1.5 'SS B612',system-ui,sans-serif"
     >
-      <p data-boot-message>The experience could not start.</p>
-      <button type="button" onclick="location.reload()" style="margin:auto;padding:.7rem 1.2rem">Reload</button>
+      <p data-boot-message>The game could not start.</p>
+      <button type="button" onclick="location.reload()" style="margin:auto;padding:.7rem 1.2rem;font:inherit;color:#04121a;background:#9fe6ff;border:0">Reload</button>
     </div>
     <noscript>
-      <p class="noscript">This experience requires JavaScript and a WebGL2-capable browser.</p>
+      <p style="color:#e9f1f4;font-family:system-ui;padding:2rem">Safed Sagar needs JavaScript and a WebGPU- or WebGL2-capable browser.</p>
     </noscript>
     <script type="module" src="./src/main.js"></script>
   </body>
