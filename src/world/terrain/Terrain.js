@@ -293,11 +293,20 @@ export class Terrain {
     const { N } = this.tier;
     const u = this.uniforms;
     const p = camera.position;
+    // [ground polish] A non-finite camera (seen from the lock camera's spring)
+    // made the trim index NaN, so `trim.geometry = trimGeo[NaN]` left a mesh
+    // with no geometry that NaN bounds kept "in view": the next scene render
+    // threw "reading 'boundingSphere'" (inside the cloud march, Clouds.js:913)
+    // and the eased clearance below stayed NaN for good. Keep the last frame.
+    if (!Number.isFinite(p.x + p.y + p.z)) {
+      if (!this._warnedCam) { this._warnedCam = true; console.warn('[terrain] non-finite camera position, keeping the last LOD layout', p.toArray()); }
+      return;
+    }
     u.cam.value.copy(p);
 
     // Vertical LOD term, eased so it never steps.
     const target = this._clearance(p) * 0.9;
-    this._clear = this._clear === null ? target : this._clear + (target - this._clear) * 0.2;
+    this._clear = this._clear === null || !Number.isFinite(this._clear) ? target : this._clear + (target - this._clear) * 0.2;
     u.clearance.value = this._clear;
 
     // Finest level still doing anything: the first one not fully morphed away.
@@ -341,7 +350,8 @@ export class Terrain {
         const fz = Math.floor(p.z / L.cell) * L.cell;
         const ox = Math.round((fx - cx) / L.cell);
         const oz = Math.round((fz - cz) / L.cell);
-        L.trim.geometry = L.trimGeo[oz * 2 + ox];
+        const trimGeo = L.trimGeo[oz * 2 + ox];
+        if (trimGeo) L.trim.geometry = trimGeo; // never undefined (see the camera guard above)
       }
       // [engine perf] Each block is tested twice: against the view frustum
       // (layer VIEW_LAYER, main camera) and, for shadow casters, against the
