@@ -5,7 +5,7 @@ import { MusicState, COMBAT_CUES } from './musicState.js';
  *
  * Cues (manifest `music`): menu, briefing, cruise, combat_1/2/3 (group
  * "combat": three full-mix intensity versions of the same 32 bars, started
- * sample-synchronously and crossfaded with equal-power weights from the
+ * sample-synchronously and crossfaded with sum-to-1 weights from the
  * intensity level), ace, victory, defeat, memorial, plus stingers
  * sting_complete / sting_failed.
  *
@@ -28,7 +28,7 @@ export class MusicDirector {
     this.last = { cue: null, level: 0, weights: [1, 0, 0] };
   }
 
-  request(r) { this.state.request(r, this._now()); }
+  request(r, authoritative = true) { this.state.request(r, this._now(), authoritative); }
   heat(a) { this.state.heat(a, this._now()); }
   set autoFlight(v) { this.state.autoFlight = v; }
   _now() { return performance.now() / 1000; }

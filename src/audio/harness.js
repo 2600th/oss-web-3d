@@ -123,13 +123,10 @@ export function installHarness(sys, game) {
       case 'stinger': sys.stinger(a); break;
       case 'ui': sys.ui(a); break;
       case 'view': ev.emit('camera:mode', { mode: a }); break;
-      case 'cloud': {
-        const env = game.env;
-        const prev = env.inCloud;
-        env.inCloud = 1;
-        await hold(() => { env.inCloud = prev; }, opts.ms ?? 3000);
+      case 'cloud': // Environment rewrites env.inCloud every frame, so override inside audio
+        sys.debug.inCloud = 1;
+        await hold(() => { delete sys.debug.inCloud; }, opts.ms ?? 3000);
         break;
-      }
       default: throw new Error(`unknown audio test "${name}". Try: ${SCENARIOS.join(', ')}`);
     }
     return probe();

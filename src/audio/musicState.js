@@ -10,7 +10,7 @@ import { stemWeights } from './physics.js';
  *    locks, launches, hits and explosions warm the score up, and it cools down.
  *
  * Output of `update(now)`: `{ cue, level, weights, changed }` where `weights` are
- * equal-power gains for the three combat intensity stems.
+ * linear (sum-to-1, smoothstepped) gains for the three correlated combat stems.
  *
  * Hysteresis rules (why they exist):
  *  - Combat → cruise needs `combatHold` seconds without combat pressure, so the
@@ -23,7 +23,7 @@ export const COMBAT_CUES = new Set(['combat', 'ace']);
 const TERMINAL = new Set(['victory', 'defeat', 'memorial']);
 
 export class MusicState {
-  constructor({ combatHold = 9, explicitTimeout = 15, riseRate = 1.6, fallRate = 0.12, heatDecay = 0.05 } = {}) {
+  constructor({ combatHold = 9, explicitTimeout = 45, riseRate = 1.6, fallRate = 0.12, heatDecay = 0.05 } = {}) {
     this.opts = { combatHold, explicitTimeout, riseRate, fallRate, heatDecay };
     this.cue = null;
     this.level = 0;
@@ -36,9 +36,13 @@ export class MusicState {
     this._pendingCue = null;
   }
 
-  /** Explicit request (music:intensity / ui:screen / mission events). */
-  request({ state, level }, now) {
-    this._lastExplicitAt = now;
+  /**
+   * Explicit request. `authoritative` (music:intensity from the mission system)
+   * suspends the combat-heat heuristic for `explicitTimeout` seconds; screen and
+   * mission-flow cues (ui:screen, mission:start) set the cue without doing so.
+   */
+  request({ state, level }, now, authoritative = true) {
+    if (authoritative) this._lastExplicitAt = now;
     const lv = typeof level === 'number' ? Math.min(1, Math.max(0, level)) : undefined;
     switch (state) {
       case 'combat':

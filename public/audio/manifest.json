@@ -301,5 +301,140 @@
    "loopEnd": 6.2
   }
  },
- "music": {}
+ "music": {
+  "sting_complete": {
+   "file": "music/sting_complete",
+   "dur": 9.7951,
+   "bpm": 100,
+   "beatsPerBar": 4,
+   "loop": false,
+   "group": null,
+   "title": "Mission complete (stinger)",
+   "gain": 1
+  },
+  "menu": {
+   "file": "music/menu",
+   "dur": 96.0,
+   "bpm": 80,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": null,
+   "title": "Safed Sagar (main theme)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 96.2
+  },
+  "briefing": {
+   "file": "music/briefing",
+   "dur": 40.0,
+   "bpm": 96,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": null,
+   "title": "Briefing",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 40.2
+  },
+  "cruise": {
+   "file": "music/cruise",
+   "dur": 64.0,
+   "bpm": 90,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": null,
+   "title": "Over the Ridges (cruise)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 64.2
+  },
+  "combat_1": {
+   "file": "music/combat_1",
+   "dur": 54.8571,
+   "bpm": 140,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": "combat",
+   "title": "Bandits (combat, intensity 1)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 55.05714583333334
+  },
+  "combat_2": {
+   "file": "music/combat_2",
+   "dur": 54.8571,
+   "bpm": 140,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": "combat",
+   "title": "Bandits (combat, intensity 2)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 55.05714583333334
+  },
+  "combat_3": {
+   "file": "music/combat_3",
+   "dur": 54.8571,
+   "bpm": 140,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": "combat",
+   "title": "Bandits (combat, intensity 3)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 55.05714583333334
+  },
+  "ace": {
+   "file": "music/ace",
+   "dur": 38.4,
+   "bpm": 150,
+   "beatsPerBar": 4,
+   "loop": true,
+   "group": null,
+   "title": "The Ace (named-enemy duel)",
+   "gain": 1,
+   "loopStart": 0.2,
+   "loopEnd": 38.6
+  },
+  "victory": {
+   "file": "music/victory",
+   "dur": 34.8,
+   "bpm": 100,
+   "beatsPerBar": 4,
+   "loop": false,
+   "group": null,
+   "title": "Victory",
+   "gain": 1
+  },
+  "defeat": {
+   "file": "music/defeat",
+   "dur": 31.6641,
+   "bpm": 66,
+   "beatsPerBar": 4,
+   "loop": false,
+   "group": null,
+   "title": "Mission Failed",
+   "gain": 1
+  },
+  "memorial": {
+   "file": "music/memorial",
+   "dur": 83.1302,
+   "bpm": 60,
+   "beatsPerBar": 4,
+   "loop": false,
+   "group": null,
+   "title": "Remembrance",
+   "gain": 1
+  },
+  "sting_failed": {
+   "file": "music/sting_failed",
+   "dur": 14.0,
+   "bpm": 60,
+   "beatsPerBar": 4,
+   "loop": false,
+   "group": null,
+   "title": "Mission failed (stinger)",
+   "gain": 1
+  }
+ }
 }

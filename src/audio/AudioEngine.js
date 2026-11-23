@@ -20,7 +20,7 @@
  */
 export const BUSES = ['music', 'sfx', 'ui', 'radio', 'ambience'];
 export const STORAGE_KEY = 'safedSagar.audio.v1';
-export const DEFAULT_VOLUMES = Object.freeze({ master: 0.85, music: 0.7, sfx: 0.9, radio: 0.9, ui: 0.75, ambience: 0.8 });
+export const DEFAULT_VOLUMES = Object.freeze({ master: 0.85, music: 0.8, sfx: 0.9, radio: 0.9, ui: 0.75, ambience: 0.8 });
 
 function loadVolumes() {
   const v = { ...DEFAULT_VOLUMES };

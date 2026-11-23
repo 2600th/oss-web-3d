@@ -72,10 +72,20 @@ test('closest approach of a straight pass', () => {
   assert.ok(near(r.distance, 50));
 });
 
-test('stem weights are equal-power and sum of squares is 1', () => {
+test('stem weights: power law keeps sum of squares at 1', () => {
   for (const lv of [0, 0.1, 0.25, 0.5, 0.7, 1]) {
-    const w = stemWeights(lv, 3);
+    const w = stemWeights(lv, 3, 'power');
     assert.ok(near(w.reduce((s, x) => s + x * x, 0), 1), `${lv}: ${w}`);
+  }
+});
+
+test('stem weights: linear law (correlated stems) sums to 1 and is monotonic', () => {
+  let prevTop = -1;
+  for (let lv = 0; lv <= 1.0001; lv += 0.05) {
+    const w = stemWeights(lv, 3);
+    assert.ok(near(w.reduce((s, x) => s + x, 0), 1), `${lv}: ${w}`);
+    assert.ok(w[2] >= prevTop - 1e-9);
+    prevTop = w[2];
   }
   assert.deepEqual(stemWeights(0, 3).map((x) => Math.round(x)), [1, 0, 0]);
   assert.deepEqual(stemWeights(1, 3).map((x) => Math.round(x)), [0, 0, 1]);
@@ -153,4 +163,21 @@ test('music state: victory is terminal against heat', () => {
   m.update(0);
   m.heat(1, 20);
   assert.equal(m.update(20).cue, 'victory');
+});
+
+test('music state: screen/mission cues do not suspend the heat heuristic', () => {
+  const m = new MusicState();
+  m.request({ state: 'cruise', level: 0 }, 0, false);
+  m.update(0);
+  m.heat(0.8, 1);
+  assert.equal(m.update(1).cue, 'combat');
+});
+
+test('music state: an authoritative level holds for the explicit timeout', () => {
+  const m = new MusicState({ explicitTimeout: 45, riseRate: 100, fallRate: 100 });
+  m.request({ state: 'combat', level: 1 }, 0);
+  let o;
+  for (let t = 0; t <= 40; t += 0.5) o = m.update(t);
+  assert.equal(o.cue, 'combat');
+  assert.equal(o.level, 1);
 });

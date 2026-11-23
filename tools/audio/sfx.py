@@ -254,8 +254,9 @@ def exp_transient(r, v):
     k = secs(r.uniform(0.002, 0.004))
     nw = np.zeros(n)
     nw[:k] = np.linspace(1, -1, k)
-    sub = osc(110 * np.exp(-t / 0.03) + 40, n) * env_exp(n, 0.08)
-    y = saturate(crack * 1.5 + body + nw * 1.2 + sub * 0.8, 2.2)
+    sub = osc(110 * np.exp(-t / 0.03) + 40, n) * env_exp(n, 0.05)
+    grit = bp(white(r, n), 400, 6000) * env_exp(n, 0.025, 0.0005)
+    y = saturate(crack * 1.8 + body * 1.2 + grit * 0.8 + nw * 1.0 + sub * 0.35, 1.6)
     return stereo(y, np.roll(y, secs(0.0007)))
 
 
@@ -266,8 +267,8 @@ def exp_body(r, v, size='large'):
     dec = 0.9 if big else 0.45
     out = np.zeros((n, 2))
     for c in range(2):
-        rumble = lp(brown(r, n), 380 if big else 600, 3) * env_points(n, [(0, 0), (0.02, 1), (dec, 0.35), (n / SR, 0)])
-        fire = bp(pink(r, n), 150, 2200, 2) * env_points(n, [(0, 0), (0.04, 0.8), (dec * 0.6, 0.3), (dec * 2, 0)])
+        rumble = lp(brown(r, n), 380 if big else 600, 3) * env_exp(n, dec * 0.75, 0.02)
+        fire = bp(pink(r, n), 150, 2200, 2) * env_exp(n, dec * 0.45, 0.04) * 0.8
         out[:, c] = rumble * 1.6 + fire * 0.7
     f = (75 if big else 95) * np.exp(-t / 0.12) + (30 if big else 42)
     sub = osc(f, n) * env_exp(n, dec * 0.5, 0.003) * (1.6 if big else 1.0)
@@ -394,8 +395,8 @@ def sam_launch(r, v):
 
 def missile_pass(r, v):
     n = secs(2.4)
-    src = motor_src(r, n * 2)
-    y, _ = passby(src, speed=[520, 610][v % 2], miss=[25, 45][v % 2], t_closest=0.9, n=n)
+    src = motor_src(r, n + secs(40))
+    y, _ = passby(src, speed=[290, 310][v % 2], miss=[25, 45][v % 2], t_closest=0.9, n=n)
     return y
 
 
@@ -440,7 +441,7 @@ def impact_dirt(r, v):
     n = secs(0.6)
     t = t_axis(n)
     thud = osc(80 * np.exp(-t / 0.02) + 45, n) * env_exp(n, 0.04) * 1.0
-    spray = bp(white(r, n), 500, 6000) * env_points(n, [(0, 0), (0.005, 1), (0.08, 0.4), (0.6, 0)])
+    spray = bp(white(r, n), 400, 4500) * env_points(n, [(0, 0), (0.005, 1), (0.08, 0.4), (0.6, 0)])
     grit = hp(crackle(r, n, 600, alpha=3), 1200)
     grit = grit / (np.std(grit) + 1e-9) * env_points(n, [(0, 0), (0.02, 0.3), (0.6, 0)]) * 0.3
     return saturate(thud + spray * 0.7 + grit, 1.4)
@@ -456,8 +457,8 @@ def enemy_jet_src(r, n):
 
 def jet_flyby(r, v):
     n = secs(4.2)
-    src = enemy_jet_src(r, n * 2)
-    sp = [260, 300, 340][v % 3]
+    src = enemy_jet_src(r, n + secs(40))  # subsonic approach: sound emitted ~40 s earlier is still arriving
+    sp = [230, 265, 300][v % 3]  # subsonic: the delay-line doppler needs a monotonic arrival time
     miss = [45, 80, 130][v % 3]
     y, _ = passby(src, speed=sp, miss=miss, t_closest=1.6, n=n)
     return y
@@ -575,11 +576,11 @@ SFX = {
     'impact_metal': (impact_metal, 4, False, 1, ('peak', -1)),
     'impact_dirt':  (impact_dirt, 3, False, 1, ('peak', -1)),
     'exp_transient': (exp_transient, 3, False, 2, ('peak', -1)),
-    'exp_body':     (lambda r, v: exp_body(r, v, 'large'), 3, False, 2, ('lufs', -13)),
-    'exp_body_small': (lambda r, v: exp_body(r, v, 'small'), 2, False, 2, ('lufs', -15)),
-    'exp_tail':     (exp_tail, 2, False, 2, ('lufs', -22)),
+    'exp_body':     (lambda r, v: exp_body(r, v, 'large'), 3, False, 2, ('peak', -1)),
+    'exp_body_small': (lambda r, v: exp_body(r, v, 'small'), 2, False, 2, ('peak', -1)),
+    'exp_tail':     (exp_tail, 2, False, 2, ('peak', -2)),
     'exp_debris':   (exp_debris, 2, False, 2, ('peak', -3)),
-    'exp_far':      (exp_far, 2, False, 2, ('lufs', -19)),
+    'exp_far':      (exp_far, 2, False, 2, ('peak', -1)),
     'exp_fireball': (exp_fireball, 1, False, 2, ('peak', -3)),
     # other aircraft
     'enemy_jet':    (L(lambda r, n: enemy_jet_src(r, n), 4.0), 1, True, 1, ('lufs', -18)),

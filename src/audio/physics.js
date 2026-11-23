@@ -74,15 +74,27 @@ export function closestApproach(rel, relVel) {
   return { t, distance: Math.hypot(x, y, z) };
 }
 
-/** Equal-power crossfade weights across `n` stems for a 0..1 level. */
-export function stemWeights(level, n = 3) {
+/**
+ * Crossfade weights across `n` stems for a 0..1 level.
+ * 'linear' (weights sum to 1) suits the combat stems, which are three mixes of
+ * the same bars and share bit-identical parts: correlated material summed with
+ * equal-power gains would bulge +3 dB mid-fade. 'power' (squares sum to 1) is
+ * for unrelated material.
+ */
+export function stemWeights(level, n = 3, law = 'linear') {
   const out = new Array(n).fill(0);
   if (n === 1) { out[0] = 1; return out; }
   const x = Math.min(1, Math.max(0, level)) * (n - 1);
   const i = Math.min(n - 2, Math.floor(x));
   const f = x - i;
-  out[i] = Math.cos(f * Math.PI * 0.5);
-  out[i + 1] = Math.sin(f * Math.PI * 0.5);
+  if (law === 'power') {
+    out[i] = Math.cos(f * Math.PI * 0.5);
+    out[i + 1] = Math.sin(f * Math.PI * 0.5);
+  } else {
+    const s = f * f * (3 - 2 * f); // smoothstep keeps the ends flat
+    out[i] = 1 - s;
+    out[i + 1] = s;
+  }
   return out;
 }
 

@@ -50,6 +50,7 @@ export function createSystem(game) {
   let lockState = 'none';
   let threat = { level: null, at: 0 };
   let viewMode = game.cameraRig?.mode ?? 'chase';
+  let cameraEvents = false; // once the camera owner emits camera:mode, stop polling the rig
   let screen = null;
   let lastHitUi = 0;
   const exhaust = { x: 0, y: 0, z: 0 };
@@ -58,6 +59,8 @@ export function createSystem(game) {
     name: 'audio',
     engine, bank, voices, jet, warnings, radio, music,
     ready: false,
+    /** Dev/verification overrides, e.g. { inCloud: 1 }. */
+    debug: {},
 
     setVolume: (bus, v) => engine.setVolume(bus, v),
     getVolume: (bus) => engine.getVolume(bus),
@@ -114,12 +117,12 @@ export function createSystem(game) {
         const fw = f.forward ?? { x: 0, y: 0, z: -1 };
         exhaust.x = f.position.x - fw.x * 6.5; exhaust.y = f.position.y - fw.y * 6.5; exhaust.z = f.position.z - fw.z * 6.5;
         const mode = g.cameraRig?.mode;
-        if (mode && mode !== viewMode) setView(mode);
+        if (!cameraEvents && mode && mode !== viewMode) setView(mode);
         jet.update(dt, f, { exhaust });
       }
 
       // environment: cloud muffle + canopy
-      const inCloud = Math.min(1, Math.max(0, g.env?.inCloud ?? 0));
+      const inCloud = Math.min(1, Math.max(0, sys.debug.inCloud ?? g.env?.inCloud ?? 0));
       const cockpit = jet.blend;
       const cutoff = 20000 * (1 - 0.65 * cockpit) * (1 - 0.8 * inCloud) + 600;
       engine.setWorldMuffle(Math.min(20000, cutoff), 1 - 0.35 * cockpit - 0.3 * inCloud);
@@ -159,7 +162,7 @@ export function createSystem(game) {
         const rv = { x: ent.velocity.x - L.velocity.x, y: ent.velocity.y - L.velocity.y, z: ent.velocity.z - L.velocity.z };
         const ca = closestApproach(rel, rv);
         const speed = Math.hypot(rv.x, rv.y, rv.z);
-        const lead = em.kind === 'missile' ? 0.85 : 1.5; // where the asset's pass peak sits
+        const lead = em.kind === 'missile' ? 1.0 : 1.75; // where the asset's pass peak sits
         if (ca.t > 0 && ca.t < lead && speed > 90 && ca.distance < (em.kind === 'missile' ? 150 : 350) && now - em.lastPass > 4) {
           em.lastPass = now;
           voices.play(em.kind === 'missile' ? 'missile_pass' : 'jet_flyby', {
@@ -345,16 +348,16 @@ export function createSystem(game) {
 
   on('radio', (msg) => radio.say(msg));
 
-  on('mission:start', () => { music.request({ state: 'cruise', level: 0 }); screen = 'game'; });
-  on('mission:complete', () => { music.stinger('sting_complete'); music.request({ state: 'victory' }); });
-  on('mission:failed', () => { music.stinger('sting_failed'); music.request({ state: 'defeat' }); });
+  on('mission:start', () => { music.request({ state: 'cruise', level: 0 }, false); screen = 'game'; });
+  on('mission:complete', () => { music.stinger('sting_complete'); music.request({ state: 'victory' }, false); });
+  on('mission:failed', () => { music.stinger('sting_failed'); music.request({ state: 'defeat' }, false); });
   on('music:intensity', ({ state, level }) => music.request({ state, level }));
-  on('camera:mode', ({ mode }) => setView(mode));
+  on('camera:mode', ({ mode }) => { cameraEvents = true; setView(mode); });
   on('ui:screen', ({ screen: s }) => {
     screen = s;
     const map = { title: 'menu', menu: 'menu', main: 'menu', hangar: 'menu', briefing: 'briefing', memorial: 'memorial', remembrance: 'memorial' };
-    if (map[s]) music.request({ state: map[s] });
-    if (s === 'game' || s === 'hud' || s === 'flight') music.request({ state: 'cruise', level: 0 });
+    if (map[s]) music.request({ state: map[s] }, false);
+    if (s === 'game' || s === 'hud' || s === 'flight') music.request({ state: 'cruise', level: 0 }, false);
   });
   on('ui:sound', ({ name }) => sys.ui(name));
 

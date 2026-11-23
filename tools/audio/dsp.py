@@ -214,6 +214,19 @@ def osc(freq, n, shape='sine', phase0=0.0):
     raise ValueError(shape)
 
 
+def bl_wave(freq, n, shape='saw', phase0=0.0, rolloff=1.0):
+    """Band-limited saw/square by additive synthesis (no aliasing), constant pitch.
+    rolloff > 1 darkens (amplitudes 1/k^rolloff)."""
+    t = t_axis(n)
+    kmax = int(SR * 0.45 / max(freq, 1.0))
+    y = np.zeros(n)
+    w = 2 * np.pi * freq * t + phase0
+    ks = range(1, kmax + 1) if shape == 'saw' else range(1, kmax + 1, 2)
+    for k in ks:
+        y += np.sin(k * w) / k ** rolloff
+    return y * (2 / np.pi if shape == 'saw' else 4 / np.pi)
+
+
 def additive(freq, n, partials, decays=None):
     """Band-limited harmonic stack: partials = [(ratio, amp), ...]."""
     f = np.broadcast_to(np.asarray(freq, dtype=float), (n,))
@@ -271,13 +284,17 @@ def passby(src, speed, miss, t_closest, n, c=325.0, air=True, height=0.0):
     Variable propagation delay yields true doppler; 1/r gain; distance lowpass.
     `src` must be long enough (>= n + delay slack).
     """
-    tau = np.arange(len(src)) / SR                     # emission times
+    # Emission times start `pre` seconds before the output so sound emitted far
+    # away is already arriving at t=0 (no silent gap and hard onset).
+    assert speed < c, "passby() models subsonic sources (monotonic arrival times)"
+    pre = max(0.0, len(src) / SR - n / SR)
+    tau = np.arange(len(src)) / SR - pre
     x = (tau - t_closest) * speed
     r = np.sqrt(x * x + miss * miss + height * height)
     arrive = tau + r / c
     t = t_axis(n)
     tau_t = np.interp(t, arrive, tau)                  # emission time for each output sample
-    y = np.interp(tau_t * SR, np.arange(len(src)), src)
+    y = np.interp((tau_t + pre) * SR, np.arange(len(src)), src)
     rt = np.interp(t, arrive, r)
     y = y * (miss / np.maximum(rt, miss))
     if air:
@@ -524,7 +541,8 @@ def encode(x, out_base, channels, kbps_opus, kbps_aac, loop=False, max_peak_db=-
     else:
         body = x
         info = {}
-    tmp = os.path.join(tmp_dir or os.path.dirname(out_base), '_enc_tmp.wav')
+    # unique per output: render workers run in parallel
+    tmp = os.path.join(tmp_dir or os.path.dirname(out_base), f'_enc_{os.path.basename(out_base)}.wav')
     gain = 1.0
     for _ in range(4):
         write_wav(tmp, body * gain)

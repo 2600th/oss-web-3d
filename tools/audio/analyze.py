@@ -68,7 +68,7 @@ def sheet(items, path, title, cols=4):
         asp.tick_params(labelsize=6)
     fig.suptitle(title)
     fig.tight_layout()
-    fig.savefig(path, dpi=80)
+    fig.savefig(path, dpi=66)
     plt.close(fig)
 
 
