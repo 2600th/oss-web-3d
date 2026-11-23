@@ -39,6 +39,11 @@
       on: () => { window.__game.post.options.godRays = 0.5; },
     },
   };
+  // both new passes together (the worst case: low sun in frame)
+  FEATURES.all = {
+    off: () => { FEATURES.ao.off(); FEATURES.rays.off(); },
+    on: () => { FEATURES.ao.on(); FEATURES.rays.on(); },
+  };
 
   async function ab(pose, { seconds = 20, rounds = 3, feature = 'ao', settle = 3000 } = {}) {
     if (pose) await window.__bench.pose(pose);
