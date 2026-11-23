@@ -11,22 +11,49 @@ const WHITE = [1, 0.95, 0.86];
 const WARM = [1, 0.62, 0.3];
 
 /**
+ * Lamp positions on the MiG-21 (mig21.glb and mig21_hostile*.glb share the
+ * airframe), measured on the mesh with tools/blender/probe_lamps.py, in model
+ * space (nose -Z, right +X, up +Y, metres). Each sprite sits ~2.5 cm proud of
+ * its lens so the lens itself does not hide it, and the airframe does:
+ *   wing lenses   (±2.81, -0.746, 1.419), in the leading edge 0.86 m inboard
+ *                 of the tip (the tip itself is x ±3.666, y -0.78)
+ *   tail lens     (0, 1.704, 7.635), the top of the fin trailing edge
+ *   spine         skin top y 0.381 at z 1.2 (no lens on the mesh)
+ *   belly         skin bottom y -1.444 at z 3.0, aft of the centreline tank
+ * The old defaults (wing ±3.52, -0.05, 1.6; spine y 0.95; belly inside the
+ * fuselage) floated 0.7 m above and ahead of the wing and 0.55 m over the spine.
+ */
+export const MIG21_LAMPS = {
+  wing: [2.81, -0.746, 1.395],
+  tail: [0, 1.704, 7.66],
+  spine: [0, 0.405, 1.2],
+  belly: [0, -1.47, 3.0],
+};
+
+/**
  * Navigation lights for an airframe in model conventions (nose -Z, right +X,
- * up +Y, metres): red on the left wingtip, green on the right, white on the
+ * up +Y, metres): red on the left wing, green on the right, white on the
  * tail, a red anti-collision beacon on the spine and a white belly strobe.
- * Defaults fit the MiG-21 (see src/assets/catalog.js sockets).
+ * Defaults fit the MiG-21 (MIG21_LAMPS). By day the steady lights are a small
+ * lit point (daySize 0.25, 12% intensity); the beacon and strobe still flash.
  */
 export function attachNavLights(sprites, object3d, {
-  halfSpan = 3.52, wingZ = 1.6, wingY = -0.05, tail = [0, 1.9, 6.7], spine = [0, 0.95, 0.4], belly = [0, -0.75, 0.2],
+  wing = MIG21_LAMPS.wing, tail = MIG21_LAMPS.tail, spine = MIG21_LAMPS.spine, belly = MIG21_LAMPS.belly,
   intensity = 1, phase = Math.random(),
 } = {}) {
-  const base = { object3d, group: object3d, day: 0.1, radius: 0.15, minPx: 1.5, range: 14000 };
+  const base = { object3d, group: object3d, day: 0.12, daySize: 0.25, radius: 0.15, minPx: 1.5, range: 14000 };
+  const flash = { day: 0.6, daySize: 0.5, minPx: 1.8, range: 20000 };
+  // Emission lobes (as on a real aircraft: each wing light covers forward
+  // through its own side, the tail light aft, the beacons up / down). They
+  // also stop a lamp from showing across the airframe: the green light seen
+  // over the spine from the left was the sprite of a lamp the jet hides.
+  const wingLobe = (sx) => ({ dir: { x: sx * 0.82, y: 0, z: -0.57 }, cone: -0.2 });
   return [
-    sprites.add({ ...base, offset: { x: -halfSpan, y: wingY, z: wingZ }, color: RED, intensity: 5 * intensity }),
-    sprites.add({ ...base, offset: { x: halfSpan, y: wingY, z: wingZ }, color: GREEN, intensity: 4.5 * intensity }),
-    sprites.add({ ...base, offset: { x: tail[0], y: tail[1], z: tail[2] }, color: WHITE, intensity: 3 * intensity, radius: 0.12 }),
-    sprites.add({ ...base, offset: { x: spine[0], y: spine[1], z: spine[2] }, color: RED, intensity: 8 * intensity, radius: 0.2, minPx: 1.8, range: 20000, blink: { period: 1.3, phase, kind: 'beacon' } }),
-    sprites.add({ ...base, offset: { x: belly[0], y: belly[1], z: belly[2] }, color: WHITE, intensity: 9 * intensity, radius: 0.18, minPx: 1.8, range: 20000, blink: { period: 1.3, phase: phase + 0.5, kind: 'strobe' } }),
+    sprites.add({ ...base, ...wingLobe(-1), offset: { x: -wing[0], y: wing[1], z: wing[2] }, color: RED, intensity: 5 * intensity }),
+    sprites.add({ ...base, ...wingLobe(1), offset: { x: wing[0], y: wing[1], z: wing[2] }, color: GREEN, intensity: 4.5 * intensity }),
+    sprites.add({ ...base, dir: { x: 0, y: 0.3, z: 1 }, cone: -0.1, offset: { x: tail[0], y: tail[1], z: tail[2] }, color: WHITE, intensity: 3 * intensity, radius: 0.12 }),
+    sprites.add({ ...base, ...flash, dir: { x: 0, y: 1, z: 0 }, cone: -0.15, offset: { x: spine[0], y: spine[1], z: spine[2] }, color: RED, intensity: 8 * intensity, radius: 0.2, blink: { period: 1.3, phase, kind: 'beacon' } }),
+    sprites.add({ ...base, ...flash, dir: { x: 0, y: -1, z: 0 }, cone: -0.15, offset: { x: belly[0], y: belly[1], z: belly[2] }, color: WHITE, intensity: 9 * intensity, radius: 0.18, blink: { period: 1.3, phase: phase + 0.5, kind: 'strobe' } }),
   ].filter(Boolean);
 }
 

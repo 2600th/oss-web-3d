@@ -100,8 +100,9 @@ export class Aircraft {
     this.length = b.max.z - b.min.z;
     this.wingspan = b.max.x - b.min.x;
     this.sockets.nozzle.position.set(0, -0.61, 6.42); // [vfx] measured nozzle exit of mig21.glb (centre of the 0.45 m lip); the bbox guess was 0.66 m high and 1.16 m aft (it measured the fin)
-    this.sockets.wingtipL.position.set(b.min.x + 0.15, -0.05, 1.6);
-    this.sockets.wingtipR.position.set(b.max.x - 0.15, -0.05, 1.6);
+    // [art pass] measured wingtips of mig21.glb (outermost point x ±3.666, y -0.777, z 2.74; tools/blender/probe_lamps.py); the bbox guess floated 0.7 m above and 1.1 m ahead of the wing
+    this.sockets.wingtipL.position.set(-3.64, -0.777, 2.74);
+    this.sockets.wingtipR.position.set(3.64, -0.777, 2.74);
     this.sockets.gun.position.set(0, -0.6, -2.5);
     this.sockets.cockpit.position.set(0, 0.22, -2.95); // measured pilot eye (docs/v2/evidence/assets/cockpit)
     this.loaded = true;

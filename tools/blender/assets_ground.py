@@ -16,13 +16,38 @@ D2R = math.pi / 180
 
 
 # ------------------------------------------------------------------ helpers
-def wheel(p, r, w, loc, tyre='rubber', hub='olive', seg=14, axis='x'):
-    rot = (0, 90, 0) if axis == 'x' else (90, 0, 0)
-    p.cyl(r, w, mat(tyre), loc=loc, rot=rot, seg=seg, smooth=True)
-    off = V((w / 2 + 0.005, 0, 0)) if axis == 'x' else V((0, w / 2 + 0.005, 0))
+def wheel(p, r, w, loc, tyre='rubber', hub='olive', seg=14, axis='x', tread=True):
+    """Tyre with rounded shoulders and a dished rim (one lathe about the axle),
+    a steel hub cap each side and, on road tyres, cross-country tread lugs.
+    [models polish] was a flat-sided cylinder with a painted disc: a hockey
+    puck in close strafing passes. `tread=False` for track road wheels."""
+    seg = max(seg, 18)
+    hw = w / 2
+    prof = [(0.0, hw * 0.50), (r * 0.52, hw * 0.50), (r * 0.60, hw * 0.92), (r * 0.84, hw), (r * 0.96, hw * 0.86),
+            (r, hw * 0.55), (r, -hw * 0.55), (r * 0.96, -hw * 0.86), (r * 0.84, -hw), (r * 0.60, -hw * 0.92),
+            (r * 0.52, -hw * 0.50), (0.0, -hw * 0.50)]
+    rim, rub = mat(hub), mat(tyre)
+    mats = [rim, rim] + [rub] * 7 + [rim, rim]
+    # lathe axis is local +Y: turn it onto the axle
+    rot = (0, 0, -90) if axis == 'x' else (0, 0, 0)
+    p.lathe(prof, rub, seg=seg, loc=loc, rot=rot, mats=mats)
+    ax = V((1, 0, 0)) if axis == 'x' else V((0, 1, 0))
     for s in (1, -1):
-        p.cyl(r * 0.55, 0.02, mat(hub), loc=tuple(V(loc) + off * s), rot=rot, seg=10)
-        p.cyl(r * 0.18, 0.05, mat('steel'), loc=tuple(V(loc) + off * s * 1.2), rot=rot, seg=8)
+        p.cyl(r * 0.2, hw * 0.5, mat('steel'), loc=tuple(V(loc) + ax * s * hw * 0.6),
+              rot=(0, 90, 0) if axis == 'x' else (90, 0, 0), seg=10)
+    if not tread:
+        return
+    n = int(2 * math.pi * r / 0.11)
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        off = (1 if k % 2 else -1) * hw * 0.26
+        lug = (w * 0.44, 0.055, 0.03)
+        if axis == 'x':
+            c = V(loc) + V((off, -math.sin(a) * r, math.cos(a) * r))
+            p.box(lug, rub, loc=tuple(c), rot=(a / D2R, 0, 0))
+        else:
+            c = V(loc) + V((math.sin(a) * r, off, math.cos(a) * r))
+            p.box((0.055, w * 0.44, 0.03), rub, loc=tuple(c), rot=(0, a / D2R, 0))
 
 
 def sandbag(p, loc, yaw=0.0, size=(0.58, 0.34, 0.15), mname='burlap'):
@@ -224,7 +249,7 @@ def tracks(p, L, x, z_axle, r_wheel=0.3, width=0.42, n=6):
         p.cyl((top - bot) / 2 + 0.03, width, mat('steel'), loc=(x, s * (L / 2 - 0.42), (top + bot) / 2), rot=(0, 90, 0), seg=14)
     for i in range(n):
         y = -L / 2 + 0.9 + i * (L - 1.8) / (n - 1)
-        wheel(p, r_wheel, width * 0.7, (x, y, z_axle), tyre='rubber', hub='olive', seg=12)
+        wheel(p, r_wheel, width * 0.7, (x, y, z_axle), tyre='rubber', hub='olive', seg=12, tread=False)
 
 
 def sam_launcher(destroyed=False):
@@ -326,36 +351,36 @@ def radar(destroyed=False):
     d = Part()
     d.cyl(0.32, 0.5, mat(paint), loc=(0, 0.9, pz + 0.25), seg=14)
     d.box((0.5, 0.5, 0.35), mat(paint), loc=(0, 0.75, pz + 0.55), bevel=0.02)
-    # parabolic reflector: an elliptical dish facing +Y, tilted up 12 deg
+    # [models polish] parabolic reflector with an elliptical rim (was a square
+    # grid, so the outline had corners 0.65 m deep). Now an elliptical cut of a
+    # paraboloid of revolution, y = (x^2 + z^2) / 4f with f = 1.1 m: rim 2.4 x 1.3 m,
+    # 0.33 m deep at the long ends, 4 cm shell.
     tilt = 12
-    rw, rh, depth = 2.4, 1.3, 0.45
-    seg_u, seg_v = 16, 8
-    verts = []
+    rw, rh, foc, th = 2.4, 1.3, 1.1, 0.04
+    depth = (rw / 2) ** 2 / (4 * foc)
+    seg_u, seg_v = 28, 6
     bm = d.bm
     before = set(bm.faces)
-    rows = []
-    for j in range(seg_v + 1):
-        row = []
-        for i in range(seg_u + 1):
-            u = (i / seg_u - 0.5) * 2
-            v = (j / seg_v - 0.5) * 2
-            x, z = u * rw / 2, v * rh / 2
-            y = depth * (u * u * 0.85 + v * v * 0.6)
-            row.append(V((x, y, z)))
-        rows.append(row)
-    front = [[bm.verts.new(c) for c in row] for row in rows]
-    back = [[bm.verts.new(c + V((0, -0.04, 0))) for c in row] for row in rows]
-    for j in range(seg_v):
+
+    def ring(r, off):
+        out = []
         for i in range(seg_u):
-            bm.faces.new((front[j][i], front[j][i + 1], front[j + 1][i + 1], front[j + 1][i]))
-            bm.faces.new((back[j][i], back[j + 1][i], back[j + 1][i + 1], back[j][i + 1]))
-    edge = [(0, i) for i in range(seg_u)] + [(j, seg_u) for j in range(seg_v)] + [(seg_v, i) for i in range(seg_u, 0, -1)] + [(j, 0) for j in range(seg_v, 0, -1)]
-    for k in range(len(edge)):
-        a, b = edge[k], edge[(k + 1) % len(edge)]
-        try:
-            bm.faces.new((front[a[0]][a[1]], back[a[0]][a[1]], back[b[0]][b[1]], front[b[0]][b[1]]))
-        except ValueError:
-            pass
+            a = 2 * math.pi * i / seg_u
+            x, z = math.cos(a) * r * rw / 2, math.sin(a) * r * rh / 2
+            out.append(bm.verts.new((x, (x * x + z * z) / (4 * foc) + off, z)))
+        return out
+    radii = [(k / seg_v) ** 0.8 for k in range(1, seg_v + 1)]
+    front = [ring(r, 0.0) for r in radii]
+    back = [ring(r, -th) for r in radii]
+    cf, cb = bm.verts.new((0, 0, 0)), bm.verts.new((0, -th, 0))
+    for i in range(seg_u):
+        j = (i + 1) % seg_u
+        bm.faces.new((cf, front[0][i], front[0][j]))
+        bm.faces.new((cb, back[0][j], back[0][i]))
+        for k in range(seg_v - 1):
+            bm.faces.new((front[k][i], front[k + 1][i], front[k + 1][j], front[k][j]))
+            bm.faces.new((back[k][i], back[k][j], back[k + 1][j], back[k + 1][i]))
+        bm.faces.new((front[-1][i], back[-1][i], back[-1][j], front[-1][j]))  # rim
     new = [f for f in bm.faces if f not in before]
     bmesh_ops = bmesh.ops
     bmesh_ops.recalc_face_normals(bm, faces=new)
@@ -363,17 +388,33 @@ def radar(destroyed=False):
     for f in new:
         f.material_index = dm
         f.smooth = True
-    dv = list({v for f in new for v in f.verts})
-    bmesh_ops.transform(bm, matrix=M((0, 1.05, pz + 1.35), (-tilt, 0, 0)), verts=dv)
-    # back frame + feed horn on struts
-    d.box((0.12, 0.12, 1.2), mat('steel'), loc=(0, 0.95, pz + 1.0))
-    feed = V((0, 1.05 + 1.25, pz + 1.35 + 0.27))
+    # back frame: three horizontal ribs, each a bent bar hugging the shell
+    before_r = set(bm.faces)
+    for zr in (-0.38, 0.0, 0.38):
+        half = rw / 2 * math.sqrt(max(0.0, 1 - (zr / (rh / 2)) ** 2)) * 0.9
+        n = 6
+        for k in range(n):
+            x0, x1 = -half + 2 * half * k / n, -half + 2 * half * (k + 1) / n
+            y0 = (x0 * x0 + zr * zr) / (4 * foc) - th - 0.03
+            y1 = (x1 * x1 + zr * zr) / (4 * foc) - th - 0.03
+            rod(d, (x0, y0, zr), (x1, y1, zr), 0.03)
+    ribs = [f for f in bm.faces if f not in before_r]
+    dv = list({v for f in new + ribs for v in f.verts})
+    # +tilt about X turns the +Y boresight up (the old -tilt aimed it 12 deg
+    # down while the feed sat 12 deg up, off the axis)
+    dish_m = M((0, 1.05, pz + 1.35), (tilt, 0, 0))
+    bmesh_ops.transform(bm, matrix=dish_m, verts=dv)
+    d.box((0.12, 0.12, 1.2), mat('steel'), loc=(0, 0.95, pz + 1.0))  # spine to the pedestal
+    # feed horn at the focus, on the dish axis
+    feed = V((0, 1.05 + foc * math.cos(math.radians(tilt)), pz + 1.35 + foc * math.sin(math.radians(tilt))))
+    def on_shell(x, z):
+        return tuple(dish_m @ V((x, (x * x + z * z) / (4 * foc), z)))
     for s in (1, -1):
-        rod(d, (s * 0.9, 1.2, pz + 1.35), tuple(feed), 0.025)
-    rod(d, (0, 1.25, pz + 1.92), tuple(feed), 0.025)
-    d.box((0.18, 0.22, 0.14), mat('gunmetal'), loc=tuple(feed), rot=(-tilt, 0, 0))
+        rod(d, on_shell(s * 0.9, 0.0), tuple(feed), 0.025)
+    rod(d, on_shell(0.0, 0.55), tuple(feed), 0.025)
+    d.box((0.18, 0.22, 0.14), mat('gunmetal'), loc=tuple(feed), rot=(tilt, 0, 0))
     # small IFF bar on top
-    d.box((1.6, 0.06, 0.12), mat('steel'), loc=(0, 0.95, pz + 2.1))
+    d.box((1.6, 0.06, 0.12), mat('steel'), loc=on_shell(0.0, 0.70), rot=(tilt, 0, 0))  # seated on the rim
     if destroyed:
         d.transform(M(rot=(-28, 10, 0)), verts=None)
         d.transform(M((0.3, 0.6, -0.9)))
@@ -394,7 +435,10 @@ def truck(covered=False, destroyed=False):
     A.ground_plane()
     paint = 'olive'
     p = Part()
-    r = 0.54
+    # [models polish] Ural-4320 reference: 7.37 x 2.50 x 2.72 m (3.0 m with the
+    # tilt), 14.00-20 tyres (1.22 m), wheelbase 3.53 + 1.40 m. The tyres were
+    # 1.08 m and the cab steps stuck out to 3.10 m overall width.
+    r = 0.61
     wz = r
     # chassis rails
     for s in (1, -1):
@@ -404,12 +448,16 @@ def truck(covered=False, destroyed=False):
         for s in (1, -1):
             if destroyed and y < 0 and s > 0 and y > -2:
                 continue
-            wheel(p, r, 0.38, (s * 1.0, y, wz), axis='x', seg=16)
+            wheel(p, r, 0.36, (s * 1.0, y, wz), axis='x', seg=20)
         p.box((1.8, 0.14, 0.14), mat('steel'), loc=(0, y, wz))
     # front: bumper, hood, grille, fenders
     p.box((2.35, 0.18, 0.25), mat('steel'), loc=(0, 3.75, 0.85), bevel=0.02)
     p.box((1.3, 1.4, 0.75), mat(paint), loc=(0, 3.0, 1.45), bevel=0.06, taper=(0.92, 0.95))
     p.box((1.1, 0.04, 0.6), mat('black'), loc=(0, 3.71, 1.42))
+    for k in range(9):  # radiator grille slats
+        p.box((0.05, 0.05, 0.56), mat(paint), loc=(-0.48 + k * 0.12, 3.735, 1.42), bevel=0.008)
+    for s in (1, -1):  # tow hooks
+        p.torus(0.06, 0.015, mat('steel'), loc=(s * 0.7, 3.88, 0.85), rot=(0, 90, 0), seg=10, rseg=4)
     for s in (1, -1):
         p.box((0.55, 1.4, 0.06), mat(paint), loc=(s * 0.98, 2.75, 1.22), rot=(0, s * -8, 0), bevel=0.02)
         p.box((0.05, 0.9, 0.45), mat(paint), loc=(s * 1.24, 2.95, 1.0))
@@ -419,10 +467,13 @@ def truck(covered=False, destroyed=False):
     p.box((1.95, 0.05, 0.55), mat('glass'), loc=(0, 2.31, 2.12), rot=(-8, 0, 0))
     for s in (1, -1):
         p.box((0.05, 0.8, 0.45), mat('glass'), loc=(s * 1.15, 1.7, 2.1))
-        p.box((0.05, 0.25, 0.2), mat('steel'), loc=(s * 1.32, 2.2, 2.05))   # mirror
-        p.box((0.5, 0.6, 0.12), mat('steel'), loc=(s * 1.3, 1.5, 0.75))     # step
+        p.box((0.04, 0.2, 0.28), mat('steel'), loc=(s * 1.27, 2.25, 2.05), bevel=0.01)   # mirror
+        rod(p, (s * 1.15, 2.2, 2.15), (s * 1.26, 2.25, 2.1), 0.012)                       # mirror arm
+        p.box((0.3, 0.55, 0.05), mat('steel'), loc=(s * 1.06, 1.5, 0.78))                 # step
+        p.box((0.3, 0.55, 0.05), mat('steel'), loc=(s * 1.06, 1.5, 0.48))                 # lower step
     p.cyl(0.29, 1.1, mat('drum_green'), loc=(-0.95, 0.4, 1.0), rot=(90, 0, 0), seg=12)  # fuel tank
-    p.cyl(0.06, 1.2, mat('steel'), loc=(1.15, 0.85, 2.5), seg=8)  # exhaust stack
+    p.cyl(0.06, 0.9, mat('steel'), loc=(1.12, 0.85, 2.2), seg=10)  # exhaust stack (top 2.65 m)
+    p.cyl(0.075, 0.35, mat('black'), loc=(1.12, 0.85, 2.55), seg=10, cap=False)  # heat shield
     wheel(p, r, 0.38, (0.0, 0.62, 1.55), axis='y', seg=16)  # spare wheel behind the cab
     # cargo bed
     by0, by1 = 0.35, -3.7
@@ -452,7 +503,7 @@ def truck(covered=False, destroyed=False):
         p.transform(M(rot=(-3.5, 4.0, 0)), verts=None)
         p.transform(M((0, 0, -0.12)))
     A.mesh('body', p)
-    A.socket('exhaust', (1.15, 0.85, 3.1))
+    A.socket('exhaust', (1.12, 0.85, 2.65))
     if destroyed:
         debris(A, seed=41, n=12, radius=4.5)
     return A
@@ -469,9 +520,12 @@ def sangar():
         a = (-130 + 26 * k) * D2R
         pts.append((R * math.sin(a), R * math.cos(a)))
     stone_wall(p, pts, height=1.05, thick=0.7, seed=5)
+    # [models polish] the wall is 4 courses of 0.22 m (top ~0.88 m); the bags
+    # sat at 1.12 m, floating 0.15 m above it. Bedded 2 cm into the top course.
+    top = int(1.05 / 0.22) * 0.22
     for k in range(9):
         a = (-100 + 25 * k) * D2R
-        sandbag(p, ((R - 0.05) * math.sin(a), (R - 0.05) * math.cos(a), 1.12), yaw=-a / D2R + 90)
+        sandbag(p, ((R - 0.05) * math.sin(a), (R - 0.05) * math.cos(a), top + 0.055), yaw=-a / D2R + 90)
     p.box((1.4, 0.9, 0.01), mat('canvas_dark'), loc=(0.2, 0.2, 0.005))
     crate(p, (0.6, 0.35, 0.3), (-1.0, -0.2, 0.15), yaw=40)
     A.mesh('walls', p)
