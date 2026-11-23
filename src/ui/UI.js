@@ -10,6 +10,8 @@ import { keyFor } from './bindings.js';
 import { buildTitle, buildPause, buildDebrief, buildMemorial, buildCredits, buildLoading } from './screens/screens.js';
 import { buildMissionSelect, buildBriefing } from './screens/missions.js';
 import { buildSettings } from './screens/settingsScreen.js';
+import { Rumbler, RUMBLE, damageRumble, blastRumble } from './rumble.js';
+import { hitSeverity } from '../camera/cameraMath.js';
 
 /**
  * UI orchestrator: screens, HUD, touch controls, settings side effects, and
@@ -51,6 +53,12 @@ export class UI {
     this.live.setAttribute('aria-live', 'polite');
     this.alert = el('div', 'sr-only', host);
     this.alert.setAttribute('role', 'alert');
+
+    // Controller rumble: only in flight, only when the vibration setting is on.
+    this.rumbler = new Rumbler({
+      play: (strong, weak, ms) => game.input?.rumble?.(strong, weak, ms) ?? false,
+      enabled: () => this.settings.vibration !== false && this.screen === 'sortie',
+    });
 
     this.touchControls = new TouchControls(game.input, host, {
       settings: this.settings,
@@ -213,6 +221,7 @@ export class UI {
       this.hud.occluders = this.touchControls.occluders();
     }
     this.hud.update(rdt, this.game);
+    this.rumbler.update(this.screen === 'sortie' && this.game.hud?.gun?.firing === true);
     this.touchControls.sync(this.game.hud);
   }
 
@@ -293,6 +302,7 @@ export class UI {
       if (rig?.setMode && view) rig.setMode(view);
     }
     const flying = id === 'sortie' || id === 'pause';
+    if (id !== 'sortie') this.rumbler.stop(() => this.game.input?.stopRumble?.());
     this.hud.setVisible(flying);
     this.hud.canvas.classList.toggle('dim', id === 'pause');
     this.touchControls.setEnabled(this.touch && id === 'sortie');
@@ -448,20 +458,69 @@ export class UI {
       if (!isPlayer(p.killer)) return;
       const t = p.target ?? {};
       const pts = Number.isFinite(p.score) ? `+${p.score}` : '';
-      if (t.isAce || t.fighter?.ace || t.kind === 'ace') this.hud.callout('ace', 'LEAD DOWN', pts, 3);
+      const lead = t.isAce || t.fighter?.ace || t.kind === 'ace';
+      if (lead) this.hud.callout('ace', 'LEAD DOWN', pts, 3);
       else if (isGround(t)) this.hud.callout('ground', 'NEUTRALISED', pts);
       else this.hud.callout('kill', 'SPLASH', pts);
+      this.hud.killMark(p.position ?? t.position, t);
+      this.rumbler.pulse(lead ? RUMBLE.killLead : RUMBLE.kill);
     });
     ev.on('target:hit', (p) => {
       if (p.target?.team === 'friendly' || p.target?.team === 'player') return;
-      if (p.attacker && !isPlayer(p.attacker)) return;
-      this.hud.callout('hit', 'STRUCK', '', 1.1);
+      const by = p.source ?? p.attacker;
+      if (by && !isPlayer(by)) return;
+      // Every hit ticks the marker (and audio plays its hit tone); a gun
+      // burst lands a dozen rounds, so only a missile or rocket also gets the
+      // STRUCK line, and repeats refresh it instead of stacking.
+      this.hud.hitMark(p.target);
+      if (p.weapon !== 'gun') this.hud.callout('hit', 'STRUCK', '', 1.1);
+      this.rumbler.pulse(RUMBLE.hit);
+    });
+    const inbound = new Map(); // hostile missile -> its shooter
+    ev.on('missile:launch', ({ missile: m } = {}) => {
+      if (!m) return;
+      if (isPlayer(m.owner)) {
+        this.rumbler.pulse(m.kind === 'rocket' ? RUMBLE.rocket : RUMBLE.launch);
+        return;
+      }
+      if (m.owner && isPlayer(m.target)) {
+        inbound.set(m, m.owner);
+        this.hud.markFiring(m.owner, 40);
+      }
     });
     ev.on('missile:end', (p) => {
       const m = p.missile;
-      if (!m || !isPlayer(m.owner)) return;
+      if (!m) return;
+      const shooter = inbound.get(m);
+      if (shooter) {
+        inbound.delete(m);
+        let still = false;
+        for (const o of inbound.values()) if (o === shooter) still = true;
+        if (!still) this.hud.ceaseFire(shooter, 1.5);
+        const me = this.game.flight?.position;
+        if (p.reason !== 'hit' && me && m.position && m.position.distanceTo(me) < 150) this.rumbler.pulse(RUMBLE.nearMiss);
+      }
+      if (!isPlayer(m.owner)) return;
       if (p.reason === 'miss' || p.reason === 'fuel' || p.reason === 'ground') this.hud.callout('miss', 'NO HIT', '', 1.3);
     });
+    // Who is shooting at us: guns (fighters, AAA), flak shells, SAM launches.
+    ev.on('weapon:gun', ({ firing, entity } = {}) => {
+      if (!entity || isPlayer(entity) || entity.team !== 'hostile') return;
+      if (firing) this.hud.markFiring(entity, Infinity);
+      else this.hud.ceaseFire(entity, 1.5);
+    });
+    ev.on('weapon:flak', ({ entity } = {}) => entity && this.hud.markFiring(entity, 2.5));
+    ev.on('ai:samLaunch', ({ entity } = {}) => entity && this.hud.markFiring(entity, 3));
+    ev.on('flare:release', ({ flare } = {}) => {
+      if (!flare?.owner || isPlayer(flare.owner)) this.rumbler.pulse(RUMBLE.flare);
+    });
+    ev.on('explosion', ({ position, size } = {}) => {
+      const me = this.game.flight?.position;
+      if (position && me) this.rumbler.pulse(blastRumble(position.distanceTo(me), size));
+    });
+    ev.on('camera:sonic', ({ direction } = {}) => { if (direction > 0) this.rumbler.pulse(RUMBLE.sonic); });
+    ev.on('player:destroyed', () => this.rumbler.pulse(RUMBLE.destroyed));
+    ev.on('player:crash', () => this.rumbler.pulse(RUMBLE.destroyed));
     for (const k of ['acquiring', 'locked', 'lost']) {
       ev.on(`lock:${k}`, (p) => this.hud.onLock(k === 'lost' ? 'none' : k, p?.target));
     }
@@ -471,9 +530,15 @@ export class UI {
       if (!was) this._say('Missile warning', true);
     });
     ev.on('threat:cleared', () => this.hud.setThreat(null));
-    ev.on('player:hit', (p) => {
-      if (this.settings.prefersReducedMotion) this.hud.flashDamage(0);
-      else this.hud.flashDamage(p.damage ?? 0.2);
+    ev.on('player:hit', (p = {}) => {
+      // `damage` is hit points: feedback scales with severity (0..1)
+      const sev = hitSeverity(p);
+      this.hud.flashDamage(this.settings.prefersReducedMotion ? Math.min(sev, 0.2) : sev);
+      const src = p.source;
+      // point at the shooter (its live position); a missile's own position is
+      // where it burst, which is the right place to point too
+      this.hud.damageFrom(src?.position && src.alive !== false ? src.position : p.position, sev);
+      this.rumbler.pulse(damageRumble(sev));
     });
   }
 
@@ -559,6 +624,9 @@ export class UI {
         break;
       case 'cameraFov':
         if (g.cameraRig) g.cameraRig.baseFov = 62 + value;
+        break;
+      case 'vibration':
+        if (!value) this.rumbler?.stop(() => g.input?.stopRumble?.());
         break;
     }
     if (!initial) g.events.emit('settings:change', { key, value, settings: this.settings });

@@ -828,3 +828,73 @@ Owner paths: `tools/blender/build_pilot.py`, `tools/blender/assets_ground.py` an
     curvature, detail height and slope shedding.
   - If `material.js` changes its `snowLine` / `snowRaw` formula, update
     `siteSnow` to match.
+
+### Feel polish: label declutter, hit/kill/damage feedback, rumble (additive unless marked)
+
+Owner paths: `src/ui/**`, `src/camera/**`, `src/audio/**`, `src/core/Input.js`
+(rumble only). Small emit changes in `src/combat/**`. Evidence:
+`docs/v2/evidence/polish-feel/`.
+
+- **`player:hit` (additive):** new `fraction` field (damage / max health) and
+  new `severity` field (0..1, `min(1, sqrt(fraction / 0.25))`: a stray round
+  is about 0.37, a hit of a quarter of the jet or more is 1).
+  - `damage` is in **hit points** (the jet has 100). Feedback must scale by
+    `severity`, not by `damage`. Every consumer used to read `damage` as
+    0..1, so every hit landed at full strength.
+  - `cameraMath.hitSeverity(payload)` returns the same value, with a fallback
+    for payloads that only carry `damage`.
+- **`target:hit` (additive):** new `source` field (the attacker entity) and
+  new `weapon` field (weapon id). The ui ticks the marker on every player hit.
+  It shows `STRUCK` only when `weapon !== 'gun'`.
+- **`vfx:shake` on `player:hit` (changed):** combat now sends
+  `0.05 + 0.3 x severity`. It was `0.25 + damage / 40`.
+- **Camera (changed values):**
+  - `player:hit` trauma is `0.1 + 0.45 x severity` (was `0.35 + min(0.5,
+    damage x 2)`).
+  - `screen.hit` gets `max(0, severity - 0.35) / 4`.
+  - A player missile launch adds `fovPulse(-9)` and trauma 0.14. For rockets
+    these are -3 and 0.06.
+- **HUD API (new):**
+  - `hud.markFiring(entity, seconds)`, `hud.ceaseFire(entity, linger)` and
+    `hud.isFiring(t)`. While a hostile is firing on the player, its marker is
+    never folded into another marker and never hidden, its label is never
+    dropped, it gets a warning ring, and its edge arrow is filled red. The ui
+    sets this from:
+    - `weapon:gun` from a hostile entity;
+    - a hostile `missile:launch` aimed at the player, until `missile:end`;
+    - `weapon:flak` and `ai:samLaunch`.
+  - `hud.hitMark(target)`, `hud.killMark(position, target)`,
+    `hud.damageFrom(position, severity)` (direction wedge, plus a HUD flicker
+    on heavy hits).
+  - `hud.flashDamage(sev)` now takes a severity (0..1).
+- **Label placement (changed):** see `src/ui/declutter.js` (`labelTier`,
+  `mustLabel`, `sortForLabels`, `foldMarkers`, `leaderSlots`, `placeLabels`,
+  `easeAlpha`).
+  - Lock, firing and selected labels always place.
+  - Other labels share a budget of 3 (2 on touch) and drop out when no slot
+    is clear.
+  - Labels can sit on leader lines.
+  - The lock reticle is a keep-out for all other text.
+  - The lock, the selected target and shooters never fold markers into
+    themselves.
+- **Audio:**
+  - `warnings.setLevel(name, 0..1)` with `riseParams(name, x)`. The `acquire`
+    growl sweeps with `hud.lock.progress`. The `missile` alert sweeps with
+    `missileUrgency(hud.threats)` (new export of `src/audio/physics.js`; time
+    to impact 5 s gives 0, 1 s gives 1).
+  - New tone `lockon`: on while `hud.lockWarning` holds and nothing has
+    launched.
+  - A `player:hit` with severity above 0.55 dulls the world mix for about
+    0.7 s.
+  - `hit_airframe` gain is `0.35 + 0.65 x severity`.
+- **Rumble (new):**
+  - `input.rumble(strong, weak, ms)` plays a Gamepad `vibrationActuator`
+    `dual-rumble` effect and returns false when there is no actuator.
+    `input.stopRumble()` stops it.
+  - The patterns are in `src/ui/rumble.js` (`RUMBLE`, `damageRumble`,
+    `blastRumble`, `Rumbler`) and are driven by the ui from combat events.
+  - Rumble runs only while the ui screen is `sortie`.
+  - It is gated by the existing `settings.vibration` ("Controller
+    vibration", which also covers touch haptics). There is no new setting key.
+- **Callouts (changed):** a `hit` or `miss` callout with the same text as the
+  top line refreshes that line instead of stacking.

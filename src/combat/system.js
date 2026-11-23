@@ -71,9 +71,13 @@ export class CombatSystem {
     game.events.on('target:destroyed', ({ target }) => {
       if (target === this.target) { this.target = null; this._autoTimer = 0.35; }
     });
-    game.events.on('player:hit', ({ damage, health }) => {
+    game.events.on('player:hit', ({ damage, health, severity }) => {
       f.damage = Math.min(1, Math.max(0, (0.6 - health) / 0.6));
-      game.events.emit('vfx:shake', { amount: Math.min(1, 0.25 + damage / 40) });
+      // The camera adds its own hit jolt on player:hit; this is the airframe
+      // part, by severity (it was 0.25 + damage / 40: a third of full shake
+      // for every stray round).
+      const sev = severity ?? Math.min(1, Math.sqrt(damage / 25));
+      game.events.emit('vfx:shake', { amount: 0.05 + 0.3 * sev });
     });
     game.events.on('player:destroyed', () => {
       f.destroyed = true;

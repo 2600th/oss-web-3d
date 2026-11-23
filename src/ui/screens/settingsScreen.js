@@ -56,7 +56,10 @@ export const SECTIONS = [
       },
       { key: 'invertY', label: 'Invert pitch', type: 'toggle', note: 'When on, push forward to climb.' },
       { key: 'sensitivity', label: 'Stick sensitivity', type: 'range', min: 0.4, max: 1.8, step: 0.1, fmt: (v) => `${v.toFixed(1)}x` },
-      { key: 'vibration', label: 'Controller vibration', type: 'toggle' },
+      {
+        key: 'vibration', label: 'Controller vibration', type: 'toggle',
+        note: 'Gamepad rumble for the gun, hits, launches and damage, and touch haptics.',
+      },
     ],
   },
   {
