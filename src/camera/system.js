@@ -72,8 +72,8 @@ export function createSystem(game) {
     // (0..1) so a stray round nudges and a missile slams.
     const sev = hitSeverity(p);
     rig.addTrauma(0.1 + 0.45 * sev);
-    // ScreenState.hit maps x -> 0.35 + 4x: a graze stays at its floor
-    screen.hit(Math.max(0, sev - 0.35) / 4);
+    // the screen edge and smear scale from zero with severity (no floor)
+    screen.hitSeverity(sev);
   });
   on('weapon:gun', ({ firing, entity } = {}) => {
     if (!entity || isPlayer(entity)) gunRumble = firing ? 1 : 0;

@@ -49,7 +49,7 @@ test('redout from sustained negative G', () => {
 
 test('hits, explosions and cloud wetness decay', () => {
   const s = new ScreenState();
-  s.hit(0.2);
+  s.hitSeverity(1);
   assert.ok(s.damage > 0.9 && s.smear > 0.9);
   assert.equal(s.explosion(1000, 'large'), 0);
   assert.ok(s.explosion(30, 'large') > 0.7);
@@ -59,6 +59,20 @@ test('hits, explosions and cloud wetness decay', () => {
   for (let i = 0; i < 180; i++) s.update(1 / 60, { inCloud: 0 });
   assert.ok(s.damage < 0.05 && s.smear < 0.01 && s.flash < 0.01);
   assert.ok(s.wet < 0.5 && s.wet > 0.1, `lens dries over seconds, ${s.wet}`);
+});
+
+test('screen hit scales from zero with severity (no floor)', () => {
+  const at = (sev) => { const s = new ScreenState(); s.hitSeverity(sev); return s; };
+  assert.equal(at(0).damage, 0);
+  assert.equal(at(0).smear, 0);
+  const graze = at(0.1), round = at(0.3), missile = at(1);
+  assert.ok(graze.damage < 0.1, `graze edge ${graze.damage}`);
+  assert.ok(graze.smear < 0.02, `graze smear ${graze.smear}`);
+  assert.ok(graze.damage < round.damage && round.damage < missile.damage);
+  assert.ok(round.smear < round.damage, 'smear is reserved for heavy hits');
+  // legacy entry point (fraction of health) follows the same curve
+  const s = new ScreenState(); s.hit(0.25);
+  assert.ok(Math.abs(s.damage - 1) < 1e-9);
 });
 
 test('low health heartbeat only when alive and hurt', () => {

@@ -52,11 +52,22 @@ export class ScreenState {
     this.time = 0;
   }
 
-  /** A hit on the player. `damage` 0..1 of max health. */
+  /**
+   * A hit on the player, by severity 0..1 (`player:hit` severity: a stray
+   * round ~0.2, a missile 1). Scales from zero: there used to be a 0.35
+   * floor, so every graze flashed a third of the full red edge and smear,
+   * and a burst of small hits strobed the screen. The edge rises a little
+   * faster than linear; the smear only shows on the heavy ones.
+   */
+  hitSeverity(severity = 0.3) {
+    const s = clamp01(severity);
+    this.damage = Math.max(this.damage, Math.pow(s, 1.25));
+    this.smear = Math.max(this.smear, s * s);
+  }
+
+  /** A hit as a fraction of max health (0..1); same curve as camera hitSeverity. */
   hit(damage = 0.1) {
-    const d = clamp01(damage * 4 + 0.35);
-    this.damage = Math.max(this.damage, d);
-    this.smear = Math.max(this.smear, clamp01(d * 1.2));
+    this.hitSeverity(Math.sqrt(Math.max(0, damage) / 0.25));
   }
 
   /**
