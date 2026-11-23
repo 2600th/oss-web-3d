@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  uniform, texture, screenUV, cameraNear, cameraFar, perspectiveDepthToViewZ, Fn, vec3, float, length, positionView,
+  uniform, texture, screenUV, cameraNear, cameraFar, perspectiveDepthToViewZ, Fn, vec3, float, length, positionView, smoothstep,
 } from 'three/tsl';
 
 const _m = new THREE.Matrix4();
@@ -40,6 +40,7 @@ export class Shared {
       camVel: uniform(new THREE.Vector3()),
       pixelAngle: uniform(0.001),   // view-space size of one pixel at unit distance
       fade: uniform(1),             // global visibility (drops inside cloud)
+      nearClip: uniform(0),         // metres: effects closer than this fade out (first person: inside the canopy)
     };
     this.tex = {};
     this.time = 0;
@@ -67,6 +68,13 @@ export class Shared {
       : Fn(([dist]) => float(1).add(dist.mul(0)));
     /** Same, for materials whose `positionView` is the shaded point. */
     this.cloudVis = Fn(() => this.cloudVisAt(length(positionView)));
+    /**
+     * TSL: (viewDistance) -> 0..1. In the cockpit and HUD views the camera sits
+     * inside the canopy; world-anchored rain, cloud droplets and sparks that the
+     * jet flies through would otherwise streak across the gunsight and frame
+     * (scene depth cannot hide what is between the eye and the cockpit).
+     */
+    this.nearFade = Fn(([dist]) => smoothstep(this.u.nearClip, this.u.nearClip.mul(1.8).add(1e-3), dist));
     /** TSL: (worldPos) -> 0..1 sun reaching that point through the clouds. */
     this.cloudShadow = env?.cloudShadow ?? Fn(([p]) => float(1).add(p.x.mul(0)));
   }
@@ -104,6 +112,9 @@ export class Shared {
     _prevCam.copy(_v);
     u.camPos.value.copy(_v);
     this._first = false;
+
+    const view = game.cameraRig?.view ?? game.cameraRig?.mode;
+    u.nearClip.value = view === 'cockpit' || view === 'hud' ? 1.4 : 0;
 
     const h = game.r?.renderer?.domElement?.height || 1080;
     u.pixelAngle.value = (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5)) / h;

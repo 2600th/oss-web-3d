@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   texture, uv, float, vec3, clamp, luminance, mix, normalView, positionViewDirection, dot, pow, oneMinus,
-  positionLocal, mx_noise_float, bumpMap, smoothstep,
+  positionLocal, mx_noise_float, bumpMap, smoothstep, lights,
 } from 'three/tsl';
 
 /**
@@ -152,6 +152,19 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
     o.receiveShadow = true;
     if (glass) o.renderOrder = 2; // after the cockpit it covers
     if (env) for (const m of out) if (m && !m.userData?.glass) env.applyCloudShadow(m);
+    // Only the key light (sun / moon) and the environment reflect in the glass.
+    // The pooled VFX point lights include the amber panel flood a few
+    // decimetres from the canopy at night; on a 0.04-roughness surface that
+    // close it made a bright orb hanging over the nose in the cockpit view,
+    // wherever the light was placed. (Outside memo(): env arrives later via
+    // Aircraft.configure and the memo key does not include it.)
+    if (env?.sun?.isLight) {
+      for (const m of out) if (m?.userData?.glass && m.userData.keyLightOnly !== env.sun) {
+        m.lightsNode = lights([env.sun]);
+        m.userData.keyLightOnly = env.sun;
+        m.needsUpdate = true;
+      }
+    }
   });
   return root;
 }

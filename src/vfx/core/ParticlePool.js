@@ -294,7 +294,7 @@ export class ParticlePool {
       const heat = vHeat.mul(tb.a.mul(1.6).add(0.2)).mul(dn.mul(0.8).add(0.6));
       const fire = fireRamp(heat).mul(shaped);
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(vSoft));
-      const k = vVis.mul(depthFade).mul(u.fade).mul(sh.cloudVis());
+      const k = vVis.mul(depthFade).mul(u.fade).mul(sh.cloudVis()).mul(sh.nearFade(length(positionView)));
       const alpha = shaped.mul(vColor.a).mul(k);
       return vec4(lit.mul(vColor.a).mul(k).add(fire.mul(k)), alpha);
     })();
@@ -367,7 +367,7 @@ export class ParticlePool {
           select(vShape.lessThan(2.5), ringS,
             select(vShape.lessThan(3.5), flash, flame))));
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(vSoft));
-      return vec4(vCol.mul(s).mul(depthFade).mul(u.fade).mul(sh.cloudVis()), 0);
+      return vec4(vCol.mul(s).mul(depthFade).mul(u.fade).mul(sh.cloudVis()).mul(sh.nearFade(length(positionView))), 0);
     })();
     return material;
   }

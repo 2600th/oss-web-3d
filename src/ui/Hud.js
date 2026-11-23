@@ -36,6 +36,11 @@ const _q = { x: 0, y: 0, w: 0, depth: 0, behind: false, onScreen: false };
 const _e = { x: 0, y: 0, angle: 0 };
 const _r = { x: 0, y: 0, dist: 0, clamped: false };
 const _lead = { x: 0, y: 0, z: 0, tof: 0 };
+const _coaming = { x: 0, y: 0, w: 0, depth: 0, behind: false, onScreen: false };
+// Top of the gunsight housing in MiG-21 model space (nose -Z, metres): in the
+// cockpit view the pitch ladder is a collimated image above it, never drawn
+// over the instrument panel.
+const COAMING = [0, 0.1, -3.6];
 
 const MUZZLE = 1050; // m/s, GSh-23 class
 
@@ -297,6 +302,19 @@ export class Hud {
     return projectPoint(x, y, z, this._view, this._proj, this.layout.w, this.layout.h, out, margin);
   }
 
+  /** Screen y of the cockpit coaming in the cockpit view, else null. */
+  _coamingY(game) {
+    const g = game.player?.group;
+    if (!g || game.cameraRig?.view !== 'cockpit') return null;
+    const e = g.matrixWorld.elements;
+    const [x, y, z] = COAMING;
+    this._project(
+      e[0] * x + e[4] * y + e[8] * z + e[12],
+      e[1] * x + e[5] * y + e[9] * z + e[13],
+      e[2] * x + e[6] * y + e[10] * z + e[14], _coaming);
+    return _coaming.behind ? null : _coaming.y;
+  }
+
   /** Project a world direction (unit) from the camera. */
   _projectDir(dx, dy, dz, out = _p) {
     const c = this._camPos;
@@ -348,6 +366,8 @@ export class Hud {
     }
     if (wins) ctx.clip('evenodd');
     else ctx.clip();
+    const yCut = this._coamingY(game);
+    if (yCut !== null) { ctx.beginPath(); ctx.rect(0, 0, this.layout.w, yCut); ctx.clip(); }
 
     const lo = Math.max(-85, Math.floor((centrePitch - 35) / 5) * 5);
     const hi = Math.min(85, Math.ceil((centrePitch + 35) / 5) * 5);
