@@ -148,13 +148,24 @@ export class CombatSystem {
     this.world.step(dt);
   }
 
+  /**
+   * Lock range against a target. The player's seeker finds a vehicle by eye
+   * and by heat: in the dark or in murk it has to be closer to a ground target
+   * (night x0.72, storm x0.74). Air targets are unaffected (cloud is handled
+   * separately, by lock time).
+   */
+  lockRangeFor(w, t) {
+    const v = this.world.conditions?.visibility ?? 1;
+    return t?.class === 'ground' ? w.lockRange * Math.max(0.5, Math.sqrt(v)) : w.lockRange;
+  }
+
   _updateLock(dt, f) {
     const st = this.weapon;
     const w = st.def;
     const t = this.target;
     let can = false;
     if (t && t.alive && w.type === 'missile' && st.ammo > 0 && t.lockable !== false && (t.class === 'air' || w.groundLock)) {
-      const g = lockGeometry(f.position, f.forward, t.position, w.lockRange, w.lockCone);
+      const g = lockGeometry(f.position, f.forward, t.position, this.lockRangeFor(w, t), w.lockCone);
       if (g.inRange && g.inCone) {
         this._losTimer -= dt;
         if (this._losTimer <= 0) {
@@ -416,7 +427,7 @@ export class CombatSystem {
       o.isTarget = t.isTarget === true; o.isAce = t.isAce === true;
       o.distance = t.position.distanceTo(f.position);
       o.selected = t === this.target;
-      o.lockable = t.lockable !== false && w.type === 'missile' && (t.class === 'air' || !!w.groundLock) && o.distance <= w.lockRange;
+      o.lockable = t.lockable !== false && w.type === 'missile' && (t.class === 'air' || !!w.groundLock) && o.distance <= this.lockRangeFor(w, t);
       o.locked = o.selected && this.lock.state === 'locked';
       o.health = t.health / t.maxHealth;
       o.onScreen = undefined; o.screen = o.screen ?? { x: 0, y: 0 };

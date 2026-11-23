@@ -168,25 +168,25 @@ export const MISSIONS = [
     summary: 'Supply columns are moving on the valley road under cover of darkness. Find their headlights and stop them.',
     briefing: [
       'Hostile supply columns run the valley road west of Drass after dark. Two are moving tonight.',
-      'There is a quarter moon and no cloud. The trucks drive on dipped headlights: look for the string of lights on the valley floor.',
+      'There is a quarter moon and no cloud. The trucks drive on dipped headlights: look for the string of lights on the valley floor. In the dark your seeker has to be closer to the road before it will hold a vehicle.',
       'Gunners cannot see you well at night, so their fire starts late and wide. Do not give them a second pass on the same line.',
       'If five trucks reach the pass the ammunition is through, and the night is wasted. Guns and rockets are enough for trucks.',
     ],
     start: { x: -15500, z: 9300, alt: 5200, heading: 268, speed: 250 },
     conditions: { time: 22.67, weather: 'clear' },
     specials: ['rkt', 'hobs', 'bomb'], special: 'rkt',
-    timeLimit: 720, parTime: 330, rank: { S: 10200, A: 8600, B: 7000, C: 5000 },
+    timeLimit: 720, parTime: 330, rank: { S: 11200, A: 9600, B: 7800, C: 5500 },
     maxAttackers: 2,
     groups: {
-      col1: { kind: 'convoy', from: { x: -23500, z: 8600 }, heading: 280, length: 9000, count: 5, speed: 14, tags: ['night_trucks', 'night_col1'], isTarget: true },
-      col2: { kind: 'convoy', from: { x: -27500, z: 8200 }, heading: 280, length: 8500, count: 6, speed: 16, tags: ['night_trucks', 'night_col2'], isTarget: true },
-      picket1: { kind: 'base', near: { x: -29000, z: 7000 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 1 }, { type: 'tent', count: 2 }] },
-      picket2: { kind: 'base', near: { x: -33500, z: 7600 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 1 }, { type: 'manpads', count: 1 }, { type: 'flak', count: 1 }] },
-      nightcap: { kind: 'fighters', type: 'veteran', count: 2, at: { x: -40000, z: -10000, alt: 6400 }, heading: 135, tags: ['night_air'], isTarget: true, aware: true },
+      col1: { kind: 'convoy', from: { x: -28500, z: 8100 }, heading: 280, length: 9000, count: 5, speed: 14, tags: ['night_trucks', 'night_col1'], isTarget: true },
+      col2: { kind: 'convoy', from: { x: -33000, z: 7700 }, heading: 280, length: 8500, count: 6, speed: 16, tags: ['night_trucks', 'night_col2'], isTarget: true },
+      picket1: { kind: 'base', near: { x: -31500, z: 8000 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'tent', count: 2 }] },
+      picket2: { kind: 'base', near: { x: -36500, z: 7400 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'flak', count: 1 }] },
+      nightcap: { kind: 'fighters', type: 'veteran', count: 3, at: { x: -44000, z: -6000, alt: 6400 }, heading: 135, tags: ['night_air'], isTarget: true, aware: true },
     },
     phases: [
       {
-        id: 'first', name: 'First column', objective: { text: 'Find the headlights on the valley road and stop the column', track: { destroyed: 'night_col1', total: 5 }, marker: { x: -25500, z: 8400 } },
+        id: 'first', name: 'First column', objective: { text: 'Find the headlights on the valley road and stop the column', track: { destroyed: 'night_col1', total: 5 }, marker: { x: -30500, z: 8000 } },
         enter: [
           { music: { state: 'cruise', level: 0.35 } },
           { spawn: 'col1' }, { spawn: 'picket1' },
@@ -201,7 +201,7 @@ export const MISSIONS = [
         done: { any: [{ destroyed: 'night_col1' }, { arrived: 'night_col1' }] },
       },
       {
-        id: 'second', name: 'Second column', objective: { text: 'Stop the second column before the pass', track: { destroyed: 'night_col2', total: 6 }, marker: { x: -30000, z: 8000 } },
+        id: 'second', name: 'Second column', objective: { text: 'Stop the second column before the pass', track: { destroyed: 'night_col2', total: 6 }, marker: { x: -35000, z: 7600 } },
         enter: [
           { music: { state: 'combat', level: 0.7 } },
           { spawn: 'col2' }, { spawn: 'picket2' },
@@ -209,7 +209,7 @@ export const MISSIONS = [
         ],
         triggers: [
           { when: { destroyed: 'night_col2' }, do: [{ bonus: { label: 'Second column stopped', score: 1200 } }] },
-          { when: { time: 45 }, do: [{ spawn: 'nightcap' }, { music: { state: 'danger', level: 0.85 } }, { radio: ['control', 'Vajra One, two contacts from the north-west, no lights, descending. Night fighters.', 2] }] },
+          { when: { time: 45 }, do: [{ spawn: 'nightcap' }, { music: { state: 'danger', level: 0.85 } }, { radio: ['control', 'Vajra One, three contacts from the north-west, no lights, descending. Night fighters.', 2] }] },
         ],
         failWhen: { arrived: 'night_trucks', count: 5 }, failReason: 'escaped',
         done: { all: [{ any: [{ destroyed: 'night_col2' }, { arrived: 'night_col2' }] }, { time: 46 }] },
@@ -301,16 +301,16 @@ export const MISSIONS = [
     start: { x: -6000, z: 2500, alt: 5300, heading: 40, speed: 270 },
     conditions: { time: 16.2, weather: 'storm' },
     specials: ['lraam', 'hobs'], special: 'lraam',
-    timeLimit: 780, parTime: 330, rank: { S: 11800, A: 10000, B: 8000, C: 6000 },
+    timeLimit: 780, parTime: 330, rank: { S: 13200, A: 11500, B: 9000, C: 6500 },
     maxAttackers: 2,
     groups: {
       raid1: { kind: 'fighters', type: 'bandit', count: 3, at: { x: 12000, z: -30000, alt: 6500 }, heading: 205, tags: ['storm_air'], isTarget: true, aware: true },
-      raid2: { kind: 'fighters', type: 'veteran', count: 3, at: { x: 30000, z: -22000, alt: 6600 }, heading: 240, tags: ['storm_air'], isTarget: true, aware: true },
+      raid2: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 30000, z: -22000, alt: 6600 }, heading: 240, tags: ['storm_air'], isTarget: true, aware: true },
       raid3: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 2000, z: -36000, alt: 6800 }, heading: 185, speed: 290, tags: ['storm_air'], isTarget: true, aware: true },
     },
     phases: [
       {
-        id: 'first', name: 'First group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 10 } },
+        id: 'first', name: 'First group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
           { music: { state: 'danger', level: 0.7 } },
           { spawn: 'raid1' },
@@ -323,22 +323,23 @@ export const MISSIONS = [
         done: { destroyed: 'storm_air', count: 3 },
       },
       {
-        id: 'second', name: 'Second group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 10 } },
+        id: 'second', name: 'Second group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
+          { maxAttackers: 3 },
           { spawn: 'raid2' },
-          { radio: ['control', 'Second group, three more, from the east. These are better. They will try to drag you up into the weather.', 2] },
+          { radio: ['control', 'Second group, four more, from the east. These are better. They will try to drag you up into the weather.', 2] },
         ],
-        done: { destroyed: 'storm_air', count: 6 },
+        done: { destroyed: 'storm_air', count: 7 },
       },
       {
-        id: 'third', name: 'Last group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 10 } },
+        id: 'third', name: 'Last group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
           { music: { state: 'danger', level: 0.95 } },
-          { maxAttackers: 3 },
+          { maxAttackers: 4 },
           { spawn: 'raid3' },
           { radio: ['control', 'Shikhar: last group, four, north, fast. That is everything they have in this weather. Hold them.', 2] },
         ],
-        done: { destroyed: 'storm_air', count: 10 },
+        done: { destroyed: 'storm_air', count: 11 },
         exit: [
           { bonus: { label: 'Sky held', score: 1500 } },
           { radio: ['control', 'Shikhar: scope is clear. Their strike has turned back. Get out of that weather, Vajra One.', 2] },

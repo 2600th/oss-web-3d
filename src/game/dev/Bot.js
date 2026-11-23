@@ -341,7 +341,7 @@ export class Bot {
     }
     const bearingErr = Math.abs(wrapPi(Math.atan2(dx, -dz) - this._heading(f)));
     if (ph.phase === 'setup') {
-      const placed = horiz > 2600 && horiz < OPTIC.hardMax - 300 && bearingErr < 35 * D && f.position.y > t.position.y + 200
+      const placed = horiz > 2600 && horiz < OPTIC.hardMax - 300 && bearingErr < 4 * D && f.position.y > t.position.y + 200
         && clearLine(f.position, _v.copy(t.position).setY(t.position.y + 10), 60);
       if (placed) ph.phase = 'frame';
       else {
@@ -360,7 +360,12 @@ export class Bot {
     }
     input.setAction('optic', true);
     // Put the depressed optic axis, not the nose, on the post.
-    this._aim(f, t.position, OPTIC.depression - 0.02);
+    const e = this._aim(f, t.position, OPTIC.depression - 0.02);
+    // The optic is fixed to the airframe, 11 degrees below the nose: bank swings
+    // it off the post. Once roughly lined up, finish with wings nearly level.
+    // (Ten per cent stick is already 45 degrees of bank at this speed.)
+    this.intent.turn = clamp(e * 0.6, -0.035, 0.035);
+    if (Math.abs(e) > 14 * D && d > 1800) ph.phase = 'setup';
     this._speed(f, 215);
     if (d < 1100 || bearingErr > 70 * D) { ph.phase = 'out'; ph.timer = 14; ph.bearing = this._heading(f); }
   }

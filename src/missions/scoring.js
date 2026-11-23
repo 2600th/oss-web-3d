@@ -88,5 +88,8 @@ export function isUnlocked(missions, index, progress) {
   const m = missions[index];
   if (!m || m.free || index === 0) return true;
   const prev = missions.slice(0, index).reverse().find((x) => !x.free);
-  return !prev || progress.missions[prev.id]?.completed === true;
+  if (!prev || progress.missions[prev.id]?.completed === true) return true;
+  // A save from before a sortie was inserted into the chain keeps what it had:
+  // anything already flown, or earlier than something already flown, stays open.
+  return missions.slice(index).some((x) => !x.free && progress.missions[x.id]?.completed === true);
 }
