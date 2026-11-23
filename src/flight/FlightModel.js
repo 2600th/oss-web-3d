@@ -30,8 +30,10 @@ const SCALE_HEIGHT = 8500; // metres; standard atmosphere exponential fit
 export const AIRCRAFT = {
   mass: 8700,
   wingArea: 23,
-  thrustDry: 38000,
-  thrustReheat: 71000,
+  // Combat tune: reheat is a shove in the back (the real R-25 gives 71 kN;
+  // the game wants lighting the burner to be an event).
+  thrustDry: 43000,
+  thrustReheat: 99000,
   dragCoefficient: 0.0271,
   airbrakeDrag: 0.075,
 
@@ -47,7 +49,19 @@ export const AIRCRAFT = {
    * whole of fighter energy management, and without this term the game has
    * none of it.
    */
-  inducedDragSpan: Math.PI * 2.2 * 0.78,
+  // x2.1 for the arcade combat tune: a 9 G turn in reheat near corner speed is
+  // now very nearly sustained, dry power still bleeds, and the airbrake high-G
+  // turn below is where energy is really spent.
+  inducedDragSpan: Math.PI * 2.2 * 0.78 * 2.1,
+
+  /**
+   * High-G turn (genre staple): airbrake held while pulling raises the load
+   * limit and the pitch-rate ceiling, and pays for it with a lot of drag. Nose
+   * rate now, speed later.
+   */
+  highGLoadBonus: 0.5,
+  highGRateBonus: 0.45,
+  highGDrag: 0.11,
 
   /**
    * Maximum lift coefficient the wing can actually generate.
@@ -62,8 +76,8 @@ export const AIRCRAFT = {
   maxLiftCoefficient: 1.5,
 
   // Attitude authority, radians/second at full deflection and full authority.
-  maxRollRate: 4.2,
-  maxPitchRate: 1.05,
+  maxRollRate: 4.6,
+  maxPitchRate: 1.15,
   maxYawRate: 0.42,
 
   // First-order lag on reaching commanded rate. Roll is crisp, pitch has mass.
@@ -73,8 +87,8 @@ export const AIRCRAFT = {
   // difference between "aim the aircraft" and "ask the aircraft"; every arcade
   // flight game in this lineage establishes one in roughly half a second, and
   // 7.4 rad/s of lag against a 4.2 rad/s ceiling is what that costs.
-  rollAgility: 7.4,
-  pitchAgility: 3.4,
+  rollAgility: 8.5,
+  pitchAgility: 4.2,
   yawAgility: 2.8,
 
   // Aerodynamic damping — the airframe resists rotation more at speed.
@@ -141,6 +155,12 @@ export class FlightModel {
     this.stalling = false;
     this.stallFactor = 0;
     this.crashed = false;
+    /** 0..1 battle damage: degrades authority and thrust. Set by combat. */
+    this.damage = 0;
+    /** Shot down: no thrust, no authority; the airframe falls until it hits. */
+    this.destroyed = false;
+    /** 0..1, how much of the high-G turn is engaged this step (for HUD/VFX). */
+    this.highG = 0;
     this.throttleSmoothed = 0.72;
 
     /**
@@ -174,6 +194,9 @@ export class FlightModel {
     this.throttle = 0.78;
     this.throttleSmoothed = 0.78;
     this.crashed = false;
+    this.damage = 0;
+    this.destroyed = false;
+    this.highG = 0;
     this.stalling = false;
     this.stallFactor = 0;
     this.gLoad = 1;
@@ -220,19 +243,27 @@ export class FlightModel {
     // Below corner speed the surfaces have less to bite on. This is the single
     // most important term for making the aircraft feel like it has a flight
     // envelope instead of a joystick.
+    const damageLoss = this.destroyed ? 0.9 : 0.32 * clamp(this.damage, 0, 1);
     const authority = clamp(
       0.16 + 0.84 * smoothstep(AIRCRAFT.stallSpeed * 0.55, AIRCRAFT.cornerSpeed, speed),
       0,
       1,
-    );
+    ) * (1 - damageLoss);
+    // High-G turn: airbrake + a real pull.
+    const brakeIn = clamp(control.brake ?? 0, 0, 1);
+    this.highG = brakeIn * smoothstep(0.25, 0.7, Math.abs(control.pitch));
     // Very high speed stiffens control, which stops the jet from becoming a
     // twitchy dart when it is doing 550 m/s.
     const highSpeedStiffen = 1 - 0.42 * smoothstep(AIRCRAFT.cornerSpeed * 1.6, AIRCRAFT.maxSpeed, speed);
 
     // Load-limited pitch rate. Below ~100 m/s the aerodynamic cap bites first;
     // above it, G does.
-    const gLimitedRate = (AIRCRAFT.gLimit * GRAVITY) / Math.max(speed, 60);
-    const pitchCap = Math.min(AIRCRAFT.maxPitchRate * authority * highSpeedStiffen, gLimitedRate);
+    const gLimitedRate =
+      (AIRCRAFT.gLimit * (1 + AIRCRAFT.highGLoadBonus * this.highG) * GRAVITY) / Math.max(speed, 60);
+    const pitchCap = Math.min(
+      AIRCRAFT.maxPitchRate * (1 + AIRCRAFT.highGRateBonus * this.highG) * authority * highSpeedStiffen,
+      gLimitedRate,
+    );
     const rollCap = AIRCRAFT.maxRollRate * authority;
     this.pitchAuthority = pitchCap;
     this.rollAuthority = rollCap;
@@ -282,7 +313,9 @@ export class FlightModel {
     // up and why diving to gain speed is a real tactic here.
     const thrustMax =
       (this.reheat ? AIRCRAFT.thrustReheat : AIRCRAFT.thrustDry) * (0.42 + 0.58 * densityRatio);
-    const thrust = thrustMax * clamp(this.throttleSmoothed, 0, 1);
+    const thrust = this.destroyed
+      ? 0
+      : thrustMax * clamp(this.throttleSmoothed, 0, 1) * (1 - 0.28 * clamp(this.damage, 0, 1));
 
     // Angle of attack, used for induced drag and for the visual pitch of the
     // airframe relative to its flight path.
@@ -305,7 +338,8 @@ export class FlightModel {
     const cd =
       AIRCRAFT.dragCoefficient +
       (liftCoefficient * liftCoefficient) / AIRCRAFT.inducedDragSpan +
-      AIRCRAFT.airbrakeDrag * control.brake;
+      AIRCRAFT.airbrakeDrag * brakeIn +
+      AIRCRAFT.highGDrag * this.highG;
 
     const accel = _v2.set(0, 0, 0);
     accel.addScaledVector(this.forward, thrust / AIRCRAFT.mass);
