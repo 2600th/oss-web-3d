@@ -152,6 +152,13 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
         if (INTERIOR.test(o.name)) {
           m.roughness = 0.7;
           m.metalness = 0.05;
+          // [realism] Cockpit tub occlusion. Inside the tub a surface sees the
+          // sky only through the canopy aperture (and the coaming hides it
+          // from the panel face), but the environment map and the hemisphere
+          // fill light it as if it stood in the open: the panel read as bright
+          // as the airframe outside. A constant occlusion on indirect light
+          // (screen-space GTAO multiplies on top of it; the sun is untouched).
+          if (!low) m.aoNode = float(0.42);
           if (!low && m.map) m.colorNode = sharpenedColor(m, 0.35); // [textures]
           return m;
         }

@@ -19,6 +19,7 @@ import { ScreenWater, waterShading } from '../fx/post/screenWater.js';
 import { EXPOSURE_DEFAULTS, targetExposureEV, adaptLog2, evToMultiplier } from '../fx/post/exposure.js';
 import { motionBlurParams } from '../fx/post/motionParams.js';
 import { createLensDirtTexture, createFrostTexture } from '../fx/post/textures.js';
+import { NearFieldAO } from '../fx/post/ambientOcclusion.js';
 
 const _v = new THREE.Vector3();
 /** Auto-exposure metering interval in frames (15 Hz at 60 fps). */
@@ -104,9 +105,10 @@ export class PostFX {
       sharpen: u(0.25),
       grain: u(1),
       vignette: u(0.22),
-      lookSlope: u(new THREE.Vector3(1.0, 0.99, 0.965)),
-      lookPower: u(new THREE.Vector3(1.12, 1.12, 1.14)),
-      lookSat: u(1.18),
+      // written every frame from `this.look` (scene-light dependent), see _updateExposure
+      lookSlope: u(new THREE.Vector3(1.06, 1.05, 1.02)),
+      lookPower: u(new THREE.Vector3(1.42, 1.42, 1.45)),
+      lookSat: u(1.22),
       shadowTint: u(new THREE.Vector3(0.965, 0.995, 1.05)),
       highlightTint: u(new THREE.Vector3(1.035, 1.0, 0.95)),
       toneBalance: u(0.42),
@@ -117,6 +119,21 @@ export class PostFX {
       // depth of field
       dofAmount: u(0), dofFocus: u(50), dofFocal: u(30), dofBokeh: u(1.5),
       seed: u(0),
+    };
+
+    /**
+     * [realism] AgX look (ASC-CDL in AgX space) by scene light. Base AgX has a
+     * long, soft toe: a sunlit high-altitude frame came out milky, its
+     * darkest 5% at 0.32 display with the cast shadows 3.5 stops under the sun
+     * (references: Ladakh terrain photographed in hard sun keeps texture 3-5
+     * stops down but reads dark). `day` puts that toe back. In low light the
+     * eye's contrast falls (mesopic vision) and a moonlit valley must stay
+     * readable, so the look eases to `dim` with the metered scene luminance
+     * (adaptedLog2 -3.5 .. -6.5: golden hour -> dusk -> night).
+     */
+    this.look = {
+      day: { slope: [1.06, 1.05, 1.02], power: [1.42, 1.42, 1.45] },
+      dim: { slope: [1.0, 0.99, 0.965], power: [1.12, 1.12, 1.14] },
     };
 
     /** Bloom in *exposed* units (the chain rescales by exposure each frame). */
@@ -208,6 +225,7 @@ export class PostFX {
     this._tier = this.r.tier;
     const u = this.uniforms;
     const sp = this.scenePass;
+    this._buildAO(cfg);
     const camera = this.r.camera;
     const depth = sp.getTextureNode('depth');
     const vel = sp.getTextureNode('velocity');
@@ -333,6 +351,7 @@ export class PostFX {
     const centred = suv.sub(0.5);
     const c0 = mb.sample(suv);
     let rgb = c0.rgb;
+    u.sharpen.value = cfg.sharpen; // [realism] the tier's strength (was fixed at 0.25)
     if (cfg.sharpen > 0) {
       // contrast-adaptive (clamped) unsharp mask on luminance: restores TAA
       // softness without halos or colour fringes
@@ -344,7 +363,15 @@ export class PostFX {
       const ln = luminance(n), ls = luminance(s), le = luminance(e), lw = luminance(w);
       const mn = ln.min(ls).min(le).min(lw).min(lc);
       const mx = ln.max(ls).max(le).max(lw).max(lc);
-      const sharp = lc.add(lc.sub(ln.add(ls).add(le).add(lw).mul(0.25)).mul(u.sharpen)).clamp(mn, mx);
+      // [realism] CAS-style adaptivity (after AMD FidelityFX CAS): sharpen
+      // low-contrast texture (scree, panel lines) fully and back off on hard
+      // edges (an antenna or canopy frame against the sky), which TRAA keeps
+      // crisp anyway and where a fixed gain rings. Measured on a compressed
+      // copy of the HDR luminance (x / (1 + x)), CAS's [0,1] domain.
+      const cmn = mn.div(mn.add(1));
+      const cmx = mx.div(mx.add(1));
+      const adapt = cmn.min(float(1).sub(cmx)).div(max(cmx, 1e-4)).clamp(0, 1).sqrt();
+      const sharp = lc.add(lc.sub(ln.add(ls).add(le).add(lw).mul(0.25)).mul(u.sharpen.mul(adapt))).clamp(mn, mx);
       rgb = rgb.mul(sharp.div(max(lc, 1e-5)));
     }
     if (cfg.chromatic > 0) {
@@ -449,6 +476,7 @@ export class PostFX {
     else if (this.debugView === 'exposure') out = vec4(vec3(meter1.sample(uv0).x.div(meter1.sample(uv0).y.max(1e-4)).add(8).div(16)), 1);
     else if (this.debugView === 'flare') out = vec4(sunFlare(uv0, u.sunUV, aspect, select(vis.greaterThan(0), float(1), float(0.2)), u.flareRot), 1);
     else if (this.debugView === 'bloom' && bloomTex) out = vec4(bloomTex.rgb.mul(u.exposure), 1);
+    else if (this.debugView === 'ao' && this.ao) out = vec4(vec3(texture(this.ao.gtao._aoRenderTarget.texture).sample(uv0).r), 1);
     // 'passthrough': scene (+ stages) tone-mapped only — the A/B baseline for timing the chain
     else if (this.debugView === 'passthrough') out = renderOutput(vec4(color.rgb.mul(u.exposure), 1), THREE.AgXToneMapping, THREE.SRGBColorSpace);
 
@@ -458,6 +486,27 @@ export class PostFX {
 
   /** Rebuild (e.g. after changing debugView). */
   rebuild() { this._build(); }
+
+  /**
+   * [realism] Near-field GTAO on indirect light (src/fx/post/ambientOcclusion.js):
+   * a depth prepass + GTAO rendered before the chain, applied through the
+   * scene pass's lighting context. WebGPU only (off on the WebGL2 fallback and
+   * on tiers whose Quality flag `ssao` is false). `this.ao` is null when off.
+   */
+  _buildAO(cfg) {
+    const want = cfg.ao && this.r.backend === 'webgpu' ? cfg.ao : null;
+    const key = want ? JSON.stringify(want) : '';
+    if (key === this._aoKey) return;
+    this._aoKey = key;
+    this.ao?.dispose();
+    this.ao = null;
+    if (want) {
+      this.ao = new NearFieldAO({ renderer: this.r.renderer, scene: this.r.scene, camera: this.r.camera, cfg: want });
+      this.scenePass.contextNode = this.ao.context();
+    } else {
+      this.scenePass.contextNode = null;
+    }
+  }
 
   _updateCamera() {
     const cam = this.r.camera;
@@ -528,6 +577,13 @@ export class PostFX {
     // settings toggle.
     const light = Number.isFinite(s.adaptedLog2) ? smoothstepJS(-6, -2.5, s.adaptedLog2) : 1;
     this.uniforms.grain.value = o.grain === false ? 0 : 0.35 + 0.65 * light;
+    // [realism] daylight toe contrast -> mesopic softness (see this.look)
+    const k = Number.isFinite(s.adaptedLog2) ? smoothstepJS(-6.5, -3.5, s.adaptedLog2) : 1;
+    const { day, dim } = this.look;
+    const ls = this.uniforms.lookSlope.value;
+    const lp = this.uniforms.lookPower.value;
+    ls.set(dim.slope[0] + (day.slope[0] - dim.slope[0]) * k, dim.slope[1] + (day.slope[1] - dim.slope[1]) * k, dim.slope[2] + (day.slope[2] - dim.slope[2]) * k);
+    lp.set(dim.power[0] + (day.power[0] - dim.power[0]) * k, dim.power[1] + (day.power[1] - dim.power[1]) * k, dim.power[2] + (day.power[2] - dim.power[2]) * k);
     if (this._bloom) {
       // threshold is specified in *exposed* units; the bloom input is pre-exposure
       const b = this.bloomSettings;
@@ -641,6 +697,7 @@ export class PostFX {
     // and never while the previous readback is still in flight
     const meter = this.options.autoExposure && !this._reading && this._frameNo % METER_EVERY === 0;
     if (meter) { this._meter1.textureNeedsUpdate = true; this._meter.textureNeedsUpdate = true; }
+    this.ao?.render();
     this.pipeline.render();
     if (meter) this._readMeters();
   }
@@ -650,6 +707,7 @@ export class PostFX {
     this.lensDirt.dispose();
     this.frostTex.dispose();
     this.water?.dispose();
+    this.ao?.dispose();
   }
 }
 
