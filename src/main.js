@@ -21,6 +21,15 @@ async function start() {
   const input = new Input();
   const post = new PostFX(r);
   const game = new Game(r, input, post);
+  // Systems self-register: every src/<area>/system.js exporting
+  // `createSystem(game)` (and optionally `order`, lower first) is loaded here,
+  // so feature areas never need to edit this file or Game.js to plug in.
+  const modules = Object.values(import.meta.glob('./*/system.js', { eager: true }))
+    .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+  for (const m of modules) {
+    const system = await m.createSystem(game);
+    if (system) await game.addSystem(system);
+  }
   await game.init();
 
   let last = performance.now();

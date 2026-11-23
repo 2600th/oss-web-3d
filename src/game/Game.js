@@ -6,6 +6,7 @@ import { CameraRig } from '../flight/CameraRig.js';
 import { Terrain } from '../world/terrain/Terrain.js';
 import { terrainHeight } from '../world/terrain/heightfield.js';
 import { Environment } from '../world/Environment.js';
+import { Events } from './Events.js';
 
 export const PHYSICS_STEP = 1 / 120;
 const MAX_STEPS = 12;
@@ -32,6 +33,9 @@ export class Game {
     this.time = 0;
     this.timeScale = 1;
     this.paused = false;
+    this.events = new Events();
+    /** Per-frame snapshot for the HUD; shape documented in docs/v2/ARCHITECTURE.md. */
+    this.hud = {};
     this.systems = {};
     this._systemList = [];
     this._acc = 0;
@@ -54,11 +58,14 @@ export class Game {
     await this.player.load();
     this.spawn();
     for (const s of this._systemList) await s.init?.(this);
+    this._initialised = true;
   }
 
+  /** Register a system. If the game is already initialised, init it now. */
   async addSystem(system) {
     this._systemList.push(system);
     if (system.name) this.systems[system.name] = system;
+    if (this._initialised) await system.init?.(this);
     return system;
   }
 
@@ -103,6 +110,7 @@ export class Game {
 
   onCrash() {
     this.cameraRig.addTrauma(1);
+    this.events.emit('player:crash', { position: this.flight.impactPoint.clone(), velocity: this.flight.impactVelocity.clone() });
     for (const s of this._systemList) s.onCrash?.(this);
     setTimeout(() => this.spawn(), 2500);
   }
