@@ -1,12 +1,13 @@
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, vec2, vec3, vec4, float, int, texture, property, positionWorld, cameraViewMatrix,
-  mix, smoothstep, clamp, max, min, abs, dot, length, normalize, sqrt, pow, step, fract, floor, sin,
-  dFdx, dFdy, log2, exp2,
+  Fn, If, Loop, vec2, vec3, vec4, float, int, texture, property, positionWorld, positionView, cameraViewMatrix,
+  mix, smoothstep, clamp, max, min, abs, dot, length, normalize, sqrt, pow, step, fract, floor, sin, cos,
+  dFdx, dFdy, log2, exp2, screenUV, select,
 } from 'three/tsl';
 import { DETAIL, SURROUND, TILE_SIZE } from './detail.js';
 import { LAYERS, LAYER } from './layers.js';
-import { CURV_RANGE, TILE_SLOPE } from './textures.js';
+import { CURV_RANGE, TILE_SLOPE, LAND } from './textures.js';
+import { SNOW } from './snow.js';
 import { riverSurface, riverReflection } from '../water/river.js';
 
 // Terrain surface shading.
@@ -42,25 +43,43 @@ import { riverSurface, riverReflection } from '../water/river.js';
 // is darker and more varied than the old pale tan.
 const C = (r, g, b) => vec3(r, g, b);
 const PAL = {
-  screeOchre: C(0.235, 0.19, 0.135),
-  screeGrey: C(0.2, 0.19, 0.172),
-  screeBrown: C(0.2, 0.135, 0.09),
-  screePale: C(0.3, 0.27, 0.225),
-  rockSlate: C(0.13, 0.12, 0.118),
-  rockDark: C(0.07, 0.066, 0.064),
-  rockTan: C(0.2, 0.165, 0.13),
-  rockRust: C(0.22, 0.14, 0.095),
-  talus: C(0.19, 0.182, 0.172),
-  talusWarm: C(0.215, 0.18, 0.14),
-  shrub: C(0.05, 0.056, 0.034),
+  // [terrain-2] rock and scree a little warmer and more saturated (ochre /
+  // umber of the Drass and Indus walls; see polish-terrain-2/README.md)
+  screeOchre: C(0.25, 0.188, 0.12),
+  screeGrey: C(0.205, 0.19, 0.166),
+  screeBrown: C(0.215, 0.138, 0.085),
+  screePale: C(0.3, 0.268, 0.215),
+  rockSlate: C(0.138, 0.122, 0.112),
+  rockDark: C(0.075, 0.066, 0.06),
+  rockTan: C(0.225, 0.168, 0.118),
+  rockRust: C(0.245, 0.142, 0.082),
+  talus: C(0.195, 0.182, 0.165),
+  talusWarm: C(0.225, 0.182, 0.135),
+  // [terrain-2] ground cover: silvery artemisia, olive caragana, dry cushions;
+  // about half the ground's albedo, not a quarter (they read as holes)
+  sage: C(0.122, 0.118, 0.082),
+  caragana: C(0.064, 0.08, 0.04),
+  cushionDry: C(0.13, 0.105, 0.068),
+  boulder: C(0.2, 0.17, 0.135),
+  boulderGrey: C(0.17, 0.163, 0.152),
+  cropGreen: C(0.058, 0.098, 0.034),
+  cropLush: C(0.048, 0.108, 0.032),
+  cropRipe: C(0.14, 0.128, 0.058),
+  fallow: C(0.165, 0.122, 0.085),
+  stubble: C(0.21, 0.185, 0.115),
+  fieldWall: C(0.2, 0.18, 0.15),
+  poplar: C(0.036, 0.06, 0.026),
   snowFresh: C(0.78, 0.8, 0.83),
   snowFirn: C(0.58, 0.61, 0.65),
   ice: C(0.3, 0.46, 0.55),
   grassDry: C(0.2, 0.18, 0.085),
-  grassGreen: C(0.07, 0.15, 0.04),
-  gravel: C(0.26, 0.255, 0.245),
+  grassGreen: C(0.068, 0.12, 0.042), // [terrain-2] was 0.07, 0.15, 0.04: lime
+  gravel: C(0.225, 0.215, 0.2), // [terrain-2] was 0.26 grey: bars read white from the air
+  sand: C(0.27, 0.245, 0.205),
 };
 const LUMA = vec3(0.2126, 0.7152, 0.0722);
+/** [terrain-2] Scorch marks the material can show at once (Terrain.setScorches). */
+export const SCORCH_MAX = 16;
 
 export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, quality }) {
   const { tileShade, innerWeight, outerWeight, ampAt, innerUV, outerUV } = nodes;
@@ -87,8 +106,10 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 
     // ---------------------------------------------------------- DEM-scale inputs
     const tI = innerWeight(p).toVar();
-    const surf = texture(tex.surf, innerUV(p)).toVar();
-    const riv = texture(tex.river, innerUV(p)).toVar();
+    // [terrain-2] surf, river and ground are layers of one array texture
+    const surf = texture(tex.land, innerUV(p)).depth(int(LAND.surf)).toVar();
+    const riv = texture(tex.land, innerUV(p)).depth(int(LAND.river)).toVar();
+    const gnd = texture(tex.land, innerUV(p)).depth(int(LAND.ground)).toVar();
     const toGrad = (rg) => {
       const n = rg.mul(2).sub(1);
       return n.div(sqrt(max(float(1).sub(dot(n, n)), 0.02))).negate();
@@ -112,7 +133,9 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     const curv = surf.a.sub(0.5).mul(2 * CURV_RANGE).mul(tI).toVar(); // > 0 hollow, < 0 ridge
 
     // ---------------------------------------------------------- sub-DEM detail
-    const amp = ampAt(p, tI).toVar();
+    // [terrain-2] the amplitude comes from the vertex stage (a varying): one
+    // texture binding fewer in the fragment stage
+    const amp = (nodes.ampFrag ?? ampAt(p, tI)).toVar();
     const sA = tileShade(DETAIL.A, p);
     const sB = tileShade(DETAIL.B, p);
     const sM = tileShade(DETAIL.MASK, p);
@@ -158,7 +181,14 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     const tanGeo = length(gGeo).toVar();
     const ny = float(1).div(sqrt(tanGeo.mul(tanGeo).add(1))).toVar();
     const nGeo = vec3(gGeo.x.negate(), 1, gGeo.y.negate()).mul(ny).toVar();
-    const cavity = smoothstep(-0.75, 0.4, hDet.add(hFine.mul(0.4)).add(streak.mul(0.7))).toVar();
+    // [terrain-2] Scaled by the local displacement amplitude: the unit detail
+    // field is there everywhere, but where `amp` is ~0 (valley floors, fans)
+    // the ground has none of that relief, and darkening its "hollows" drew a
+    // net of bright and dark worm-like ripples over every flat valley floor.
+    // The ledge contours of the field also read as lines; the C octave and
+    // the ledge count less here than in the geometry.
+    const cavRaw = smoothstep(-0.75, 0.4, ab.add(sC.height.mul(DETAIL.C_GAIN * 0.6)).add(ledge.mul(DETAIL.LEDGE * 0.4)).add(hFine.mul(0.4)).add(streak.mul(0.7)));
+    const cavity = mix(float(0.62), cavRaw, smoothstep(0.6, 4, amp)).toVar();
 
     // ---------------------------------------------------------- weights
     const sdf = riv.r.mul(255 * DEM.riverStep).add(DEM.riverMin);
@@ -182,17 +212,23 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 
     // Snow line: higher on sun-facing (south, +Z) slopes, lower in hollows,
     // blown off ridges; steep faces shed it.
-    const snowLine = float(4760)
-      .add(nGeo.z.mul(380))
-      .sub(clamp(curv, -0.12, 0.2).mul(1500))
-      .add(macroB.mul(230))
-      .add(hDet.mul(55))
-      .add(streak.mul(160)).toVar(); // gullies hold snow, ribs shed it
+    // [terrain-2] The constants live in snow.js, shared with the CPU twin
+    // (siteSnow in src/assets/system.js). New: a 97 m patch layer moves the
+    // line by +-SNOW.PATCH m, so it breaks up into drifts and bare islands
+    // instead of following a contour.
+    const snowPatch = tileShade(DETAIL.SNOW_PATCH, p).height;
+    const snowLine = float(SNOW.LINE)
+      .add(nGeo.z.mul(SNOW.ASPECT))
+      .sub(clamp(curv, SNOW.CURV_LO, SNOW.CURV_HI).mul(SNOW.CURV))
+      .add(macroB.mul(SNOW.MACRO))
+      .add(hDet.mul(SNOW.DETAIL))
+      .add(streak.mul(SNOW.STREAK)) // gullies hold snow, ribs shed it
+      .add(snowPatch.mul(SNOW.PATCH)).toVar();
     const above = alt.sub(snowLine).toVar();
     // steep faces and the crowns of the detail field shed their cover
-    const snowRaw = smoothstep(-90, 90, above)
-      .mul(float(1).sub(smoothstep(0.8, 1.35, tanGeo.add(hDet.mul(0.22)))))
-      .sub(smoothstep(0.45, 0.95, tanGeo).mul(0.3)).toVar();
+    const snowRaw = smoothstep(-SNOW.BAND, SNOW.BAND, above)
+      .mul(float(1).sub(smoothstep(SNOW.SHED_LO, SNOW.SHED_HI, tanGeo.add(hDet.mul(SNOW.SHED_DET)))))
+      .sub(smoothstep(SNOW.STEEP_LO, SNOW.STEEP_HI, tanGeo).mul(SNOW.STEEP)).toVar();
     // Bare ice: just under the snow line, in hollows on gentle ground.
     const iceW = smoothstep(-520, -120, above)
       .mul(float(1).sub(smoothstep(-60, 60, above)))
@@ -201,7 +237,11 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
       .mul(smoothstep(4300, 4600, alt)).toVar();
 
     const veg = riv.a.mul(tI).toVar();
-    const grassW = smoothstep(0.18, 0.55, veg.add(hDet.mul(0.16)).add(macroB.mul(0.1)))
+    // [terrain-2] ground data (groundData.js): fans of debris under steep
+    // ground, moisture along the channels, irrigated-field suitability
+    const fan = gnd.g.mul(tI).toVar();
+    const moist = gnd.b.mul(tI).toVar();
+    const grassW = smoothstep(0.18, 0.55, max(veg, moist.mul(0.9)).add(hDet.mul(0.16)).add(macroB.mul(0.1)))
       .mul(float(1).sub(rockW)).mul(float(1).sub(water)).toVar();
     const gravelW = smoothstep(34, 2, bed).mul(float(1).sub(smoothstep(0.25, 0.5, tanGeo))).toVar();
 
@@ -261,6 +301,9 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     const patch = mix(float(0.78), float(1.16), smoothstep(-0.55, 0.6, macroB.add(sC.height.mul(0.5))))
       .mul(hFine.mul(0.22).add(1)).toVar();
     const albedo = scree.d.mul(mix(screeTint, PAL.screeGrey.mul(1.06), smoothstep(3900, 4800, alt).mul(0.55))).mul(relief).mul(patch).toVar();
+    // [terrain-2] fresh debris on the fans is paler and greyer than the
+    // weathered, varnished slope it spills over
+    albedo.assign(mix(albedo, albedo.mul(vec3(1.08, 1.1, 1.14)), fan.mul(0.8)));
     const height = scree.h.toVar();
     const tnorm = scree.n.toVar();
     const rough = scree.r.toVar();
@@ -270,6 +313,7 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     // more of it high up, patchy at the hundred-metre scale; height-blended
     // into the scree so the blocks sit on top of the gravel.
     const talusW = smoothstep(0.38, 0.72, tanGeo.mul(0.8)
+      .add(fan.mul(0.42)) // [terrain-2] debris fans under the cliffs
       .add(smoothstep(3900, 4900, alt).mul(0.32))
       .add(macroB.mul(0.3)).add(hDet.mul(0.12)).sub(streak.mul(0.08)))
       .mul(float(1).sub(rockW)).toVar();
@@ -286,7 +330,10 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 
     If(grassW.greaterThan(0.004), () => {
       const L = topLayer(LAYER.grass, 3.4);
-      const tint = mix(PAL.grassDry, PAL.grassGreen, smoothstep(0.45, 0.95, veg.add(macroB.mul(0.12))));
+      // [terrain-2] green only where the water is: the channel margins and
+      // seepage lines; the rest of the oasis mask stays dry steppe grass
+      const green = max(smoothstep(0.55, 1.0, veg.add(macroB.mul(0.12))).mul(0.45), smoothstep(0.35, 0.6, moist.add(sC.height.mul(0.35)).add(hFine.mul(0.15))));
+      const tint = mix(PAL.grassDry, PAL.grassGreen, green);
       albedo.assign(mix(albedo, L.d.mul(tint), grassW));
       height.assign(mix(height, L.h, grassW));
       tnorm.assign(mix(tnorm, L.n, grassW));
@@ -296,84 +343,209 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 
     If(gravelW.greaterThan(0.004), () => {
       const L = topLayer(LAYER.gravel, 3.1);
-      const wet = smoothstep(9, 0.5, edge); // damp ground by the water
+      // [terrain-2] the wet strip is wider and ragged: the river has just left it
+      const wet = smoothstep(11, 0.5, edge.add(sC.height.mul(3)));
       // [textures] grey glacial cobbles: half the pebbles' colour, and less of
       // their contrast once enlarged (from the air they read as white beads)
       const gd = mix(vec3(dot(L.d, LUMA)), L.d, 0.5);
       const gdc = mix(vec3(1), gd, mix(float(1), float(0.6), smoothstep(1, 4, lod)));
-      albedo.assign(mix(albedo, gdc.mul(PAL.gravel).mul(mix(float(1), float(0.55), wet)), gravelW));
-      height.assign(mix(height, L.h, gravelW));
-      tnorm.assign(mix(tnorm, L.n, gravelW));
-      rough.assign(mix(rough, mix(L.r, float(0.42), wet), gravelW));
+      // [terrain-2] bars: silt and sand in the lee of the cobble ridges (the
+      // detail field's hollows), cobbles on the crests; darker and glossy wet
+      const sandy = smoothstep(0.1, -0.35, hDet.add(sA.height.mul(0.4))).mul(float(1).sub(wet)).mul(0.8);
+      const gcol = mix(gdc.mul(PAL.gravel), mix(vec3(1), gdc, 0.35).mul(PAL.sand), sandy);
+      albedo.assign(mix(albedo, gcol.mul(mix(float(1), float(0.5), wet)), gravelW));
+      height.assign(mix(height, mix(L.h, float(0.3), sandy), gravelW));
+      tnorm.assign(mix(tnorm, L.n.mul(float(1).sub(sandy.mul(0.7))), gravelW));
+      rough.assign(mix(rough, mix(L.r, float(0.38), wet), gravelW));
       lao.assign(mix(lao, L.ao, gravelW));
     });
 
-    // ---------------------------------------------------------- shrubs
-    // [textures] Sparse scrub clumps (the dark dots on every lower slope in
-    // the photos): one jittered disc per 5 m cell, present with a probability
-    // that follows the valley vegetation and thins out with height and slope.
-    // Once a clump is under ~2 px the dots fade to their mean coverage.
-    const shrubDensity = clamp(veg.mul(0.8).add(0.16), 0, 0.85)
-      .mul(float(1).sub(smoothstep(3500, 4250, alt)))
-      .mul(float(1).sub(smoothstep(0.42, 0.8, tanGeo)))
-      .mul(float(1).sub(water)).mul(float(1).sub(gravelW)).mul(float(1).sub(rockW)).mul(tI).toVar();
-    If(shrubDensity.greaterThan(0.01), () => {
+    // ---------------------------------------------------------- fields
+    // [terrain-2] Irrigated village fields (barley, alfalfa, fallow): the only
+    // real green in summer Ladakh away from the water. Strip plots behind low
+    // stone walls, laid out along the valley (the river's flow direction at the
+    // centre of each 420 m block) and grouped into villages by a 2.6 km noise:
+    // hard-edged oases against the bare fan, not a green wash.
+    const fieldW = float(0).toVar();
+    const fieldShade = float(0).toVar();
+    If(gnd.a.mul(tI).greaterThan(0.03), () => {
+      const village = tileShade({ size: 2600, cos: 0.6, sin: 0.8, ox: 0.61, oz: 0.23 }, p).height;
+      const fm = smoothstep(0.6, 0.72, gnd.a.add(village.mul(0.6)).add(sC.height.mul(0.08)).sub(water)).mul(float(1).sub(rockW)).toVar();
+      If(fm.greaterThan(0.004), () => {
+        const BLOCK = 420;
+        const bc = floor(p.div(BLOCK)).add(0.5).mul(BLOCK);
+        const fl = texture(tex.land, innerUV(bc)).depth(int(LAND.river)).level(4).gb.mul(2).sub(1);
+        const ax = select(length(fl).greaterThan(0.15), normalize(fl), vec2(0.8, 0.6)).toVar();
+        // plots are not ruled: warp the layout by a few metres (sA: a 770 m
+        // octave of the detail field, so the warp is smooth across plots)
+        const pw = p.add(sA.grad.mul(160)).add(vec2(sC.height, sB.height).mul(4));
+        const u = dot(pw, ax);
+        const v = dot(pw, vec2(ax.y.negate(), ax.x));
+        const ACROSS = 17;
+        const row = floor(v.div(ACROSS));
+        const hr = fract(sin(row.add(floor(bc.x.div(BLOCK)).mul(31)).mul(12.9898)).mul(43758.5453));
+        const ALONG = hr.mul(34).add(24);
+        const uu = u.div(ALONG).add(fract(hr.mul(78.233)));
+        const cell = vec2(floor(uu), row);
+        const hc = fract(sin(dot(cell.add(floor(bc.div(BLOCK)).mul(17)), vec2(127.1, 311.7))).mul(43758.5453));
+        const hb = fract(hc.mul(41.31));
+        // summer: mostly barley and alfalfa, some ripening, a few fallow or cut
+        const crop = mix(PAL.cropGreen, PAL.cropLush, smoothstep(0.3, 0.55, hc)).toVar();
+        crop.assign(mix(crop, PAL.cropRipe, step(0.62, hc)));
+        crop.assign(mix(crop, PAL.fallow, step(0.8, hc)));
+        crop.assign(mix(crop, PAL.stubble, step(0.93, hc)));
+        crop.mulAssign(hb.mul(0.3).add(0.85));
+        // drill rows near the camera, and a field's own patchiness
+        const pix = max(length(dpx), length(dpy));
+        const rows = sin(v.mul(6.2832 / 0.9)).mul(float(1).sub(smoothstep(0.08, 0.35, pix))).mul(0.12);
+        const patchy = sC.height.mul(0.5).add(hFine.mul(0.35));
+        crop.mulAssign(float(1).add(rows).add(patchy.mul(0.3)));
+        // walls and paths between plots, about a metre wide
+        const du = float(0.5).sub(fract(uu).sub(0.5).abs()).mul(ALONG);
+        const dv = float(0.5).sub(fract(v.div(ACROSS)).sub(0.5).abs()).mul(ACROSS);
+        const wall = smoothstep(max(pix, 0.25).add(0.55), 0.5, min(du, dv));
+        // poplar and willow rows along some of the long field edges: the dark
+        // lines that mark every Ladakhi village from the air
+        const treeRow = step(0.62, hr).mul(smoothstep(3.2, 1.6, dv));
+        const crown = smoothstep(0.55, 0.25, fract(u.div(3.1).add(hr.mul(7))).sub(0.5).abs()).mul(treeRow);
+        const trees = max(crown, treeRow.mul(smoothstep(0.6, 1.5, pix)).mul(0.55)).toVar();
+        // prefilter: once a pixel spans several metres the 1 m walls and 3 m
+        // tree rows alias into moire stripes (seen from 3-5 km), so they fade
+        // to their mean cover; past a plot width the crops do too
+        const far = smoothstep(2.5, 9, pix);
+        const wallA = mix(wall, float(0.1), far);
+        trees.assign(mix(trees, float(0.09), far));
+        const cropMean = PAL.cropGreen.mul(0.45).add(PAL.cropLush.mul(0.2)).add(PAL.cropRipe.mul(0.18)).add(PAL.fallow.mul(0.11)).add(PAL.stubble.mul(0.06));
+        crop.assign(mix(crop, cropMean.mul(float(1).add(patchy.mul(0.3))), smoothstep(12, 34, pix)));
+        const col = mix(mix(crop, PAL.fieldWall, wallA.mul(0.85)), PAL.poplar, trees);
+        fieldW.assign(fm);
+        albedo.assign(mix(albedo, col, fm));
+        rough.assign(mix(rough, float(0.85), fm));
+        tnorm.assign(mix(tnorm, tnorm.mul(0.25), fm));
+        lao.assign(mix(lao, mix(mix(float(0.95), float(0.75), wallA), float(0.55), trees), fm));
+        // the tree rows' shadow (direct light only), on the anti-sun side
+        fieldShade.assign(fm.mul(trees.mul(0.35).add(mix(treeRow.mul(smoothstep(4.5, 2, dv)), float(0.05), far).mul(0.25))));
+      });
+    });
+
+    // ---------------------------------------------------------- shrubs and boulders
+    // [terrain-2] Replaces the round dark scrub discs, which read as holes or
+    // oil at night and from 100-500 m. Each 5 m cell holds at most one clump,
+    // either:
+    //  - a cushion shrub (artemisia / caragana): three lobes and a ragged rim,
+    //    silvery sage to olive (greener by the water) or dry brown, about half
+    //    the ground's albedo, lit on top and darker at the rim;
+    //  - a boulder (on debris fans, talus, gravel bars, below outcrops): an
+    //    angular block, rock-coloured, lighter on top.
+    // Their cast shadow goes into the direct-light shadow (`clumpLit`, folded
+    // into `terrainLit`), not into the albedo, so there are no black holes in
+    // shade, under cloud or by moonlight. The ground around each base keeps a
+    // soft ring of ambient occlusion. Past ~2 px a clump fades to its mean
+    // cover and shadow. Density follows moisture, the oasis mask, slope and
+    // altitude, clustered by a 140 m noise; fields and water have none.
+    // [textures] The 2x2 cells nearest the pixel are tested, so a clump (or
+    // its shadow) can reach over its cell edge (~3.7 m from the centre).
+    const clumpLit = float(1).sub(fieldShade).toVar();
+    const cluster = smoothstep(-0.55, 0.45, tileShade({ size: 140, cos: 0.31, sin: 0.95, ox: 0.17, oz: 0.71 }, p).height).toVar();
+    const shrubD = clamp(veg.mul(0.35).add(moist.mul(0.5)).add(0.18), 0, 0.75)
+      .mul(cluster.mul(0.85).add(0.15))
+      .mul(float(1).sub(smoothstep(3700, 4400, alt)))
+      .mul(float(1).sub(smoothstep(0.42, 0.85, tanGeo)))
+      .mul(float(1).sub(water)).mul(float(1).sub(gravelW.mul(0.8))).mul(float(1).sub(rockW)).mul(float(1).sub(fieldW))
+      .mul(float(1).sub(smoothstep(0.1, 0.4, snowRaw))).mul(tI).toVar();
+    const rockD = clamp(fan.mul(0.55).add(talusW.mul(0.3)).add(gravelW.mul(0.22)).add(rockW.mul(0.25)), 0, 0.75)
+      .mul(cluster.mul(0.6).add(0.4))
+      .mul(float(1).sub(water)).mul(float(1).sub(fieldW)).mul(float(1).sub(smoothstep(0.2, 0.6, snowRaw))).mul(tI).toVar();
+    If(max(shrubD, rockD).greaterThan(0.01), () => {
       const SH = 5.0;
       const pix = max(length(dpx), length(dpy)).add(0.02); // metres per pixel
       const nz = texture(tex.tile, p.div(3.1)).grad(dpx.div(3.1), dpy.div(3.1));
       const ragN = nz.r.add(nz.g).sub(1).mul(1.6);
-      // its shadow on the ground, thrown away from the sun (clumps ~0.6 m
-      // tall), at most a metre so it stays inside the cells looked at below
-      const toShadowRaw = uniforms.sunDir.xz.div(max(uniforms.sunDir.y, 0.25)).mul(0.6);
-      const toShadow = toShadowRaw.div(max(length(toShadowRaw), 1));
-      // [textures] The 2x2 cells nearest the pixel, not just its own: a clump
-      // (or its shadow) reaching over the cell edge was cut off square, which
-      // a low sun made obvious. Features stay within ~3.7 m of their centre.
+      const pRock = rockD.div(max(shrubD.add(rockD), 1e-3)).toVar();
+      const dens = max(shrubD, rockD);
+      // shadow offset per metre of clump height, away from the sun
+      const toShadow = uniforms.sunDir.xz.div(max(uniforms.sunDir.y, 0.1)).toVar();
       const base = floor(p.div(SH).sub(0.5));
       const disc = float(0).toVar();
       const shadow = float(0).toVar();
+      const ring = float(0).toVar();
       const rel = vec2(0).toVar();
       const rad = float(1).toVar();
       const d = float(9).toVar();
       const hue2 = float(0).toVar();
+      const kind = float(0).toVar();
       for (const [ox, oy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
         const cell = base.add(vec2(ox, oy));
         const h1 = fract(sin(dot(cell, vec2(127.1, 311.7))).mul(43758.5453));
         const h2 = fract(sin(dot(cell, vec2(269.5, 183.3))).mul(43758.5453));
         const h3 = fract(h1.mul(17.13).add(h2.mul(5.71)));
+        const h4 = fract(h2.mul(31.77).add(h1.mul(7.31)));
+        const isRock = step(h4, pRock);
         const centre = cell.add(vec2(h1, h2).mul(0.5).add(0.25)).mul(SH);
-        const r = h3.mul(0.75).add(0.45); // 0.45 - 1.2 m
-        // Two overlapping lobes per clump and a ragged edge from the detail
-        // tile's slope channels, so no clump is a clean circle.
+        // many small, few large
+        const r = mix(mix(float(0.35), float(1.25), h3.mul(h3)), mix(float(0.35), float(1.75), h3.mul(h3).mul(h3)), isRock);
+        const tall = r.mul(mix(float(0.6), float(0.75), isRock)).add(0.1);
         const q = p.sub(centre);
-        const lobe = vec2(h3.sub(0.5), h1.sub(0.5)).mul(r).mul(1.1);
-        const rag = ragN.mul(r);
-        const dk = min(length(q), length(q.sub(lobe)).mul(1.25)).add(rag);
-        const present = step(fract(h1.mul(91.7).add(h3)), shrubDensity);
-        const soft = max(pix, r.mul(0.18));
+        // shrub: three overlapping lobes and a ragged, leafy rim
+        const l1 = vec2(h3.sub(0.5), h1.sub(0.5)).mul(r).mul(1.1);
+        const l2 = vec2(h2.sub(0.5), h4.sub(0.5)).mul(r).mul(-0.9);
+        const dShrub = min(min(length(q), length(q.sub(l1)).mul(1.2)), length(q.sub(l2)).mul(1.35)).add(ragN.mul(r).mul(0.8));
+        // boulder: a rotated, stretched hexagonal block with a less ragged edge
+        const ang = h1.mul(6.2832);
+        const ca = cos(ang);
+        const sa = sin(ang);
+        const qr = vec2(q.x.mul(ca).add(q.y.mul(sa)), q.y.mul(ca).sub(q.x.mul(sa))).mul(vec2(1, mix(float(1), float(1.6), h4)));
+        const hx = max(max(abs(qr.x), abs(qr.x.mul(0.5).add(qr.y.mul(0.866)))), abs(qr.x.mul(0.5).sub(qr.y.mul(0.866))));
+        const dRock = hx.mul(1.05).add(ragN.mul(r).mul(0.18));
+        const dk = mix(dShrub, dRock, isRock);
+        const present = step(fract(h1.mul(91.7).add(h3)), dens);
+        const soft = max(pix, r.mul(mix(float(0.16), float(0.06), isRock)));
         const ck = smoothstep(r.add(soft), r.sub(soft), dk).mul(present);
-        const sk = smoothstep(r.add(soft), r.sub(soft).mul(0.8), length(q.add(toShadow)).add(rag)).mul(present);
+        // cast shadow: the footprint swept away from the sun by the clump's
+        // height (a capsule), capped so it stays inside the cells looked at
+        const off = toShadow.mul(tall);
+        const offL = length(off);
+        const offC = off.mul(min(offL, max(float(3.6).sub(r), 0.2)).div(max(offL, 1e-3)));
+        const tq = clamp(dot(q, offC.negate()).div(max(dot(offC, offC), 1e-4)), 0, 1);
+        const sd = length(q.add(offC.mul(tq))).add(ragN.mul(r).mul(0.4));
+        const sk = smoothstep(r.add(soft), r.mul(0.65), sd).mul(present);
         shadow.assign(max(shadow, sk));
+        ring.assign(max(ring, smoothstep(r.mul(1.6).add(soft), r, dk).mul(present)));
         If(ck.greaterThan(disc), () => {
           disc.assign(ck);
           rel.assign(q);
           rad.assign(r);
           d.assign(dk);
           hue2.assign(h2);
+          kind.assign(isRock);
         });
       }
-      const far = smoothstep(0.35, 0.9, pix.div(rad));
-      shadow.mulAssign(float(1).sub(disc).mul(float(1).sub(far)));
-      albedo.mulAssign(float(1).sub(shadow.mul(0.45)));
-      const cover = mix(disc, shrubDensity.mul(0.06), far).toVar();
-      // leafy clumps: dark gaps between the lit tufts
+      const far = smoothstep(0.35, 0.9, pix.div(rad)).toVar();
+      const near = float(1).sub(far);
+      // mean cover of a cell: E[pi r^2] * density / 25 m^2
+      const meanCover = mix(shrubD.mul(0.05), rockD.mul(0.075), pRock).toVar();
+      const cover = mix(disc, meanCover, far).toVar();
+      shadow.mulAssign(float(1).sub(disc));
+      const meanShadow = meanCover.mul(min(length(toShadow), 2.5).mul(0.4).add(0.3));
+      clumpLit.mulAssign(float(1).sub(mix(shadow, meanShadow, far).mul(0.8)));
+      const contact = ring.mul(float(1).sub(disc)).mul(near);
+      // colour
       const tuft = nz.a; // the height low byte: fine, noisy
-      const shade = mix(float(0.7), float(1.3), hue2).mul(mix(float(0.55), float(1.15), tuft.mul(0.5).add(smoothstep(0, rad, d).mul(0.5))));
-      albedo.assign(mix(albedo, PAL.shrub.mul(shade), cover));
-      rough.assign(mix(rough, float(0.85), cover));
-      lao.assign(mix(lao, float(0.8), cover));
+      const top = smoothstep(rad, rad.mul(0.15), d); // 1 on the crown, 0 at the rim
+      const leafy = clamp(moist.mul(1.4).add(hue2.mul(0.5)).sub(0.25), 0, 1);
+      const shrubCol = mix(mix(PAL.sage, PAL.caragana, leafy), PAL.cushionDry, step(0.8, hue2))
+        .mul(mix(float(0.62), float(1.12), tuft.mul(0.45).add(top.mul(0.55))));
+      const rockCol = mix(PAL.boulder, PAL.boulderGrey, hue2).mul(mix(float(0.7), float(1.18), top)).mul(tuft.mul(0.25).add(0.88));
+      const meanCol = mix(PAL.sage.mul(0.85), PAL.boulder.mul(0.95), pRock);
+      const col = mix(mix(shrubCol, rockCol, kind), meanCol, far);
+      albedo.assign(mix(albedo, col, cover));
+      rough.assign(mix(rough, mix(float(0.88), float(0.7), kind), cover));
+      lao.assign(mix(lao, mix(float(0.62), float(1), top), cover).mul(float(1).sub(contact.mul(0.4))));
+      height.assign(mix(height, float(0.9), cover));
       // a dome: the clump's own normal tilt, near the camera only
-      tnorm.assign(mix(tnorm, vec2(rel.x, rel.y.negate()).div(rad).mul(0.8).add(vec2(nz.r, nz.g).sub(0.5).mul(1.5)), disc.mul(float(1).sub(far))));
+      const bump = mix(float(0.85), float(1.25), kind);
+      const noiseN = vec2(nz.r, nz.g).sub(0.5).mul(mix(float(1.5), float(0.5), kind));
+      tnorm.assign(mix(tnorm, vec2(rel.x, rel.y.negate()).div(rad).mul(bump).add(noiseN), disc.mul(near)));
     });
 
     // ---------------------------------------------------------- rock
@@ -444,7 +616,7 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     If(snowRaw.greaterThan(0.004), () => {
       const L = topLayer(LAYER.snow, 3.3);
       // snow settles in the low parts of whatever is underneath first
-      snowW.assign(smoothstep(0.32, 0.68, snowRaw.add(float(0.5).sub(height).mul(0.3)).sub(cavity.sub(0.6).mul(0.25))));
+      snowW.assign(smoothstep(SNOW.COVER_LO, SNOW.COVER_HI, snowRaw.add(float(0.5).sub(height).mul(0.3)).sub(cavity.sub(0.6).mul(0.25))));
       const firn = smoothstep(260, -40, above);
       const col = mix(PAL.snowFresh, PAL.snowFirn, firn.mul(0.8)).mul(L.d.mul(0.25).add(0.75));
       albedo.assign(mix(albedo, col, snowW));
@@ -483,6 +655,21 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     albedo.mulAssign(mix(float(1), float(0.62), wetBand));
     rough.assign(mix(rough, float(0.22), wetBand));
 
+    // ---------------------------------------------------------- scorch marks
+    // [terrain-2] Hook for burn rings at impact sites: `uniforms.scorch` holds up
+    // to SCORCH_MAX (x, z, radius, strength 0..1), filled by Terrain.setScorches
+    // from whatever ring buffer the VFX owner keeps. Skipped while it is empty.
+    If(uniforms.scorchCount.greaterThan(0), () => {
+      const burn = float(0).toVar();
+      Loop(SCORCH_MAX, ({ i }) => {
+        const sc = uniforms.scorch.element(i);
+        const dd = length(p.sub(sc.xy)).div(max(sc.z, 0.1)).add(sC.height.mul(0.25)).add(hFine.mul(0.15));
+        burn.assign(max(burn, smoothstep(1, 0.3, dd).mul(sc.w)));
+      });
+      albedo.mulAssign(float(1).sub(burn.mul(0.8).mul(float(1).sub(water))));
+      rough.assign(mix(rough, float(0.95), burn));
+    });
+
     // ---------------------------------------------------------- normal
     const dry = float(1).sub(water);
     // snow buries fine relief; water replaces everything below the DEM scale
@@ -497,8 +684,26 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     const viewDir = normalize(uniforms.cam.sub(P));
     // [water] the river's AO input is its horizon specular occlusion; the walls it mirrors are added below
     const refl = riverReflection({ n: nWorld, viewDir, skyVis, foam });
+    // [terrain-2] Ambient occlusion, three scales multiplied:
+    //  - the pack's horizon scan (58 m - 3.7 km, `skyVis`) times the full-
+    //    resolution near scan above the tangent plane (29 - 230 m, groundData.js):
+    //    gully floors, the foot of each slope, valley bottoms. Squared: the
+    //    measured near visibility is honest but mild (p5 0.91), and the
+    //    reference photos' gullies and slope feet are darker than that in
+    //    skylight;
+    //  - the screen-space GTAO of the post chain within its range (half-res
+    //    prepass, 400 m on high, 600 m on ultra; off on medium for the terrain,
+    //    low and WebGL2), with the same same-surface test the other lit
+    //    materials use (src/fx/post/ambientOcclusion.js);
+    //  - the detail field's hollows and the layers' own AO.
+    const nearVis = mix(float(1), gnd.r, tI.mul(uniforms.nearAO));
+    const gt = uniforms.aoTex.sample(screenUV);
+    const zv = positionView.z.negate();
+    const sameSurf = abs(gt.g.negate().sub(zv)).lessThan(max(zv.mul(0.04), 0.2));
+    const gtao = select(sameSurf, mix(float(1), gt.r, uniforms.aoStrength), float(1));
     // [textures] layer AO weight 0.6 -> 0.8 (stone crevices in scree and talus)
-    oAO.assign(mix(skyVis.mul(mix(float(0.72), float(1), cavity)).mul(mix(float(1), lao, 0.8)), refl.ao, water));
+    const dryAO = skyVis.mul(nearVis.mul(nearVis)).mul(mix(float(0.72), float(1), cavity)).mul(mix(float(1), lao, 0.8)).mul(gtao);
+    oAO.assign(mix(dryAO, refl.ao, water));
 
     // ---------------------------------------------------------- emissive extras
     // Snow glitter: sparse facets that flash when they line up with the sun,
@@ -517,7 +722,11 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     // Heightfield sweep (shadowSweep.js): metres below the shadow boundary.
     // [ground polish] R16F metres (shadowConst.js); it was an 8-bit code to decode.
     const sweep = texture(uniforms.shadowTex, innerUV(p)).r;
-    oLit.assign(mix(float(1), smoothstep(uniforms.shadowSoft, uniforms.shadowSoft.negate(), sweep), tI.mul(uniforms.shadowOn)));
+    // [terrain-2] times the shrub and boulder shadows (direct light only), where
+    // they were not painted over by rock, snow or water afterwards
+    const clumpKeep = float(1).sub(rockBlend).mul(float(1).sub(snowW)).mul(dry);
+    oLit.assign(mix(float(1), smoothstep(uniforms.shadowSoft, uniforms.shadowSoft.negate(), sweep), tI.mul(uniforms.shadowOn))
+      .mul(mix(float(1), clumpLit, clumpKeep)));
 
     return vec4(albedo, 1);
   });

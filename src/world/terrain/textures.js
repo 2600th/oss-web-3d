@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { TILE_SIZE } from './detail.js';
+import { GROUND_NEUTRAL } from './groundData.js';
 
 // GPU textures derived from the terrain pack at load.
 //
@@ -7,18 +8,29 @@ import { TILE_SIZE } from './detail.js';
 //   outer   R32F           coarse surrounding DEM, same treatment
 //   amp     R8    res/2    sub-DEM displacement amplitude (hardware bilinear)
 //   tile    RGBA8 512^2    detail tile: R,G = slope along u,v; B,A = height hi/lo byte
-//   surf    RGBA8 res^2    R,G = DEM normal x,z; B = sky visibility; A = curvature
-//   river   RGBA8 res^2    R = bank distance; G,B = flow direction; A = vegetation
+//   land    RGBA8 res^2 x 3 layers (one array texture, one binding):
+//     layer 0 (LAND.surf)   R,G = DEM normal x,z; B = sky visibility; A = curvature
+//     layer 1 (LAND.river)  R = bank distance; G,B = flow direction; A = vegetation
+//     layer 2 (LAND.ground) groundData.js: R = near sky visibility, G = debris
+//                           fan, B = moisture, A = irrigated fields. Neutral
+//                           until the worker has built it (fillGround()).
 //   outerSurf RGBA8        R,G = outer DEM normal x,z; B = sky visibility
 //
-// Everything a pixel needs about the land at DEM scale comes from `surf` and
-// `river` through mipmapped, anisotropic samplers, so distant terrain is
-// filtered instead of aliasing.
+// Everything a pixel needs about the land at DEM scale comes from `land`
+// through a mipmapped, anisotropic sampler, so distant terrain is filtered
+// instead of aliasing.
+//
+// [terrain-2] `surf` and `river` were two textures; the terrain material sat
+// at 15 of the 16 sampled textures WebGPU guarantees per stage. As layers of
+// one array they cost one binding, which (with the displacement amplitude now
+// a vertex varying) leaves room for the screen-space AO and the ground layer.
 
 /** Slope range stored in the tile's R,G channels: byte 0..255 -> -TILE_SLOPE..+TILE_SLOPE per texel. */
 export const TILE_SLOPE = 0.25;
 /** Curvature range: byte 0..255 -> -1..+1 where 1 = CURV_RANGE metres of relief per metre. */
 export const CURV_RANGE = 0.35;
+/** Layers of the `land` array texture. */
+export const LAND = { surf: 0, river: 1, ground: 2 };
 
 const smooth = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -134,7 +146,6 @@ export function buildTerrainTextures(DEM, { aniso = 8 } = {}) {
       surf[k * 4 + 3] = Math.min(255, Math.max(0, Math.round(127.5 + 127.5 * (ring - H[k]) * curvScale)));
     }
   }
-  out.surf = dataTex(surf, n, n, THREE.RGBAFormat, THREE.UnsignedByteType, { linear: true, mips: true, aniso });
 
   // --- rivers: bank distance, flow direction, vegetation
   {
@@ -178,7 +189,23 @@ export function buildTerrainTextures(DEM, { aniso = 8 } = {}) {
         riv[k + 3] = Math.round(veg[hj * m + hi] * 255);
       }
     }
-    out.river = dataTex(riv, n, n, THREE.RGBAFormat, THREE.UnsignedByteType, { linear: true, mips: true, aniso: Math.min(aniso, 4) });
+    // [terrain-2] the three DEM-registered layers in one array texture
+    const land = new Uint8Array(n * n * 4 * 3);
+    land.set(surf, 0);
+    land.set(riv, n * n * 4);
+    const g = n * n * 8;
+    for (let k = 0; k < n * n; k++) land.set(GROUND_NEUTRAL, g + k * 4);
+    const t = new THREE.DataArrayTexture(land, n, n, 3);
+    t.format = THREE.RGBAFormat;
+    t.type = THREE.UnsignedByteType;
+    t.magFilter = THREE.LinearFilter;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.generateMipmaps = true;
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.anisotropy = aniso;
+    t.colorSpace = THREE.NoColorSpace;
+    t.needsUpdate = true;
+    out.land = t;
   }
 
   // --- outer DEM surface
@@ -204,4 +231,19 @@ export function buildTerrainTextures(DEM, { aniso = 8 } = {}) {
     out.outerSurf = dataTex(px, w, h, THREE.RGBAFormat, THREE.UnsignedByteType, { linear: true, mips: true, aniso: Math.min(aniso, 4) });
   }
   return out;
+}
+
+/**
+ * Write the ground-data layer (groundData.js output, res^2 RGBA8) into the
+ * `land` array and schedule an upload of that layer only. Returns false when
+ * the texture's CPU copy has already been released.
+ */
+export function fillGround(land, data) {
+  const img = land.image;
+  if (!img?.data) return false;
+  const n = img.width;
+  img.data.set(data, n * n * 4 * LAND.ground);
+  if (typeof land.addLayerUpdate === 'function') land.addLayerUpdate(LAND.ground);
+  land.needsUpdate = true;
+  return true;
 }
