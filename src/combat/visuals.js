@@ -145,8 +145,12 @@ export class CombatVisuals {
   }
 
   update(dt) {
+    // [vfx] Tracers have one owner: when the VFX system is present it draws
+    // every live round itself (src/vfx/core/Tracers.js reads world.bullets),
+    // so the placeholder boxes only run in a gameplay-only checkout.
     const b = this.world.bullets;
-    const n = b.n;
+    const n = this.placeholders ? b.n : 0;
+    this.tracers.visible = n > 0;
     for (let i = 0; i < n; i++) {
       _d.set(b.vx[i], b.vy[i], b.vz[i]);
       const speed = _d.length();

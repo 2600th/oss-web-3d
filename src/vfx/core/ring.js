@@ -106,8 +106,15 @@ export const saturate = (x) => Math.min(1, Math.max(0, x));
 export const lerp = (a, b, t) => a + (b - a) * t;
 export const smoothstep = (a, b, x) => { const t = saturate((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
-/** Explosion size presets: metric radius of the fireball; everything else scales from it. */
-export const EXPLOSION_SIZES = { small: 4, medium: 9, large: 18, huge: 34 };
+/**
+ * Explosion size presets: metric radius of the fireball core; everything else
+ * scales from it. The burning, rolling cloud ends up about 2.2x this across,
+ * which is what has to match combat's blast radii for the same names
+ * (small 14 m, medium 30 m, large 55 m, huge 110 m): what kills you is what
+ * you see.
+ */
+export const EXPLOSION_SIZES = { small: 6.5, medium: 14, large: 25, huge: 50 };
+export const BLAST_RADIUS = { small: 14, medium: 30, large: 55, huge: 110 };
 export function explosionRadius(size) {
   if (typeof size === 'number' && size > 0) return size;
   return EXPLOSION_SIZES[size] ?? EXPLOSION_SIZES.medium;
@@ -125,22 +132,38 @@ export function plumeState(throttle, reheat) {
     ? saturate(reheat)
     : (reheat ? 0.45 + 0.55 * saturate((th - 0.86) / 0.14) : 0);
   const dry = smoothstep(0.35, 0.9, th);
+  // Lengths in metres for a MiG-21-sized nozzle: military power shows a
+  // stub of faint flame, full reheat about 8 m with 4-5 shock diamonds.
   return {
-    length: 1.2 + dry * 1.8 + rh * 8.0,
-    diamonds: rh > 0 ? 3 + rh * 3 : 0,
-    core: dry * 0.1 + rh * 0.9,
-    glow: dry * 0.2 + rh,
+    length: 0.6 + dry * 1.4 + rh * 6.0,
+    diamonds: rh > 0 ? 3 + rh * 2 : 0,
+    core: dry * 0.08 + rh * 0.9,
+    glow: dry * 0.15 + rh,
     reheat: rh,
   };
 }
 
-/** How strongly the wing sheds visible vapour: G and AoA driven, thinner in high dry air. */
-export function vapourAmount(gLoad, aoaRad, speed, altitude) {
-  const g = smoothstep(4.2, 7.5, Math.abs(gLoad));
-  const a = smoothstep(0.16, 0.34, Math.abs(aoaRad));
+/**
+ * How strongly the wing sheds visible vapour: G and AoA driven, thinner in
+ * high dry air. `humidity` (0..1, env.weather.humidity; 0.3 is a dry day)
+ * lowers the G and AoA it takes, and saturated air (inside cloud) condenses
+ * off the airframe even in level flight.
+ */
+export function vapourAmount(gLoad, aoaRad, speed, altitude, humidity = 0.3) {
+  const h = saturate((humidity - 0.3) / 0.7);
+  const g = smoothstep(3.5 - 1.6 * h, 6.8 - 2.4 * h, Math.abs(gLoad));
+  const a = smoothstep(0.16 - 0.06 * h, 0.34 - 0.1 * h, Math.abs(aoaRad));
   const q = smoothstep(110, 240, speed);
-  const dens = 1 - smoothstep(5500, 9500, altitude) * 0.6;
-  return saturate(Math.max(g, a * 0.8) * q * dens);
+  const dens = 1 - smoothstep(5500, 9500, altitude) * 0.6 * (1 - h);
+  const wet = smoothstep(0.7, 1, humidity) * 0.5;
+  return saturate(Math.max(g, a * 0.8, wet) * q * dens);
+}
+
+/** Contrail strength: cold air aloft, lower in humid air. */
+export function contrailAmount(altitude, throttle = 0.8, humidity = 0.3) {
+  const h = saturate((humidity - 0.3) / 0.7);
+  const lo = 6600 - 1800 * h;
+  return smoothstep(lo, lo + 800, altitude) * saturate(throttle * 1.4);
 }
 
 /** Transonic vapour-cone visibility: a narrow band around Mach 0.95-1.03. */

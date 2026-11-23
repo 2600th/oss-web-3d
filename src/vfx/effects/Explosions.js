@@ -21,7 +21,7 @@ export class Explosions {
     const n = vfx.cfg.debris;
     this.debris = new Pool(n, () => ({
       pos: new THREE.Vector3(), vel: new THREE.Vector3(), quat: new THREE.Quaternion(), axis: new THREE.Vector3(),
-      spin: 0, age: 0, life: 0, scale: 1, burn: 1, trail: null,
+      spin: 0, age: 0, life: 0, scale: 1, burn: 1, trail: null, owner: null,
     }));
     const geo = new THREE.TetrahedronGeometry(0.6, 0);
     geo.scale(1.5, 0.35, 1);
@@ -68,7 +68,9 @@ export class Explosions {
     if (kind === 'flak') return this.flak(pos, R, q);
     const ground = kind === 'ground';
     const ivx = (velocity?.x ?? 0) * 0.3, ivy = (velocity?.y ?? 0) * 0.3, ivz = (velocity?.z ?? 0) * 0.3;
-    const big = Math.sqrt(R / 9);
+    const big = Math.sqrt(R / 14);
+    // lights and shake were tuned when the radii were about half this
+    const Rl = R * 0.55;
     let surfaceY = -1e9;
     if (ground) {
       terrainNormal(pos.x, pos.z, _n);
@@ -76,54 +78,60 @@ export class Explosions {
     }
     const x = pos.x, y = ground ? Math.max(pos.y, surfaceY + 0.3) : pos.y, z = pos.z;
 
-    // 1. flash + bloom halo + scene light + pressure bubble
-    glow.spawn(G.flash, x, y, z, ivx, ivy, ivz, 0.12, R * 3, R * 6, 1, 0.88, 0.66, 1, 40);
-    glow.spawn(G.halo, x, y, z, ivx, ivy, ivz, 0.6, R * 5, R * 10, 1, 0.5, 0.17, 1, 1.6);
-    v.lights.flash(pos, 1, 0.62, 0.3, R * R * 420, R * 50, 0.65);
-    this.pulses.push({ x, y, z, R, age: 0 });
+    // 1. flash + bloom halo + scene light + pressure bubble. The flash is two
+    // things: the star that fills the blast for a few frames, and a point
+    // that holds a minimum size on screen so a hit three kilometres off still
+    // registers as a hit.
+    glow.spawn(G.flash, x, y, z, ivx, ivy, ivz, 0.14, R * 3, R * 6.5, 1, 0.9, 0.7, 1, 46);
+    glow.spawn(G.flare, x, y, z, ivx, ivy, ivz, 0.22 + 0.1 * big, R * 2.2, R * 1.2, 1, 0.86, 0.6, 1, 22);
+    glow.spawn(G.halo, x, y, z, ivx, ivy, ivz, 0.7, R * 4, R * 9, 1, 0.5, 0.17, 1, 1.5);
+    v.lights.flash(pos, 1, 0.62, 0.3, Rl * Rl * 420, Rl * 50 + 120, 0.65);
+    this.pulses.push({ x, y, z, R: Rl, age: 0 });
 
-    // 2. fireball: white-hot core puffs, then the rolling ball that cools to soot
+    // 2. fireball: white-hot core puffs, then the rolling ball that cools to
+    // soot. Big ones burn for seconds and lift (see the `fireballBig` type).
+    const ball = R >= 20 ? L.fireballBig : L.fireball;
     for (let i = 0; i < 3; i++) {
       randDir(_d);
-      lit.spawn(L.fireball, x + _d.x * R * 0.2, y + _d.y * R * 0.2, z + _d.z * R * 0.2, _d.x * R + ivx, _d.y * R + ivy, _d.z * R + ivz,
-        0.6 * big, R * 0.9, R * 1.7, 0.1, 0.09, 0.08, 0.9, 6);
+      lit.spawn(ball, x + _d.x * R * 0.2, y + _d.y * R * 0.2, z + _d.z * R * 0.2, _d.x * R * 0.8 + ivx, _d.y * R * 0.8 + ivy, _d.z * R * 0.8 + ivz,
+        0.7 * big, R * 0.9, R * 1.6, 0.1, 0.09, 0.08, 0.9, 6);
     }
-    const nBall = Math.round((9 + R * 0.45) * q);
+    const nBall = Math.round((10 + R * 0.5) * q);
     for (let i = 0; i < nBall; i++) {
       randDir(_d);
       if (ground) { _d.y = Math.abs(_d.y) * 0.9 + 0.2; _d.normalize(); }
-      const r0 = R * rnd(0.1, 0.5), sp = R * rnd(1.4, 5.2);
-      lit.spawn(L.fireball, x + _d.x * r0, y + _d.y * r0, z + _d.z * r0, _d.x * sp + ivx, _d.y * sp + ivy, _d.z * sp + ivz,
-        rnd(2.2, 3.8) * (0.55 + 0.45 * big), R * rnd(0.5, 0.8), R * rnd(1.9, 2.8), 0.085, 0.08, 0.075, 0.95, rnd(2.0, 3.3), -rnd(0.05));
+      const r0 = R * rnd(0.1, 0.5), sp = R * rnd(1.2, 4.2);
+      lit.spawn(ball, x + _d.x * r0, y + _d.y * r0, z + _d.z * r0, _d.x * sp + ivx, _d.y * sp + ivy, _d.z * sp + ivz,
+        rnd(2.4, 4.2) * (0.55 + 0.45 * big), R * rnd(0.45, 0.75), R * rnd(1.5, 2.2), 0.085, 0.08, 0.075, 0.95, rnd(2.0, 3.4), -rnd(0.05));
     }
 
     // 3. smoke that stays behind and drifts off with the wind
-    const nSmoke = Math.round(7 * q);
+    const nSmoke = Math.round((7 + R * 0.12) * q);
     for (let i = 0; i < nSmoke; i++) {
       randDir(_d);
       if (ground) _d.y = Math.abs(_d.y);
-      lit.spawn(L.smoke, x + _d.x * R * 0.7, y + _d.y * R * 0.7, z + _d.z * R * 0.7, _d.x * R * 0.7 + ivx, _d.y * R * 0.7 + 2 + ivy, _d.z * R * 0.7 + ivz,
-        rnd(7, 13) * (0.7 + R / 22), R * 1.3, R * rnd(3.0, 4.4), 0.17, 0.165, 0.16, 0.85, 0, -rnd(0.25, 0.7));
+      lit.spawn(L.smoke, x + _d.x * R * 0.6, y + _d.y * R * 0.6, z + _d.z * R * 0.6, _d.x * R * 0.5 + ivx, _d.y * R * 0.5 + 2 + ivy, _d.z * R * 0.5 + ivz,
+        rnd(8, 14) * (0.7 + R / 40), R * 1.1, R * rnd(2.4, 3.4), 0.13, 0.126, 0.122, 0.85, 0, -rnd(0.25, 0.7));
     }
 
     // 4. sparks
     if (lod > 0.4) {
-      const nSpark = Math.round((28 + R * 3) * q);
+      const nSpark = Math.round((28 + R * 2) * q);
       for (let i = 0; i < nSpark; i++) {
         randDir(_d);
         if (ground) _d.y = Math.abs(_d.y);
-        const sp = R * rnd(5, 22);
+        const sp = R * rnd(3, 13);
         glow.spawn(G.spark, x, y, z, _d.x * sp + ivx * 2, _d.y * sp + ivy * 2, _d.z * sp + ivz * 2,
           rnd(0.5, 1.6), rnd(0.12, 0.3) * big, 0.03, 1, 0.6, 0.2, 1, rnd(6, 20));
       }
     }
 
     // 5. shock ring
-    glow.spawn(G.ring, x, y, z, 0, 0, 0, 0.5, R * 1.5, R * 17, 1, 0.92, 0.82, 1, 0.42);
+    glow.spawn(G.ring, x, y, z, 0, 0, 0, 0.5, R * 1.2, R * 11, 1, 0.92, 0.82, 1, 0.42);
 
     // 6. debris with smoke trails
-    if (lod === 1 && R >= 4) {
-      const nDeb = Math.round(clamp(3 + R / 3, 3, 10) * v.cfg.rate);
+    if (lod === 1 && R >= 6) {
+      const nDeb = Math.round(clamp(3 + R / 4, 3, 10) * v.cfg.rate);
       for (let i = 0; i < nDeb; i++) {
         randDir(_d);
         if (ground) _d.y = Math.abs(_d.y) * 0.8 + 0.3;
@@ -140,25 +148,25 @@ export class Explosions {
       const nCol = Math.round(20 * q);
       for (let i = 0; i < nCol; i++) {
         randDir(_d);
-        const up = R * rnd(1.6, 4.6), lat = R * rnd(0.3, 1.4);
+        const up = R * rnd(1.2, 3.4), lat = R * rnd(0.3, 1.1);
         lit.spawn(L.dust, x + _d.x * R * 0.4, y + 0.5, z + _d.z * R * 0.4,
           _n.x * up + _d.x * lat, _n.y * up + Math.abs(_d.y) * lat, _n.z * up + _d.z * lat,
-          rnd(2.6, 4.6) * (0.7 + R / 26), R * 0.55, R * rnd(1.8, 3), cr, cg, cb, 0.85, 0, -rnd(0.08));
+          rnd(2.8, 5) * (0.7 + R / 44), R * 0.5, R * rnd(1.5, 2.4), cr, cg, cb, 0.85, 0, -rnd(0.08));
       }
       const nSkirt = Math.round(14 * q);
       for (let i = 0; i < nSkirt; i++) {
         const a = (i / nSkirt) * Math.PI * 2 + rnd(0.4);
         _t.set(Math.cos(a), 0, Math.sin(a));
         _t.addScaledVector(_n, -_t.dot(_n)).normalize();
-        const sp = R * rnd(2.4, 5);
+        const sp = R * rnd(2.0, 4.2);
         lit.spawn(L.groundDust, x + _t.x * R * 0.5, y + R * 0.12, z + _t.z * R * 0.5, _t.x * sp, _t.y * sp + 1, _t.z * sp,
-          rnd(3, 6), R * 0.8, R * rnd(2.4, 3.6), cr * 1.05, cg * 1.05, cb * 1.05, 0.5, 0, -rnd(0.1));
+          rnd(3.5, 7), R * 0.7, R * rnd(2.0, 3.0), cr * 1.05, cg * 1.05, cb * 1.05, 0.5, 0, -rnd(0.1));
       }
-      if (R >= 8) v.spawnFire(_p.set(x, surfaceY, z), { size: R * 0.32, duration: R >= 16 ? Infinity : 150 });
+      if (R >= 12) v.spawnFire(_p.set(x, surfaceY, z), { size: R * 0.2, duration: R >= 24 ? Infinity : 150 });
     }
 
     // 8. camera shake for anyone listening
-    const shake = clamp((R * 16) / Math.max(dist, 20), 0, 1);
+    const shake = clamp((Rl * 16) / Math.max(dist, 20), 0, 1);
     if (shake > 0.03) v.game.events.emit('vfx:shake', { amount: shake });
   }
 
@@ -194,9 +202,28 @@ export class Explosions {
     }
   }
 
-  spawnDebris(pos, vel, scale = 1) {
+  /** A wreck's hulk gives its piece back (only if the pool has not recycled it). */
+  releaseDebris(d, owner) {
+    if (!d || d.owner !== owner || !d.active) return;
+    d.owner = null;
+    d.trail?.end(); d.trail = null;
+    this.debris.release(d);
+  }
+
+  /**
+   * A tumbling piece. With `owner` ({pos, vel}, a falling wreck) the piece is
+   * carried by it instead of flying on its own, and leaves no trail of its own.
+   */
+  spawnDebris(pos, vel, scale = 1, owner = null) {
     const d = this.debris.acquire();
-    d.trail?.end();
+    d.trail?.end(); d.trail = null;
+    d.owner = owner;
+    if (owner) {
+      d.pos.copy(pos); d.vel.copy(vel);
+      randDir(d.axis); d.spin = rnd(2, 5); d.quat.identity();
+      d.age = 0; d.life = 1e9; d.scale = scale; d.burn = 1e9;
+      return d;
+    }
     d.pos.copy(pos); d.vel.copy(vel);
     randDir(d.axis); d.spin = rnd(4, 14); d.quat.identity();
     d.age = 0; d.life = rnd(3.5, 6.5); d.scale = scale; d.burn = rnd(1.2, 3);
@@ -220,6 +247,14 @@ export class Explosions {
     const mesh = this.debrisMesh;
     for (const d of this.debris.items) {
       if (!d.active) continue;
+      if (d.owner) {
+        d.pos.copy(d.owner.pos);
+        _q.setFromAxisAngle(d.axis, d.spin * dt);
+        d.quat.premultiply(_q);
+        _m.compose(d.pos, d.quat, _s.setScalar(d.scale));
+        mesh.setMatrixAt(n++, _m);
+        continue;
+      }
       d.age += dt;
       d.vel.y -= 9.81 * dt;
       d.vel.multiplyScalar(Math.exp(-0.22 * dt));

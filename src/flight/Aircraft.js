@@ -74,7 +74,7 @@ export class Aircraft {
     this.bounds = b;
     this.length = b.max.z - b.min.z;
     this.wingspan = b.max.x - b.min.x;
-    this.sockets.nozzle.position.set(0, 0.05, b.max.z - 0.3);
+    this.sockets.nozzle.position.set(0, -0.61, 6.42); // [vfx] measured nozzle exit of mig21.glb (centre of the 0.45 m lip); the bbox guess was 0.66 m high and 1.16 m aft (it measured the fin)
     this.sockets.wingtipL.position.set(b.min.x + 0.15, -0.05, 1.6);
     this.sockets.wingtipR.position.set(b.max.x - 0.15, -0.05, 1.6);
     this.sockets.gun.position.set(0, -0.6, -2.5);

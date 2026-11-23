@@ -176,6 +176,8 @@ export class Ribbons {
     const v4 = varying(vec4(distA, distB, life, seed));
     const v5 = varying(iC);
     const v6 = varying(vec4(iX.z, iS.x, rA0.div(rA), rB0.div(rB)));
+    // cloud shadow where the segment has drifted to (one shadow-map tap per vertex)
+    const v7 = varying(sh.cloudShadow(drift(iA.xyz, bA)));
 
     material.fragmentNode = Fn(() => {
       const D = normalize(vPos);
@@ -240,7 +242,7 @@ export class Ribbons {
       const camSeg = a.add(ax.mul(wu.clamp(0, L)));
       const inside = smoothstep(r.mul(0.6), r.mul(1.9), length(camSeg));
       const tau = sigma.mul(chord).mul(pow(prof, 0.5)).mul(erosion).mul(fadeLife).mul(inside).mul(1.5);
-      const alpha = float(1).sub(exp(tau.negate())).mul(u.fade);
+      const alpha = float(1).sub(exp(tau.negate())).mul(u.fade).mul(sh.cloudVisAt(t0.add(t1).mul(0.5)));
 
       // shading: tube normal at the entry point, roughened by the noise
       const rim = sqrt(max(h2, 0)).div(r.max(1e-3));
@@ -252,7 +254,7 @@ export class Ribbons {
       const hemi = dot(nrm, upV).mul(0.5).add(0.5);
       const amb = mix(u.groundColor, u.skyColor, hemi);
       const fwd = pow(saturate(dot(D, u.sunDirView)), 8).mul(float(1).sub(alpha)).mul(0.9);
-      const col = v5.rgb.mul(u.sunColor.mul(diffuse.mul(0.62).add(fwd)).add(amb.mul(0.38))).toVar();
+      const col = v5.rgb.mul(u.sunColor.mul(v7).mul(diffuse.mul(0.62).add(fwd)).add(amb.mul(0.34))).toVar();
       // rocket motor lighting the first metres of smoke
       const hot = v6.x.mul(exp(age.mul(-9))).mul(prof.mul(0.8).add(0.2));
       col.addAssign(fireRamp(hot.mul(1.2)));

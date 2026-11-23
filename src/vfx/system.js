@@ -4,6 +4,7 @@ import { vec4 } from 'three/tsl';
 import { Shared } from './core/shared.js';
 import { ParticlePool } from './core/ParticlePool.js';
 import { Ribbons } from './core/Ribbons.js';
+import { Tracers } from './core/Tracers.js';
 import { Lights } from './core/Lights.js';
 import { Heat } from './core/Heat.js';
 import { explosionRadius } from './core/ring.js';
@@ -41,8 +42,10 @@ class LayerPass extends PassNode {
  * All particles and trails render into one HDR layer (premultiplied alpha)
  * that is composited over the scene in a post scene stage, after the
  * atmosphere and clouds and before bloom. The layer soft-clips against the
- * scene pass's depth, so nothing here needs a framebuffer copy or sorting
- * against the world. Heat haze is a second stage on top.
+ * scene pass's depth, and every material attenuates itself by the cloud
+ * between it and the camera (env.clouds.visibilityAt), so nothing here needs
+ * a framebuffer copy or sorting against the world, and a trail that enters
+ * a cloud disappears into it. Heat haze is a second stage on top.
  *
  * Public API (positions are THREE.Vector3, world space):
  *   explosion(position, size = 'medium', kind = 'air', velocity?)
@@ -51,7 +54,7 @@ class LayerPass extends PassNode {
  *   missile(entity) / endMissile(entity)              full motor + trail
  *   flare(entity)
  *   muzzleFlash(position, direction, velocity?, scale = 1)
- *   tracer(position, velocity)
+ *   tracer(position, velocity, hostile?)                a visual-only round (real rounds are read from combat)
  *   spawnFire(position, {size, duration, smoke}) -> handle (handle.stop())
  *   setDamage(entity, level 0..1)                     smoke/fire off an aircraft
  *   wreck(position, velocity, scale = 1)              burning piece that falls and impacts
@@ -80,6 +83,7 @@ class VfxSystem {
     this.lit = new ParticlePool(shared, cfg.lit, 'lit');
     this.glow = new ParticlePool(shared, cfg.glow, 'glow');
     this.ribbons = new Ribbons(shared, cfg.segments);
+    this.tracers = new Tracers(shared);
     this.lights = new Lights(game.scene, cfg.lights);
     this.heatField = new Heat(shared);
     const { L, G } = defineTypes(this.lit, this.glow);
@@ -92,7 +96,8 @@ class VfxSystem {
     this.ribbons.mesh.renderOrder = 0;
     this.lit.mesh.renderOrder = 1;
     this.glow.mesh.renderOrder = 3; // attached additive meshes (plumes) sit at 2
-    this.scene.add(this.ribbons.mesh, this.lit.mesh, this.glow.mesh);
+    this.tracers.mesh.renderOrder = 4;
+    this.scene.add(this.ribbons.mesh, this.lit.mesh, this.glow.mesh, this.tracers.mesh);
     this.pass = new LayerPass(PassNode.COLOR, this.scene, game.camera, { depthBuffer: false });
     const layer = this.pass.getTextureNode();
     game.post.addSceneStage((color) => vec4(color.rgb.mul(layer.a.oneMinus()).add(layer.rgb), color.a), 55);
@@ -159,7 +164,7 @@ class VfxSystem {
   endMissile(entity) { this.emitters.endMissile(entity); }
   flare(entity) { return this.emitters.flare(entity); }
   muzzleFlash(position, direction, velocity = null, scale = 1) { this.aircraft.muzzleFlash(position, direction, velocity, scale); }
-  tracer(position, velocity) { this.aircraft.tracer(position, velocity); }
+  tracer(position, velocity, hostile = false) { this.tracers.fire(position, velocity, hostile); }
   spawnFire(position, opts = {}) { return this.emitters.fire(position, opts); }
   setDamage(entity, level) { if (entity) this.emitters.damage(entity, level); }
   wreck(position, velocity, scale = 1) { return this.emitters.wreck(position, velocity, scale); }
@@ -198,6 +203,9 @@ class VfxSystem {
     this.lights.update(dt, shared.u.camPos.value);
     this.heatField.update(game.camera);
     this.ribbons.update();
+    // One set of tracers: combat's live rounds, drawn here (combat's own
+    // instanced boxes stand down when this system exists).
+    this.tracers.update(game.systems?.combat?.world?.bullets ?? null, dt);
     const renderer = game.r.renderer;
     this.lit.update(renderer);
     this.glow.update(renderer);
@@ -210,6 +218,7 @@ class VfxSystem {
     this.lit?.dispose();
     this.glow?.dispose();
     this.ribbons?.dispose();
+    this.tracers?.dispose();
     this.lights?.dispose();
   }
 }

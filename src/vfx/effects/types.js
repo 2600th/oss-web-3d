@@ -22,6 +22,12 @@ export function defineTypes(lit, glow) {
     // smoke shed by something moving fast: decouples from the emitter quickly
     // burning fuel streaming off something fast: flame for a moment, then soot
     burn: lit.type({ drag: 4, gravity: 1.2, turbulence: 5, turbScale: 0.04, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.45, heatDecay: 13, soft: 0.4, spin: 0.6 }),
+    // sooty burn smoke off a damaged aircraft or a falling wreck: rolls hard, swells fast
+    soot: lit.type({ drag: 3.2, gravity: 0.9, turbulence: 7, turbScale: 0.045, wind: 1, sizePow: 0.42, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 8, soft: 0.4, spin: 0.8 }),
+    // the upper, older part of a smoke column: paler, huge, drifting downwind for a minute
+    columnTop: lit.type({ drag: 0.4, gravity: 2.7, turbulence: 2.8, turbScale: 0.008, wind: 1, sizePow: 0.8, fadeIn: 0.1, fadeOut: 0.5, heatDecay: 2, soft: 0.6, spin: 0.15, thin: 0.15 }),
+    // big explosions: the fireball stays hot longer and lifts into a mushroom
+    fireballBig: lit.type({ drag: 2.1, gravity: 3.4, turbulence: 8, turbScale: 0.02, wind: 0.6, sizePow: 0.34, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 1.0, soft: 0.3, spin: 0.5 }),
     shed: lit.type({ drag: 4.5, gravity: 0.6, turbulence: 4, turbScale: 0.04, wind: 1, sizePow: 0.45, fadeIn: 0.04, fadeOut: 0.4, heatDecay: 2.6, soft: 0.4, spin: 0.5, thin: 0.35 }),
   };
   const G = {
@@ -37,7 +43,15 @@ export function defineTypes(lit, glow) {
     jet: glow.type({ drag: 0.2, gravity: 0, shape: 4, sizePow: 0.7, fadeIn: 0.05, fadeOut: 0.2, flicker: 0.25 }),
     motor: glow.type({ drag: 0, gravity: 0, shape: 1, stretch: 0.013, minPixels: 1.5, sizePow: 1, fadeIn: 0, fadeOut: 0.5, flicker: 0.3 }),
     flare: glow.type({ drag: 0, gravity: 0, shape: 3, minPixels: 16, flicker: 0.35, sizePow: 1, fadeIn: 0, fadeOut: 0.5 }),
-    streak: glow.type({ drag: 0, gravity: 0, shape: 1, stretch: 0.05, sizePow: 1, fadeIn: 0.2, fadeOut: 0.4 }),
+    // engine core seen up the tailpipe: a plain soft dot, no minimum size
+    core: glow.type({ drag: 0, gravity: 0, shape: 0, flicker: 0.15, sizePow: 1, fadeIn: 0, fadeOut: 0.5 }),
+    // flame torn off something moving fast: stretched along its motion
+    fire: glow.type({ drag: 3, gravity: 3, turbulence: 6, turbScale: 0.2, shape: 4, stretch: 0.012, sizePow: 0.7, fadeIn: 0.08, fadeOut: 0.35, flicker: 0.3 }),
+    // rain past the canopy: world-anchored drops, streaked by the camera's own speed
+    rain: glow.type({ drag: 0, gravity: -9.8, shape: 1, stretch: 0.03, minPixels: 0.9, sizePow: 1, fadeIn: 0.2, fadeOut: 0.6 }),
+    // snow / ice crystals: barely fall, tumble and glitter
+    snow: glow.type({ drag: 0, gravity: -1.3, turbulence: 2.5, turbScale: 0.3, shape: 1, stretch: 0.045, minPixels: 1.2, flicker: 0.55, sizePow: 1, fadeIn: 0.15, fadeOut: 0.5 }),
+    streak: glow.type({ drag: 0, gravity: 0, shape: 1, stretch: 0.08, minPixels: 1, sizePow: 1, fadeIn: 0.2, fadeOut: 0.4 }),
   };
   return { L, G };
 }
@@ -52,9 +66,16 @@ export const TRAILS = {
   rocket: { radius: 0.35, growth: 0.9, life: 12, color: [0.8, 0.8, 0.8], opacity: 1.8, wobble: 4, rise: 0.2, glow: 1.6, wind: 1, spacing: 9 },
   flare: { radius: 0.35, growth: 1.0, life: 9, color: [0.95, 0.95, 0.97], opacity: 3.2, wobble: 4, rise: 0.4, glow: 2.6, wind: 1, spacing: 5 },
   debris: { radius: 0.3, growth: 0.8, life: 5, color: [0.2, 0.19, 0.18], opacity: 4, wobble: 2, rise: 0.6, glow: 0.7, wind: 1, spacing: 4 },
-  wreck: { radius: 1.6, growth: 3.2, life: 26, color: [0.07, 0.065, 0.06], opacity: 11, wobble: 10, rise: 1.2, glow: 0, wind: 1, spacing: 9 },
+  // Burn trails: the ribbon is only the soft dark core that keeps the trail
+  // continuous at range; the billowing body is `soot` particles on top of it.
+  wreck: { radius: 1.8, growth: 3.6, life: 30, color: [0.05, 0.047, 0.045], opacity: 4.5, wobble: 18, rise: 1.2, glow: 0, wind: 1, spacing: 9 },
   damageLight: { radius: 0.5, growth: 1.3, life: 9, color: [0.55, 0.55, 0.56], opacity: 1.2, wobble: 5, rise: 0.4, glow: 0, wind: 1, spacing: 9 },
-  damageHeavy: { radius: 0.8, growth: 2.2, life: 18, color: [0.08, 0.075, 0.07], opacity: 9, wobble: 8, rise: 0.8, glow: 0, wind: 1, spacing: 9 },
-  vortex: { radius: 0.1, growth: 0.22, life: 1.7, color: [1, 1, 1], opacity: 0.55, wobble: 0.8, rise: 0, glow: 0, wind: 1, spacing: 3.5 },
+  damageHeavy: { radius: 1.0, growth: 2.6, life: 22, color: [0.055, 0.052, 0.05], opacity: 4, wobble: 15, rise: 0.8, glow: 0, wind: 1, spacing: 9 },
+  // wingtip vortex cores: thin, bright, a couple of seconds of twisting thread
+  vortex: { radius: 0.11, growth: 0.3, life: 2.6, color: [1, 1, 1], opacity: 1.0, wobble: 1.6, rise: 0, glow: 0, wind: 1, spacing: 3 },
+  // condensation rolling off the inner wing in a hard pull: wide, soft, gone in a moment
+  sheet: { radius: 0.3, growth: 3, life: 0.11, color: [1, 1, 1], opacity: 0.17, wobble: 0.5, rise: 0, glow: 0, wind: 1, spacing: 3 },
+  // dry-thrust exhaust: the faint smoky thread a turbojet leaves at military power
+  exhaust: { radius: 0.4, growth: 1.1, life: 3.2, color: [0.2, 0.19, 0.18], opacity: 0.32, wobble: 3, rise: 0.1, glow: 0, wind: 1, spacing: 5 },
   contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: 0, wind: 1, spacing: 18 },
 };
