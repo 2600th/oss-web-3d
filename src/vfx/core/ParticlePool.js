@@ -42,6 +42,9 @@ export class ParticlePool {
     this.dirty = new DirtyRanges(capacity, 4);
     this.types = [];
     this.spawned = 0;
+    // Latest death time of anything spawned (shared.time clock). Past it the
+    // pool is empty, so both the compute step and the draw are skipped.
+    this._liveUntil = -Infinity;
 
     const N = capacity;
     // CPU-written spawn records
@@ -90,7 +93,10 @@ export class ParticlePool {
     const i = this.ring.next();
     const o = i * 4;
     const A = this.aData, B = this.bData, C = this.cData, D = this.dData;
-    A[o] = x; A[o + 1] = y; A[o + 2] = z; A[o + 3] = this.shared.time - age0;
+    const birth = this.shared.time - age0;
+    const until = birth + Math.min(life, LIFE_SPAN - 0.1);
+    if (until > this._liveUntil) this._liveUntil = until;
+    A[o] = x; A[o + 1] = y; A[o + 2] = z; A[o + 3] = birth;
     B[o] = vx; B[o + 1] = vy; B[o + 2] = vz; B[o + 3] = type * LIFE_SPAN + Math.min(life, LIFE_SPAN - 0.1);
     C[o] = size0; C[o + 1] = size1; C[o + 2] = extra; C[o + 3] = type;
     D[o] = r; D[o + 1] = g; D[o + 2] = b; D[o + 3] = a;
@@ -123,7 +129,12 @@ export class ParticlePool {
         this._full = true;
       }
     }
-    renderer.compute(this.computeNode);
+    // Draw only slots that have ever held a particle (the ring fills from 0),
+    // and nothing at all once every particle is dead: idle pools cost nothing.
+    const live = this.shared.time <= this._liveUntil + 0.1;
+    this.mesh.count = Math.min(this.capacity, this.ring.total);
+    this.mesh.visible = live && this.mesh.count > 0;
+    if (live) renderer.compute(this.computeNode);
   }
 
   _buildCompute() {
