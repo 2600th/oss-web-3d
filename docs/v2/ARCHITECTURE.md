@@ -212,3 +212,19 @@ when unavoidable; say so in your report.
   also carries `base`. Input actions read if present: `camera`, `lookTarget`,
   `missileCam` (fallback keys C / V / B). URL flags: `?gputime`,
   `?reducedMotion`, `?nokillcam`, `?cinematic=<name>`, `?aa=traa|fxaa|smaa|none`.
+
+- **atmosphere + clouds (additive).** `game.env` keeps `sunDirection`, `sun`,
+  `ambient`, `cloudShadow`, `inCloud`, `setSun(elevationDeg, azimuthDeg)`,
+  `update(dt, camera, focus)`. New: `setPreset(name, overrides?)` with
+  `'default' | 'morning' | 'noon' | 'golden' | 'overcast' | 'storm'` (`env.preset`,
+  `env.presets`), `setCoverage(0..1)`, `applyCloudShadow(material)` (idempotent;
+  multiplies cloud shadow into `material.receivedShadowNode`; the atmosphere
+  system applies it to `game.terrain` materials, other owners call it for their
+  own lit materials), `sunVisibility` (0..1, sun reaching the camera through
+  cloud, async readback), `exposureScale` (preset hint), `sunIrradiance` /
+  `skyAmbient` (uniform nodes), `atmosphere`, `clouds` (null with `?noclouds`).
+  Scene stages: aerial perspective at order 20, clouds at order 30. The system
+  `game.systems.atmosphere` sets `post.options.exposure.baseEV/refLog` and
+  `post.uniforms.sunRefLum` (about 399 = sun irradiance 4.6 x disc gain 260 / 3)
+  for this sky. `sun.intensity` is now about 4.4 at late morning, 2.9 at golden
+  hour. URL flags: `?noclouds`, `?preset=<name>`.
