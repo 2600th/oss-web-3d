@@ -32,11 +32,13 @@ test('moon position matches Meeus example 47.a (1992-04-12 0h TD)', () => {
   near(m.distance, 368410, 2500, 'distance km');
 });
 
-// Reference values for 34.5 N 76.1 E on 1999-06-21 (NOAA solar calculator,
-// UTC+5:30): declination 23.44 deg, equation of time -1.7 min, solar noon
-// 12:27, sunrise 05:13, sunset 19:41, noon elevation 78.9 deg, sunrise
-// azimuth 60.5 deg, sunset azimuth 299.5 deg.
-test('sun over Kargil on 1999-06-21 matches the NOAA solar calculator', () => {
+// Reference values for 34.5 N 76.1 E on 1999-06-21, UTC+5:30, worked by hand
+// from the standard relations the NOAA solar calculator uses (declination
+// 23.44 deg at the solstice, equation of time -1.7 min, sunrise equation with
+// the centre of the disc at -0.833 deg): solar noon 12:27, sunrise 05:13,
+// sunset 19:41, noon elevation 78.9 deg, rise / set azimuth 60.5 / 299.5 deg.
+// (Not fetched from the NOAA site itself.)
+test('sun over Kargil on 1999-06-21: noon, sunrise, sunset, azimuths', () => {
   const ev = sunEvents(KARGIL, 34.5, 76.1, 5.5);
   near(ev.noon, 12 + 27.3 / 60, 1.5 / 60, 'solar noon');
   near(ev.sunrise, 5 + 13 / 60, 2.5 / 60, 'sunrise');

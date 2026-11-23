@@ -2,19 +2,21 @@
  * Exposure and grade hints per time of day. Pure data, no three import.
  *
  * The scene is linear HDR in one photometric scale: the sun is 4.6 at the top
- * of the atmosphere, the full moon is NIGHT.moonIrradiance (a compressed 1/10
- * of that; the real ratio is 1/400000) and the moonless floor is the airglow.
- * The compression is deliberate: self-luminous effects (afterburner, tracers,
- * explosions, fires) are authored once, in absolute units, for daylight. The
- * exposure gain between noon and night multiplies them on screen, so the gain
- * has to stay small enough that a reheat plume does not white out the frame
- * (about 2.3x under a full moon, 3.5x with no moon: "dramatic", not "blind").
+ * of the atmosphere, the full moon is NIGHT.moonIrradiance (1.2, a quarter of
+ * the sun; the real ratio is 1/400000) and the moonless floor is the airglow.
+ * The compression is deliberate. Self-luminous effects (afterburner, tracers,
+ * explosions, fires) are authored once, in absolute units, for daylight; the
+ * exposure gain between noon and night multiplies them on screen, so that
+ * gain has to stay small (measured: about 1.5x under a full moon, 2x with no
+ * moon) or a reheat plume whites out the frame. Night is made dark by the
+ * key below, not by starving the scene of light; fire still dominates because
+ * the ambient it competes with is 15-60x lower than by day.
  *
  * PostFX meters the frame and moves exposure `strength` (0.6) of the way
- * toward it; a moonlit valley meters about 3.4 stops under the daylight
+ * toward it. A moonlit valley meters about 4 stops under the daylight
  * reference, a moonless one about 5. The hint (a) lets auto-exposure travel
- * that far (maxEV) and (b) keys the result down (`ev`), so that night ends up
- * about 2.2 stops (moon) to 3.2 stops (no moon) darker on screen than day.
+ * that far (maxEV) and (b) keys the result down (`ev`), so night lands about
+ * 3 stops darker on screen than day.
  *
  * The time-of-day system applies the hint each frame:
  *   post.options.exposure.baseEV = (atmosphere calibration) + hint.ev
@@ -58,7 +60,7 @@ export function lookFor(sunElevation, moonlight = 0) {
   return {
     night: n,
     /** EV added to the calibrated base exposure. */
-    ev: evBias(sunElevation) - 0.25 * moonless,
+    ev: evBias(sunElevation) + 0.1 * moonless,
     /** Auto-exposure travel around the base, in EV. */
     minEV: -1.6,
     maxEV: lerp(2.2, 4.2, n),

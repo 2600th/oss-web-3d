@@ -187,6 +187,13 @@ export class TimeOfDay {
     if (preset && weather && preset.weather) this.env.setPreset('default', { ...preset.weather, sun: null });
     const wasManual = this.manual;
     this.manual = false;
+    // A running mission clock calls this every couple of seconds with the
+    // next few minutes: that is the clock ticking, not a cut.
+    if (!wasManual && !preset && !date && !this._transition && Math.abs(target - this.jd) * 1440 < 10) {
+      this.jd = target;
+      this._compute();
+      return this.state;
+    }
     if (transition > 0 && !wasManual) {
       // sweep at most 12 hours: jump whole days first, then run the clock
       let dh = ((target - this.jd) * 24) % 24;

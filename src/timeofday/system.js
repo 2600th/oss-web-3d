@@ -224,7 +224,15 @@ export function createSystem(game) {
         scan = 0;
         for (const u of game.systems.ai?.ground ?? []) {
           const e = u.entity;
-          if (e?.kind === 'truck' && e.alive && e.object3d && !lit.has(e.object3d)) attach(e.object3d, e, attachHeadlights);
+          // Gameplay gives night convoys small lamp meshes (a group named
+          // 'headlights'); the sprites sit on those lamps so the column still
+          // reads as points of light from kilometres away. Other trucks get
+          // sprites only when it is dark.
+          if (e?.kind !== 'truck' || !e.alive || !e.object3d || lit.has(e.object3d)) continue;
+          const lamps = e.object3d.getObjectByName('headlights');
+          const p = lamps?.children?.[0]?.position;
+          if (p) attach(e.object3d, e, attachHeadlights, { halfWidth: Math.abs(p.x), height: p.y, front: p.z - 0.3 });
+          else if (env.night > 0.3) attach(e.object3d, e, attachHeadlights);
         }
         for (const [obj, rec] of lit) {
           if (rec.entity && (rec.entity.alive === false || !obj.parent)) detach(obj);
