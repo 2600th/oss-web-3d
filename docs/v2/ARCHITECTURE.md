@@ -743,3 +743,36 @@ and `src/world/clouds/Clouds.js`. Evidence: `docs/v2/evidence/polish-shadows/`.
   `CLOUD_SHADOW_PATH` (8 km) of the sun ray, with a per-texel jitter.
   - At a low sun it no longer draws bands. This answers the time-of-day
     section's request about bands with the sun under about 2 degrees.
+
+### Texture polish: terrain, aircraft, cockpit, ground units (additive unless marked)
+
+Owner paths: the terrain texture layers and the albedo / normal / detail terms of
+`src/world/terrain/material.js` (tagged `[textures]`), `src/world/terrain/layers.js`,
+`src/assets/materials.js` (not the glass branch), `public/models/**`,
+`tools/terrain/fetch-textures.mjs` and `tools/blender/`. Evidence:
+`docs/v2/evidence/polish-textures/`.
+
+- **Terrain layers (changed).** The layer arrays now have 7 layers: `talus`
+  (Poly Haven `gray_rocks`) is appended as index 6, and the indices of the other
+  layers are unchanged. `scree` is now `rock_ground_02`. Code that sizes
+  anything from the layer count should read `LAYERS.length`, not assume 6.
+- **Terrain anisotropy (changed):** the medium tier is now 8 (it was 4), and
+  high and ultra are 16 (they were 8). The value is clamped to the device
+  maximum, and low stays at 2.
+- **`configureAssets({ ..., anisotropy })` (new option):** this is the device's
+  maximum texture anisotropy. `src/assets/system.js` passes
+  `renderer.getMaxAnisotropy()`. Model textures (base colour, normal, ORM,
+  emissive) are set to it at upgrade time, or to 4 on the low tier. GLTFLoader
+  leaves them at 1.
+- **`materials.js` exports (new):**
+  - `setTextureAnisotropy(n)`.
+  - `setGroundDetail({ albedo, layer, meanLum })`. This hands the terrain's
+    layer array to `upgradeGroundMaterials`, which adds a 0.45 m triplanar
+    grain to ground units. It is called once by `src/assets/system.js` after
+    the terrain is built. Without it, ground units render as before.
+- **Model textures (changed look, same API):**
+  - Aircraft and cockpit base colour gets an in-shader unsharp mask on medium
+    and above.
+  - The `/pitot/` mesh is dark metal instead of the exporter's magenta.
+  - The cockpit atlas in `mig21.glb` is 2048 px. Byte sizes are in
+    `catalog.js`.
