@@ -312,33 +312,56 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
       .mul(float(1).sub(water)).mul(float(1).sub(gravelW)).mul(float(1).sub(rockW)).mul(tI).toVar();
     If(shrubDensity.greaterThan(0.01), () => {
       const SH = 5.0;
-      const cell = floor(p.div(SH));
-      const h1 = fract(sin(dot(cell, vec2(127.1, 311.7))).mul(43758.5453));
-      const h2 = fract(sin(dot(cell, vec2(269.5, 183.3))).mul(43758.5453));
-      const h3 = fract(h1.mul(17.13).add(h2.mul(5.71)));
-      const centre = cell.add(vec2(h1, h2).mul(0.6).add(0.2)).mul(SH);
-      const rad = h3.mul(0.85).add(0.45); // 0.45 - 1.3 m
       const pix = max(length(dpx), length(dpy)).add(0.02); // metres per pixel
-      // Two overlapping lobes per clump and a ragged edge from the detail
-      // tile's slope channels, so no clump is a clean circle.
-      const rel = p.sub(centre);
-      const lobe = vec2(h3.sub(0.5), h1.sub(0.5)).mul(rad).mul(1.1);
       const nz = texture(tex.tile, p.div(3.1)).grad(dpx.div(3.1), dpy.div(3.1));
-      const rag = nz.r.add(nz.g).sub(1).mul(rad).mul(1.6);
-      const d = min(length(rel), length(rel.sub(lobe)).mul(1.25)).add(rag);
-      const present = step(fract(h1.mul(91.7).add(h3)), shrubDensity);
-      const soft = max(pix, rad.mul(0.18));
-      const disc = smoothstep(rad.add(soft), rad.sub(soft), d).mul(present);
+      const ragN = nz.r.add(nz.g).sub(1).mul(1.6);
+      // its shadow on the ground, thrown away from the sun (clumps ~0.6 m
+      // tall), at most a metre so it stays inside the cells looked at below
+      const toShadowRaw = uniforms.sunDir.xz.div(max(uniforms.sunDir.y, 0.25)).mul(0.6);
+      const toShadow = toShadowRaw.div(max(length(toShadowRaw), 1));
+      // [textures] The 2x2 cells nearest the pixel, not just its own: a clump
+      // (or its shadow) reaching over the cell edge was cut off square, which
+      // a low sun made obvious. Features stay within ~3.7 m of their centre.
+      const base = floor(p.div(SH).sub(0.5));
+      const disc = float(0).toVar();
+      const shadow = float(0).toVar();
+      const rel = vec2(0).toVar();
+      const rad = float(1).toVar();
+      const d = float(9).toVar();
+      const hue2 = float(0).toVar();
+      for (const [ox, oy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        const cell = base.add(vec2(ox, oy));
+        const h1 = fract(sin(dot(cell, vec2(127.1, 311.7))).mul(43758.5453));
+        const h2 = fract(sin(dot(cell, vec2(269.5, 183.3))).mul(43758.5453));
+        const h3 = fract(h1.mul(17.13).add(h2.mul(5.71)));
+        const centre = cell.add(vec2(h1, h2).mul(0.5).add(0.25)).mul(SH);
+        const r = h3.mul(0.75).add(0.45); // 0.45 - 1.2 m
+        // Two overlapping lobes per clump and a ragged edge from the detail
+        // tile's slope channels, so no clump is a clean circle.
+        const q = p.sub(centre);
+        const lobe = vec2(h3.sub(0.5), h1.sub(0.5)).mul(r).mul(1.1);
+        const rag = ragN.mul(r);
+        const dk = min(length(q), length(q.sub(lobe)).mul(1.25)).add(rag);
+        const present = step(fract(h1.mul(91.7).add(h3)), shrubDensity);
+        const soft = max(pix, r.mul(0.18));
+        const ck = smoothstep(r.add(soft), r.sub(soft), dk).mul(present);
+        const sk = smoothstep(r.add(soft), r.sub(soft).mul(0.8), length(q.add(toShadow)).add(rag)).mul(present);
+        shadow.assign(max(shadow, sk));
+        If(ck.greaterThan(disc), () => {
+          disc.assign(ck);
+          rel.assign(q);
+          rad.assign(r);
+          d.assign(dk);
+          hue2.assign(h2);
+        });
+      }
       const far = smoothstep(0.35, 0.9, pix.div(rad));
-      // its shadow on the ground, thrown away from the sun (clumps ~0.6 m tall)
-      const toShadow = uniforms.sunDir.xz.div(max(uniforms.sunDir.y, 0.25)).mul(0.6);
-      const ds = length(rel.add(toShadow)).add(rag);
-      const shadow = smoothstep(rad.add(soft), rad.sub(soft).mul(0.8), ds).mul(present).mul(float(1).sub(disc)).mul(float(1).sub(far));
+      shadow.mulAssign(float(1).sub(disc).mul(float(1).sub(far)));
       albedo.mulAssign(float(1).sub(shadow.mul(0.45)));
       const cover = mix(disc, shrubDensity.mul(0.06), far).toVar();
       // leafy clumps: dark gaps between the lit tufts
       const tuft = nz.a; // the height low byte: fine, noisy
-      const shade = mix(float(0.7), float(1.3), h2).mul(mix(float(0.55), float(1.15), tuft.mul(0.5).add(smoothstep(0, rad, d).mul(0.5))));
+      const shade = mix(float(0.7), float(1.3), hue2).mul(mix(float(0.55), float(1.15), tuft.mul(0.5).add(smoothstep(0, rad, d).mul(0.5))));
       albedo.assign(mix(albedo, PAL.shrub.mul(shade), cover));
       rough.assign(mix(rough, float(0.85), cover));
       lao.assign(mix(lao, float(0.8), cover));
