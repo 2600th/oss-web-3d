@@ -1,11 +1,9 @@
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { loadModel } from '../assets/loadModel.js';
 import { ScreenState } from '../fx/ScreenState.js';
 import { explosionTrauma, flightRumble, inDanger, clamp } from './cameraMath.js';
 
 export const order = 85;
 
-const COCKPIT_URL = './models/mig21_cockpit.glb';
 const LOOK_RANGE_YAW = 2.4; // rad, free-look limit (over the shoulder)
 const LOOK_RANGE_PITCH = 1.1;
 
@@ -21,7 +19,7 @@ const LOOK_RANGE_PITCH = 1.1;
  *    missile cam (missile:launch).
  *  - screen state (G-LOC greyout, redout, damage, wet lens, flash) -> PostFX.
  *  - feeds PostFX the sun, airspeed and camera cuts every frame.
- *  - loads the optional dedicated cockpit model (public/models/mig21_cockpit.glb).
+ *  - loads the cockpit overlay (assets id `mig21_cockpit`) for the cockpit view.
  *
  * game.systems.camera exposes { rig, screen, options }.
  */
@@ -147,34 +145,25 @@ export function createSystem(game) {
   };
 
   async function loadCockpit() {
-    // Probe first: the dev server answers unknown paths with index.html.
+    // First-person overlay from the assets area (emissive displays, periscope,
+    // `eye` / `hud` sockets). It parents to the airframe model with an identity
+    // transform; the interior itself is part of mig21.glb.
     try {
-      const res = await fetch(COCKPIT_URL, { method: 'HEAD' });
-      const type = res.headers.get('content-type') ?? '';
-      if (!res.ok || type.includes('text/html')) return;
-    } catch { return; }
-    try {
-      const loader = new GLTFLoader();
-      loader.setMeshoptDecoder(MeshoptDecoder);
-      const gltf = await loader.loadAsync(COCKPIT_URL);
-      const model = gltf.scene;
-      // Convention: model space = airframe space (nose -Z, metres) with its
-      // origin at the cockpit socket; an optional node named "eye" marks the
-      // pilot's eye, which the rig then uses.
-      const socket = game.player.sockets.cockpit;
-      const eyeNode = model.getObjectByName('eye') ?? model.getObjectByName('Eye') ?? model.getObjectByName('pilot_eye');
-      model.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; o.frustumCulled = false; } });
-      socket.add(model);
-      model.updateMatrixWorld(true);
-      game.player.group.updateMatrixWorld(true);
-      if (eyeNode) rig.eye.copy(game.player.group.worldToLocal(eyeNode.getWorldPosition(rig.eye)));
-      else rig.eye.copy(socket.position);
-      rig.useCockpitEye = true;
+      const model = await loadModel('mig21_cockpit', { castShadow: false });
+      const player = game.player;
+      if (!player?.model) return;
+      model.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
       model.visible = false;
+      player.model.add(model);
+      player.group.updateMatrixWorld(true);
+      const eye = model.userData?.sockets?.eye ?? model.getObjectByName('eye');
+      if (eye) {
+        rig.eye.copy(player.group.worldToLocal(eye.getWorldPosition(rig.eye)));
+        rig.useCockpitEye = true;
+      }
       rig.cockpitModel = model;
-      console.info('[camera] dedicated cockpit model loaded');
     } catch (e) {
-      console.warn('[camera] cockpit model failed to load', e);
+      console.warn('[camera] cockpit overlay unavailable', e);
     }
   }
 

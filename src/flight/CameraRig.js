@@ -18,13 +18,12 @@ const _e = new THREE.Euler();
 const _m = new THREE.Matrix4();
 
 /**
- * Pilot's eye in mig21.glb model space (nose -Z, metres), measured from the
- * mesh: canopy glass top ~0.43 m at z -2.8, seat headrest face ~z -2.45,
- * instrument panel ~z -3.5. The model has a full cockpit interior, so the
- * first-person view uses the exterior model itself. (Aircraft.sockets.cockpit
- * is (0, 0.95, -3.1): ~0.6 m above the canopy, outside the jet.)
+ * Fallback pilot eye in mig21.glb model space (nose -Z, metres) if an
+ * airframe has no cockpit socket. The stock model has a full cockpit interior
+ * (canopy glass top ~0.43 m at z -2.8, panel ~z -3.5), so first person uses the
+ * exterior model itself; Aircraft.sockets.cockpit sits at the measured eye.
  */
-export const MIG21_EYE = new THREE.Vector3(0, 0.30, -2.72);
+export const MIG21_EYE = new THREE.Vector3(0, 0.22, -2.95);
 
 /** Base views, cycled by the player. */
 export const VIEWS = ['chase', 'cockpit', 'hud'];
@@ -279,7 +278,7 @@ export class CameraRig {
     // -- airframe visibility ---------------------------------------------
     if (aircraft?.model) {
       const firstPerson = view === 'cockpit' || view === 'hud';
-      aircraft.model.visible = view !== 'hud' && !(firstPerson && this.cockpitModel);
+      aircraft.model.visible = view !== 'hud';
       if (this.cockpitModel) this.cockpitModel.visible = view === 'cockpit';
     }
 
@@ -414,10 +413,9 @@ export class CameraRig {
     const cam = this.camera;
     this._chaseState(dt, flight);
     // Eye: measured pilot eye (or the cockpit socket for other airframes).
-    // A dedicated cockpit model sets `eye` (and useCockpitEye); other airframes
-    // fall back to their cockpit socket.
-    const stock = !aircraft?.url || /mig21(-low)?\.glb$/.test(aircraft.url);
-    const eye = this.useCockpitEye || stock ? this.eye : aircraft.sockets.cockpit.position;
+    // The cockpit overlay's `eye` socket wins (useCockpitEye), then the
+    // airframe's cockpit socket (the measured pilot eye), then the fallback.
+    const eye = this.useCockpitEye ? this.eye : (aircraft?.sockets?.cockpit?.position ?? this.eye);
     _v.copy(eye);
     // head drops under +G, rises under -G; small fore-aft surge with thrust
     _v.y -= clamp(this._gSpring.x * 0.03, -0.03, 0.06);
