@@ -104,6 +104,24 @@ holder = bpy.data.objects.new('mig21_hostile_lod1', None)
 bpy.context.scene.collection.objects.link(holder)
 for o in meshes:
     o.parent = holder
+# Keep the control-surface pivots (tools/blender/build_mig_surfaces.py): the
+# surface meshes are named `<pivot>_<part>`; hang them back under their pivot.
+PIVOTS = ('stab_L', 'stab_R', 'aileron_L', 'aileron_R', 'flap_L', 'flap_R')
+bpy.context.view_layer.update()
+for name in PIVOTS:
+    pv = bpy.data.objects.get(name)
+    if pv is None or pv.type != 'EMPTY':
+        continue
+    mw = pv.matrix_world.copy()
+    pv.parent = holder
+    pv.matrix_world = mw
+    bpy.context.view_layer.update()
+    for o in meshes:
+        if o.name.startswith(name + '_'):
+            w = o.matrix_world.copy()
+            o.parent = pv
+            o.matrix_world = w
+    print('LOD1 pivot', name, [o.name for o in pv.children])
 holder['lod'] = 1
 C.export_glb(OUT, [holder])
 print('LOD1 tris', C.tri_count(meshes))

@@ -464,3 +464,63 @@ when unavoidable; say so in your report.
 - **Dev.** `game.dev.run(id, {special, bot, difficulty})`, `dev.batch(id, n, opts)`,
   `dev.table()`, `dev.runs`: the flying bot (`src/game/dev/Bot.js`), real intents,
   damage on, about 20x real time. Evidence in `docs/v2/evidence/polish-gameplay/`.
+
+- **assets polish: aircraft, ground units, HUD (additive).**
+  - `public/models/mig21.glb` is now *baked* (root `mig21`, `extras.baked = 1`: nose -Z,
+    unit scale) and carries named, pivoted control surfaces `stab_L/R`, `aileron_L/R`,
+    `flap_L/R` (+`rotation.x` = trailing edge down). `Aircraft.js` skips its own
+    normalisation for baked roots; `aircraft.surfaces` (`SurfaceRig`,
+    `src/assets/controlSurfaces.js`) animates them from `flight.rates` /
+    `pitchAuthority` / `rollAuthority` / airspeed. `mig21_hostile` (LOD0 and LOD1) has the
+    same pivots; catalog entries list them under `pivots`.
+  - New system `game.systems.assets` (`src/assets/system.js`, order 15): drives hostile
+    fighter surfaces from their quaternion delta (within 3 km), seats ground units on
+    the terrain (slope-aligned vehicles, near-level emplacements, an earth/gravel berm
+    child named `foundation` under hanging edges), lays AAA/flak/SAM turrets and
+    barrels on their target and sets `unit.aimRig = true` (then `src/ai/ground.js`
+    stops turning the whole unit). Base kits (`kind === 'base'`) are left alone.
+  - `configureAssets({tier, env})` (`src/assets/loadModel.js`): models loaded after it
+    get node materials (aircraft paint/clearcoat/canopy, ground bump + breakup) and cloud
+    shadows; on `?quality=low` the canopy stays standard and the paint-roughness,
+    clearcoat and ground bump/breakup nodes are skipped.
+  - `src/ai/sites.js` `scatterSites` rejects sites steeper than about 20° (relaxing as
+    tries run out).
+  - HUD: target markers and labels are placed around a keep-out list
+    (`src/ui/declutter.js`: tapes, heading, corner panels, banner, radio plate); a marker
+    on a tape shrinks to a pip. On a portrait phone the radio plate moves up over the
+    objective line while it would cover a marker; on a landscape phone the orders
+    banner sits under the tapes (`layout.bannerY`) and the ladder is cut around it.
+
+- **engine perf + robustness (additive).** Details and numbers:
+  `docs/v2/evidence/polish-perf/README.md`, tooling: `tools/perf/README.md`.
+  - Boot: `src/core/BootLifecycle.js` `createRenderer(canvas, params)` picks
+    WebGPU when an adapter and device are actually returned (the probed device is
+    passed to `WebGPURenderer({ device })`), else WebGL2 with one `console.info`;
+    the `#boot-status` overlay is shown only when neither backend works.
+    `window.__boot` holds stage marks (ms since navigation start).
+  - Renderer: `r.renderScale` / `r.setRenderScale(s)` (adaptive resolution
+    multiplies the tier pixel ratio), `r.poll()` once per frame (DPR and size
+    changes; resizes coalesced to one per frame), `r.onLost(info)` and `r.lost`,
+    exported `POWER_PREFERENCE` (undefined on Windows). Timestamp queries are on
+    by default on WebGPU.
+  - Device / context loss: the loop stops and an overlay offers Reload; a second
+    loss in the same tab on WebGPU offers "Restart in compatibility mode"
+    (`?webgl`). Systems do not need to handle it.
+  - Perf: `src/engine/Perf.js` (`installPerf`), `GpuProfiler.js` (three
+    `InspectorBase`; per-pass GPU ms by render target / quad material name, so
+    **name your RTT/quad materials** if you want them labelled), `AdaptiveResolution.js`,
+    `PerfHud.js` (lazy chunk). Flags: `?perfhud`, `?gputime`, `?noadaptive`,
+    `?adaptive`, `?gpubudget=ms`, `?scale=`, `?notimestamps`. `window.__perf`
+    exists in dev or with `?perfhud`/`?gputime`.
+  - PostFX: the auto-exposure / sun-visibility meters render and read back every
+    4th frame (`METER_EVERY`), not every frame.
+  - Terrain: `VIEW_LAYER = 1`, `SHADOW_LAYER = 2` (exported from Terrain.js).
+    Blocks are culled per frame against both the view and the sun shadow frustum
+    and carry only the layer they are needed on; the main camera enables layer 1
+    and the sun shadow camera layers 0 and 2. Other objects stay on layer 0 and
+    are unaffected. CPU copies of terrain textures are released after upload
+    (`tex.onUpdate`): do not read `tex.image.data` of terrain textures at runtime
+    (use `terrainHeight` etc.).
+  - AI: the hostile fighter GLB is preloaded 4 s after the first `flow:state`,
+    not during boot.
+  - Analytics are not injected on localhost / 127.0.0.1.

@@ -4,6 +4,7 @@ import { projectPoint, boxClamp, gunLead } from './projection.js';
 import { worldToRadar, autoRange } from './radar.js';
 import { RadioQueue, Callouts } from './radio.js';
 import { resolveTheme, targetColor, isGround } from './theme.js';
+import { rect, inside, instrumentKeepOut, panelKeepOut, chooseSlot, pickPlateSlot } from './declutter.js';
 import {
   formatHeading, headingTickLabel, formatSpeed, formatAltitude, toKnots, toFeet,
   formatRange, formatScore, formatClock, formatG, formatAmmo, formatPercent, groupThousands,
@@ -65,6 +66,15 @@ export class Hud {
     this.occluders = []; // touch button rects, CSS px (UI refreshes them)
     this.safe ={ top: 0, right: 0, bottom: 0, left: 0 };
     this.keyHint = { flares: 'G' };
+    // declutter state (see declutter.js)
+    this._dt = 0;
+    this._instr = [];
+    this._keep = [];
+    this._bannerRect = null;
+    this._radioGeo = null;
+    this._radioRect = null;
+    this._radioLift = 0; // 0 = usual slot, 1 = portrait top slot (over the objective line)
+    this._radioHold = 0;
   }
 
   applySettings(settings) {
@@ -149,6 +159,7 @@ export class Hud {
 
   update(dt, game) {
     this.time += dt;
+    this._dt = dt;
     this.radio.update(dt);
     this.callouts.update(dt);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 1.6);
@@ -211,6 +222,13 @@ export class Hud {
     this._proj = cam.projectionMatrix.elements;
     this._camPos = cam.position;
     this._fov = cam.fov;
+
+    // What target markers and labels must keep off this frame.
+    this._radioGeo = this._measureRadio(L, s);
+    this._bannerRect = this._bannerBox(L, s);
+    this._instr = instrumentKeepOut(L, s);
+    this._keep = [...this._instr, ...panelKeepOut(L, s)];
+    if (this._bannerRect) this._keep.push(this._bannerRect);
 
     this._drawVignette(d, L);
     if (d.crashed) {
@@ -315,13 +333,21 @@ export class Hud {
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(L.cx, L.cy, L.ladderR * 1.12, L.ladderR, 0, 0, Math.PI * 2);
+    // Cut windows for the kill callout and the orders banner so a rung never
+    // strikes through their text (on a landscape phone the banner sits over
+    // the bottom of the ladder).
+    let wins = 0;
     if (this.callouts.items.length) {
-      // Cut a window for the kill callout so a rung never strikes through it.
       ctx.rect(L.callout.x - 112 * s, L.callout.y - 24 * s, 224 * s, 66 * s);
-      ctx.clip('evenodd');
-    } else {
-      ctx.clip();
+      wins++;
     }
+    const br = this._bannerRect;
+    if (br && !(wins && br.y0 < L.callout.y + 42 * s && br.y1 > L.callout.y - 24 * s)) {
+      ctx.rect(br.x0, br.y0, br.x1 - br.x0, br.y1 - br.y0);
+      wins++;
+    }
+    if (wins) ctx.clip('evenodd');
+    else ctx.clip();
 
     const lo = Math.max(-85, Math.floor((centrePitch - 35) / 5) * 5);
     const hi = Math.min(85, Math.ceil((centrePitch + 35) / 5) * 5);
@@ -485,22 +511,60 @@ export class Hud {
     // `merge` px fold into the most important one, which carries a "+n".
     // Order: lock, selected, lead, priority, then nearest.
     on.sort((a, b) => rankOn(b) - rankOn(a) || a.dist - b.dist);
+    // A marker whose centre lands on a flight instrument (a ridge on the
+    // horizon right under the altitude box) shrinks to a pip and writes no
+    // text; pips fold into one another more eagerly.
+    const keep = this._keep;
+    const instr = this._instr;
     const merge = 30 * s;
     const shown = [];
     for (const o of on) {
-      const host = o.isLock ? null : shown.find((h) => Math.abs(h.x - o.x) < merge && Math.abs(h.y - o.y) < merge);
+      o.pip = !o.isLock && !o.t.selected && instr.some((r) => inside(o.x, o.y, r));
+      const mg = o.pip ? merge * 1.6 : merge;
+      const host = o.isLock ? null : shown.find((h) => Math.abs(h.x - o.x) < mg && Math.abs(h.y - o.y) < mg);
       if (host) host.extra++;
-      else shown.push(Object.assign(o, { extra: 0 }));
+      else shown.push(Object.assign(o, { extra: 0, m: markerSize(o.dist, s) }));
     }
+    this._placeRadio(L, s, shown);
     // Labels only where they help: lock, selected, lead and priority targets,
-    // and the two nearest others. Everything else is a bare shape.
+    // and the two nearest others. Everything else is a bare shape. Each label
+    // takes the first slot clear of the instruments, the other markers and
+    // the labels already placed (rank order, so the lock gets first pick).
+    const obstacles = keep.slice();
+    if (this.radio.current && this.radio.alpha > 0.05 && this._radioRect) obstacles.push(this._radioRect);
+    if (this.touch) for (const r of this.occluders ?? []) obstacles.push(rect(r.x, r.y, r.x + r.w, r.y + r.h));
+    const nKeep = obstacles.length;
+    for (const o of shown) {
+      const k = o.pip ? 4 * s : o.m;
+      const crest = !o.pip && (o.t.isAce || o.t.isTarget) ? 13 * s : 0; // chevron above the shape
+      o.box = rect(o.x - k, o.y - k - crest, o.x + k, o.y + k);
+      obstacles.push(o.box);
+    }
+    const bounds = rect(L.bounds.L - 8, L.bounds.T - 8, L.bounds.R + 8, L.bounds.B + 8);
     let free = 2;
     for (const o of shown) {
+      if (o.pip) {
+        this._drawPip(o, s);
+        continue;
+      }
       const keyed = o.isLock || o.t.selected || o.t.isAce || o.t.isTarget;
-      const labelled = keyed || free-- > 0;
       // the selected (next-to-lock) target draws heavy, like the lock
-      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock || !!o.t.selected, o.isLock ? lockState : 'none', labelled);
-      if (o.extra) this._text(`+${o.extra}`, o.x - 15 * s, o.y + 15 * s, o.color, 10 * s, { align: 'right', weight: 700 });
+      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock || !!o.t.selected, o.isLock ? lockState : 'none', null, o.m);
+      if (!(keyed || free-- > 0)) {
+        if (o.extra) this._drawExtra(o, s, null);
+        continue;
+      }
+      const cands = this._labelSlots(o, L, s);
+      const own = o.box;
+      const obs = obstacles.filter((r, i) => i < nKeep || r !== own);
+      const pick = chooseSlot(cands.map((c) => c.boxes), obs, bounds);
+      if (pick.cost > 0 && !keyed) {
+        if (o.extra) this._drawExtra(o, s, null);
+        continue;
+      }
+      const slot = cands[pick.i];
+      for (const b of slot.boxes) obstacles.push(b);
+      this._drawMarkerLabels(o, s, slot, o.isLock ? lockState : 'none');
     }
     // Off-screen arrows: priority first, then nearest; capped.
     off.sort((a, b) => rankOff(b.t) - rankOff(a.t) || a.dist - b.dist);
@@ -528,11 +592,9 @@ export class Hud {
     return false;
   }
 
-  _drawMarker(t, x, y, dist, color, s, isLock, lockState, labelled = true) {
+  _drawMarker(t, x, y, dist, color, s, isLock, lockState, slot = 'stack', size = 0) {
     const ctx = this.ctx;
-    const th = this.theme;
-    const near = Math.max(0, 1 - dist / 6000);
-    const m = (11 + near * 5) * s;
+    const m = size || markerSize(dist, s);
     const ground = isGround(t);
     ctx.beginPath();
     if (t.team === 'friendly' || t.team === 'blue') {
@@ -555,7 +617,6 @@ export class Hud {
     }
     this._stroke(color, isLock ? 2.2 : 1.7);
 
-    let labelY = y + m + 11 * s;
     if (t.isAce) {
       // ace: a second, notched frame + chevron crest
       const m2 = m + 5 * s;
@@ -579,24 +640,110 @@ export class Hud {
       ctx.lineTo(x + 6 * s, yy - 6 * s);
       this._stroke(color, 2);
     }
-    if (!labelled) return;
-    // labels
-    if (t.name) {
-      const tag = t.isAce ? t.name.toUpperCase() : t.name;
-      this._text(tag, x, y - m - (t.isAce ? 22 : t.isTarget ? 20 : 9) * s, color, (t.isAce ? 12 : 11) * s, {
-        font: FONT_SANS,
-        weight: t.isAce ? 700 : 400,
-        baseline: 'bottom',
-      });
+    if (slot === 'stack') {
+      const o = { t, x, y, dist, color, m, isLock, extra: 0 };
+      this._drawMarkerLabels(o, s, this._labelSlots(o, this.layout, s)[0], lockState);
     }
-    this._text(formatRange(dist), x, labelY, color, 11 * s, { baseline: 'top' });
-    if (t.isTarget) this._text('TGT', x + m + 4 * s, y, color, 10 * s, { align: 'left', weight: 700 });
-    if (t.lockable && !isLock && lockState === 'none' && dist < 4000 && !ground) {
-      // small "in envelope" dot under the range
-      ctx.beginPath();
-      ctx.arc(x, labelY + 16 * s, 1.8 * s, 0, Math.PI * 2);
-      this._fillHalo(color);
+  }
+
+  /**
+   * Candidate label layouts for a marker, best first: name above / range
+   * below (the default), then name + range stacked beside the marker on the
+   * side away from the screen centre, then the other side. Each carries the
+   * boxes it would cover so the placer can test it.
+   */
+  _labelSlots(o, L, s) {
+    const ctx = this.ctx;
+    const { t, x, y, m } = o;
+    const nameSize = (t.isAce ? 12 : 11) * s;
+    const name = t.name ? (t.isAce ? t.name.toUpperCase() : t.name) : '';
+    ctx.font = `${t.isAce ? 700 : 400} ${nameSize}px ${FONT_SANS}`;
+    const nw = name ? ctx.measureText(name).width : 0;
+    const range = formatRange(o.dist);
+    ctx.font = `400 ${11 * s}px ${FONT_SANS}`;
+    const rw = ctx.measureText(range).width;
+    ctx.font = `700 ${10 * s}px ${FONT_SANS}`;
+    const xw = o.extra ? ctx.measureText(`+${o.extra}`).width : 0;
+    const tw = t.isTarget ? ctx.measureText('TGT').width : 0;
+    const pad = 2 * s;
+    // stack (name above the crest, range under the shape)
+    const nameY = y - m - (t.isAce ? 22 : t.isTarget ? 20 : 9) * s;
+    const rangeY = y + m + 11 * s;
+    const stack = { mode: 'stack', name, range, nameY, rangeY, boxes: [] };
+    if (name) stack.boxes.push(rect(x - nw / 2 - pad, nameY - nameSize * 1.1, x + nw / 2 + pad, nameY + pad));
+    stack.boxes.push(rect(x - rw / 2 - pad, rangeY - pad, x + rw / 2 + pad, rangeY + 12 * s));
+    if (tw) stack.boxes.push(rect(x + m + 3 * s, y - 6 * s, x + m + 5 * s + tw, y + 6 * s));
+    if (xw) stack.boxes.push(rect(x - 16 * s - xw, y + 9 * s, x - 14 * s, y + 21 * s));
+    // beside: name over range, TGT dropped (the crest chevron still says it),
+    // the "+n" count trailing the range on the same side
+    const side = (dir) => {
+      const x0 = x + dir * (m + 6 * s);
+      const w = Math.max(nw, rw + (xw ? xw + 6 * s : 0));
+      const c = { mode: dir > 0 ? 'right' : 'left', dir, x0, name, range, rw, boxes: [] };
+      const ny = name ? y - 7 * s : y;
+      c.nameY = ny;
+      c.rangeY = name ? y + 7 * s : y;
+      c.boxes.push(rect(x0 - dir * pad, (name ? ny : y) - 7 * s, x0 + dir * (w + pad), c.rangeY + 7 * s));
+      return c;
+    };
+    const out = side(x >= (L?.cx ?? x) ? 1 : -1);
+    const cands = [stack];
+    // the same without the TGT tag, before moving the text off-axis
+    if (tw) cands.push({ ...stack, noTag: true, boxes: stack.boxes.filter((_, i) => i !== stack.boxes.length - (xw ? 2 : 1)) });
+    cands.push(out, side(-out.dir));
+    return cands;
+  }
+
+  _drawMarkerLabels(o, s, slot, lockState) {
+    const ctx = this.ctx;
+    const { t, x, y, m, color } = o;
+    const nameSize = (t.isAce ? 12 : 11) * s;
+    const nameOpts = { font: FONT_SANS, weight: t.isAce ? 700 : 400 };
+    if (slot.mode === 'stack') {
+      if (slot.name) this._text(slot.name, x, slot.nameY, color, nameSize, { ...nameOpts, baseline: 'bottom' });
+      this._text(slot.range, x, slot.rangeY, color, 11 * s, { baseline: 'top' });
+      if (t.isTarget && !slot.noTag) this._text('TGT', x + m + 4 * s, y, color, 10 * s, { align: 'left', weight: 700 });
+      if (o.extra) this._drawExtra(o, s, null);
+      if (t.lockable && !o.isLock && lockState === 'none' && o.dist < 4000 && !isGround(t)) {
+        // small "in envelope" dot under the range
+        ctx.beginPath();
+        ctx.arc(x, slot.rangeY + 16 * s, 1.8 * s, 0, Math.PI * 2);
+        this._fillHalo(color);
+      }
+      return;
     }
+    const align = slot.dir > 0 ? 'left' : 'right';
+    if (slot.name) this._text(slot.name, slot.x0, slot.nameY, color, nameSize, { ...nameOpts, align });
+    this._text(slot.range, slot.x0, slot.rangeY, color, 11 * s, { align });
+    if (o.extra) this._drawExtra(o, s, slot);
+  }
+
+  /** "+n" count for markers folded into this one. */
+  _drawExtra(o, s, slot) {
+    if (!o.extra) return;
+    if (slot && slot.mode !== 'stack') {
+      const dir = slot.dir;
+      this._text(`+${o.extra}`, slot.x0 + dir * (slot.rw + 6 * s), slot.rangeY, o.color, 10 * s, { align: dir > 0 ? 'left' : 'right', weight: 700 });
+    } else {
+      this._text(`+${o.extra}`, o.x - 15 * s, o.y + 15 * s, o.color, 10 * s, { align: 'right', weight: 700 });
+    }
+  }
+
+  /** A marker sitting on an instrument: a small filled pip, no text. */
+  _drawPip(o, s) {
+    const ctx = this.ctx;
+    const r = 3.6 * s;
+    ctx.beginPath();
+    if (isGround(o.t)) {
+      ctx.moveTo(o.x, o.y - r);
+      ctx.lineTo(o.x + r, o.y);
+      ctx.lineTo(o.x, o.y + r);
+      ctx.lineTo(o.x - r, o.y);
+      ctx.closePath();
+    } else {
+      ctx.rect(o.x - r * 0.8, o.y - r * 0.8, r * 1.6, r * 1.6);
+    }
+    this._fillHalo(o.color);
   }
 
   _drawEdgeArrow(o, L, s, drawn = null) {
@@ -1138,8 +1285,9 @@ export class Hud {
   _drawObjective(d, L, s) {
     const o = d.objective;
     if (!o?.text) return;
-    // In portrait the new-orders banner takes this line's place outright.
-    if (L.portrait && this.banner) return;
+    // In portrait the new-orders banner takes this line's place outright, and
+    // so does a radio line that has moved up off the targets (_placeRadio).
+    if (L.portrait && (this.banner || this._radioLift > 0.5)) return;
     const th = this.theme;
     const ctx = this.ctx;
     let { x, y } = L.objective;
@@ -1409,13 +1557,14 @@ export class Hud {
     const inA = this.reducedMotion ? 1 : Math.min(1, t / 0.25);
     const outA = Math.min(1, (b.life - t) / 0.4);
     const a = Math.max(0, Math.min(inA, outA));
-    const y = L.bannerY;
     const wipe = this.reducedMotion ? 1 : easeOut(Math.min(1, t / 0.35));
-    // full width in portrait, where it stands in for the objective line
-    const full = L.portrait ? L.bounds.R - L.bounds.L : Math.min(L.w - 40, 460 * s);
-    const w = full * wipe;
+    const box = this._bannerRect ?? this._bannerBox(L, s);
+    const y = box.y0;
+    const w = (box.x1 - box.x0) * wipe;
     ctx.globalAlpha = a * (this.settings.hudOpacity ?? 1);
-    ctx.fillStyle = L.portrait ? 'rgba(4,10,14,0.97)' : 'rgba(4,10,14,0.66)';
+    // near-opaque where it sits over the flight field (portrait: objective
+    // line; landscape phone: low between the tapes, over ground markers)
+    ctx.fillStyle = L.portrait ? 'rgba(4,10,14,0.97)' : L.touch ? 'rgba(4,10,14,0.86)' : 'rgba(4,10,14,0.66)';
     ctx.fillRect(L.cx - w / 2, y, w, 52 * s);
     ctx.fillStyle = th.priority;
     ctx.fillRect(L.cx - w / 2, y, w, 2 * s);
@@ -1454,28 +1603,86 @@ export class Hud {
     ctx.globalAlpha = this.settings.hudOpacity ?? 1;
   }
 
-  _drawRadio(L, s) {
+  /** Banner plate rect, or null. */
+  _bannerBox(L, s) {
+    if (!this.banner) return null;
+    // full width in portrait, where it stands in for the objective line
+    const full = L.portrait ? L.bounds.R - L.bounds.L : Math.min(L.w - 40, 460 * s);
+    let y = L.bannerY;
+    // landscape phone: the banner sits low between the tapes; a long radio
+    // line under it pushes it up rather than the two plates stacking
+    const g = this._radioGeo;
+    if (L.touch && !L.portrait && g) y = Math.min(y, L.radio.y - g.H - 56 * s);
+    return rect(L.cx - full / 2, y, L.cx + full / 2, y + 52 * s);
+  }
+
+  /** Wrap and measure the current radio line once per message. */
+  _measureRadio(L, s) {
     const c = this.radio.current;
-    if (!c || this.settings.subtitles === false) return;
-    const a = this.radio.alpha;
-    if (a <= 0) return;
-    const ctx = this.ctx;
-    const th = this.theme;
+    if (!c || this.settings.subtitles === false) return null;
     const scale = { small: 0.88, medium: 1, large: 1.25 }[this.settings.subtitleSize] ?? 1;
     const fs = Math.max(13, 15 * s * scale);
-    const font = `400 ${fs}px ${FONT_SANS}`;
     const call = c.callsign ? c.callsign.toUpperCase() : '';
+    const key = `${c.text}|${call}|${L.radio.maxW}|${fs}`;
+    if (this._radioCache?.key === key) return this._radioCache;
+    const ctx = this.ctx;
+    const font = `400 ${fs}px ${FONT_SANS}`;
     ctx.font = `700 ${fs}px ${FONT_SANS}`;
     const cw = call ? ctx.measureText(call).width + 12 * s : 0;
     const lines = wrapText(ctx, c.text, L.radio.maxW - cw - 24 * s, font);
     ctx.font = font;
     let tw = 0;
     for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
-    const W = cw + tw + 24 * s;
     const lh = fs * 1.35;
-    const H = lines.length * lh + 14 * s;
-    const x0 = L.radio.x - W / 2;
-    const y0 = L.radio.y - H;
+    this._radioCache = { key, call, cw, lines, fs, lh, W: cw + tw + 24 * s, H: lines.length * lh + 14 * s };
+    return this._radioCache;
+  }
+
+  /** Radio plate rect at `lift` (0 = layout slot, 1 = portrait top slot). */
+  _radioRectAt(L, g, lift) {
+    let y = L.radio.y;
+    if (lift > 0 && L.touch && L.portrait) {
+      const hi = L.objective.y - 6 * L.s + g.H;
+      const k = lift * lift * (3 - 2 * lift);
+      y += (hi - y) * k;
+    }
+    return rect(L.radio.x - g.W / 2, y - g.H, L.radio.x + g.W / 2, y);
+  }
+
+  /**
+   * Phone portrait: the subtitle plate sits over the ground ahead, which is
+   * where ground targets are. When it would cover a marker it slides up over
+   * the objective line (as the orders banner does) and comes back once the
+   * low slot has been clear for a moment.
+   */
+  _placeRadio(L, s, shown) {
+    const g = this._radioGeo;
+    const dt = Math.min(0.1, this._dt || 0.016);
+    let want = 0;
+    if (g && L.touch && L.portrait && !this.banner && this.radio.alpha > 0) {
+      const marks = shown.map((o) => rect(o.x - o.m - 6 * s, o.y - o.m - 20 * s, o.x + o.m + 6 * s, o.y + o.m + 24 * s));
+      want = pickPlateSlot([this._radioRectAt(L, g, 0), this._radioRectAt(L, g, 1)], marks);
+      this._radioHold = want === 1 ? 1.5 : Math.max(0, this._radioHold - dt);
+      if (this._radioHold > 0) want = 1;
+    } else {
+      this._radioHold = 0;
+    }
+    const step = this.reducedMotion ? 1 : dt / 0.3;
+    this._radioLift += Math.max(-step, Math.min(step, want - this._radioLift));
+    this._radioRect = g ? this._radioRectAt(L, g, this._radioLift) : null;
+  }
+
+  _drawRadio(L, s) {
+    const g = this._radioGeo ?? this._measureRadio(L, s);
+    if (!g) return;
+    const a = this.radio.alpha;
+    if (a <= 0) return;
+    const ctx = this.ctx;
+    const th = this.theme;
+    const { call, cw, lines, fs, lh, W, H } = g;
+    const r = this._radioRectAt(L, g, this._radioLift);
+    const x0 = r.x0;
+    const y0 = r.y0;
     ctx.globalAlpha = a;
     ctx.fillStyle = 'rgba(3,8,12,0.7)';
     ctx.fillRect(x0, y0, W, H);
@@ -1497,6 +1704,11 @@ const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 
 function rankOn(o) {
   return (o.isLock ? 8 : 0) + (o.t.selected ? 4 : 0) + (o.t.isAce ? 2 : 0) + (o.t.isTarget ? 1 : 0);
+}
+
+/** Marker half-size: grows as the target closes inside 6 km. */
+function markerSize(dist, s) {
+  return (11 + Math.max(0, 1 - dist / 6000) * 5) * s;
 }
 
 function rankOff(t) {

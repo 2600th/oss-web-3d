@@ -1,5 +1,8 @@
 /**
- * Enemy MiG-21 variants from public/models/mig21.glb:
+ * Enemy MiG-21 variants from the split, baked airframe
+ * (assets/authoring/build/mig21_split_raw.glb, written by
+ * tools/blender/build_mig_surfaces.py; it carries the same stab_/aileron_/flap_
+ * pivot nodes as the player jet, so hostiles animate their surfaces too):
  *
  *   public/models/mig21_hostile.glb       full airframe, hostile two-tone grey
  *   (LOD1 is made from the raw copy by tools/blender/build_mig_lod1.py)
@@ -24,7 +27,9 @@ import { fileURLToPath } from 'node:url';
 import { io, optimize, countTriangles, sharp } from './gltf-pipeline.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SRC = path.join(ROOT, 'public/models/mig21.glb');
+// The split model (baked, nose -Z). The old un-split, nose +Z source still works:
+// the normaliser below handles both.
+const SRC = process.env.MIG_SRC ?? path.join(ROOT, 'assets/authoring/build/mig21_split_raw.glb');
 const OUT0 = path.join(ROOT, 'public/models/mig21_hostile.glb');
 const EVID = path.join(ROOT, 'assets/authoring/build/hostile_tex');
 const REAL_LENGTH = 15.76;
@@ -48,10 +53,13 @@ const NODE_NAMES = {
 };
 
 // Hostile scheme (sRGB 0..1)
-const UPPER_A = [0.30, 0.33, 0.37]; // dark blue-grey
-const UPPER_B = [0.52, 0.55, 0.58]; // medium grey
-const UNDER = [0.66, 0.69, 0.71]; // light grey
-const DIELECTRIC = [0.24, 0.25, 0.26];
+// Darker than the first pass (0.30/0.52/0.66): under the physical sky's hard
+// high-altitude sun the old greys washed out to near-white in game. Two close,
+// slightly cool greys read as a real air-superiority scheme at combat range.
+const UPPER_A = [0.165, 0.18, 0.2]; // dark slate grey
+const UPPER_B = [0.3, 0.315, 0.335]; // medium-dark grey
+const UNDER = [0.47, 0.49, 0.51]; // mid grey (no light belly: that also read as white)
+const DIELECTRIC = [0.16, 0.165, 0.17];
 
 // ---------------------------------------------------------------- noise
 function hash(x, y, z) {
@@ -300,6 +308,11 @@ async function load() {
 /** The Aircraft.js normalisation as a 4x4 (column-major) + a point mapper. */
 function normaliser(doc) {
   const scene = doc.getRoot().getDefaultScene() || doc.getRoot().listScenes()[0];
+  const baked = doc.getRoot().listNodes().find((n) => n.getExtras()?.baked);
+  if (baked) {
+    // already in runtime conventions (build_mig_surfaces.py)
+    return { scene, baked, M: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], map: (p) => p, s: 1, c: [0, 0, 0] };
+  }
   const { min, max } = getBounds(scene);
   const c = min.map((v, i) => (v + max[i]) / 2);
   const size = max.map((v, i) => v - min[i]);
@@ -333,8 +346,9 @@ const ATTRIBUTION = {
 
 const report = [];
 const doc = await load();
-const { scene, M, map } = normaliser(doc);
-const SKIN_TEX_OF = new Set(['airframe', 'underside', 'flaps', 'gear_doors', 'ventral', 'ventral_fairing', 'strake']);
+const { scene, M, map, baked } = normaliser(doc);
+// ('pylons' was mislabelled 'flaps' before the control-surface split: Object_12)
+const SKIN_TEX_OF = new Set(['airframe', 'underside', 'flaps', 'pylons', 'gear_doors', 'ventral', 'ventral_fairing', 'strake']);
 const skinTextures = new Set();
 for (const n of doc.getRoot().listNodes()) {
   if (!SKIN_TEX_OF.has(n.getName())) continue;
@@ -350,7 +364,8 @@ for (const t of skinTextures) {
   const png = await repaint(doc, t, map, report);
   writeFileSync(path.join(EVID, `skin_${ti++}.png`), png);
 }
-bakeRoot(doc, 'mig21_hostile', scene, M, { ...ATTRIBUTION, lod: 0 });
+if (baked) baked.setName('mig21_hostile').setExtras({ ...baked.getExtras(), ...ATTRIBUTION, lod: 0 });
+else bakeRoot(doc, 'mig21_hostile', scene, M, { ...ATTRIBUTION, lod: 0, baked: 1 });
 doc.getRoot().getAsset().extras = ATTRIBUTION;
 
 report.push(`lod0 tris ${countTriangles(doc)}`);
