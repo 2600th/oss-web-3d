@@ -14,14 +14,15 @@
 //   {destroyed: tag, count?}   that many of the tag destroyed (default: all spawned)
 //   {remaining: tag, lte?}     at most that many still alive
 //   {arrived: tag, count?}     convoy units that reached the end of their road
-//   {zone: {x, z, r}}          player inside the circle
+//   {zone: {x, z, r, below?}}  player inside the circle (and under `below` m MSL)
 //   {captured: n}              recon photographs taken
 //   {healthBelow: 0..1}, {flag: name}
 //   {all: [..]}, {any: [..]}, {not: cond}
 // Action:
 //   {radio: [speaker, text, priority?]}, {spawn: groupId}, {music: {state, level}},
 //   {flag: name}, {bonus: {label, score}}, {goto: phaseId}, {complete: true},
-//   {fail: reason}, {hostile: bool}, {maxAttackers: n}, {timeLimit: seconds}
+//   {fail: reason}, {hostile: bool}, {maxAttackers: n}, {timeLimit: seconds},
+//   {resupply: {health?, flares?, msl?, sp?}}  repair / rearm the player (arcade top-up)
 
 export function testCondition(c, v) {
   if (!c) return false;
@@ -41,6 +42,7 @@ export function testCondition(c, v) {
   if (c.zone) {
     const dx = v.player.x - c.zone.x, dz = v.player.z - c.zone.z;
     if (dx * dx + dz * dz > c.zone.r * c.zone.r) return false;
+    if (c.zone.below !== undefined && !(v.player.y < c.zone.below)) return false;
   }
   if (c.captured !== undefined && v.captured < c.captured) return false;
   if (c.healthBelow !== undefined && !(v.health < c.healthBelow)) return false;
@@ -52,7 +54,7 @@ export class MissionRunner {
   /**
    * @param {object} mission
    * @param {object} hooks { spawn(def)->entities, radio(speaker,text,priority), music(m),
-   *                         bonus(b), setHostile(b), setMaxAttackers(n), phase(phase), end(state, reason) }
+   *                         bonus(b), setHostile(b), setMaxAttackers(n), resupply(r), phase(phase), end(state, reason) }
    */
   constructor(mission, hooks = {}) {
     this.mission = mission;
@@ -133,6 +135,7 @@ export class MissionRunner {
       if (a.hostile !== undefined) this.hooks.setHostile?.(a.hostile);
       if (a.maxAttackers !== undefined) this.hooks.setMaxAttackers?.(a.maxAttackers);
       if (a.timeLimit !== undefined) this.timeLimit = a.timeLimit;
+      if (a.resupply) this.hooks.resupply?.(a.resupply);
       if (a.fail) return this.fail(a.fail);
       if (a.complete) return this._end('complete');
       if (a.goto) {

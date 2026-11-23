@@ -9,9 +9,10 @@ import { Radio } from './radio.js';
 import { Recon, OPTIC } from './recon.js';
 import { Onboarding, controlLabel } from './onboarding.js';
 import { accuracy, computeScore, rankFor, loadProgress, recordResult, saveProgress, isUnlocked } from './scoring.js';
-import { WEAPONS } from '../combat/weapons.js';
+import { WEAPONS, PLAYER } from '../combat/weapons.js';
 import { difficultyFor } from '../game/difficulty.js';
 import { resolveConditions, applyToEnvironment, conditionsLabel } from './conditions.js';
+import { Spotter, pictureCall } from './spotting.js';
 
 export const order = 52;
 export function createSystem(game) { return new MissionSystem(game); }
@@ -31,6 +32,8 @@ const _top = { x: 0, y: 0, z: 0 };
 /** 'S-8 ROCKETS' -> 'S-8 Rockets', 'R-73 ARCHER' -> 'R-73 Archer' (designations keep their capitals). */
 const sentenceName = (n) => n?.split(' ').map((w) => (/[0-9-]/.test(w) ? w : w[0] + w.slice(1).toLowerCase())).join(' ');
 const los = (a, b) => { _top.x = b.x; _top.y = b.y + 12; _top.z = b.z; return clearLine(a, _top); };
+// Night spotting: the lamps of a truck sit a few metres up; a fighter is itself.
+const sightLine = (a, b) => { _top.x = b.x; _top.y = b.y + 4; _top.z = b.z; return clearLine(a, _top); };
 
 export class MissionSystem {
   constructor(game) {
@@ -82,7 +85,9 @@ export class MissionSystem {
       if (s < this._scoreScale) { this._scoreScale = s; this.difficulty = difficulty; }
     });
     ev.on('ai:engage', ({ fighter }) => { if (!this.running) return; if (fighter.pilot) this.aceLine(fighter.pilot, 'engage', 1); else this.chatter('bandits'); });
-    ev.on('ai:fire', ({ fighter }) => { if (fighter.pilot) this.aceLine(fighter.pilot, 'fire', 0.5); });
+    ev.on('ai:fire', ({ fighter }) => { this.spotter?.reveal(fighter.entity); if (fighter.pilot) this.aceLine(fighter.pilot, 'fire', 0.5); });
+    // A muzzle flash or a launch gives a dark fighter away.
+    ev.on('weapon:gun', ({ firing, entity }) => { if (firing && entity?.fighter) this.spotter?.reveal(entity); });
   }
 
   init(game) {
@@ -152,12 +157,18 @@ export class MissionSystem {
     game.spawnAt(m.start);
     this._applyConditions(m);
     this.recon = m.recon ? new Recon() : null;
+    this.spotter?.clear();
+    this.spotter = m.spotting ? new Spotter(m.spotting) : null;
+    this._pictureTimer = m.spotting?.picture?.first ?? 0;
+    this._darkColumns = new Set();
+    this._lastSeen = new Map();
     this.onboard = m.onboarding ? new Onboarding({ veteran: this.progress.missions[m.id]?.completed === true }) : null;
 
     this.runner = new MissionRunner(m, {
       spawn: (def) => {
         const entities = this.ai.spawn(def);
         if (this.recon) for (const e of entities) if (e.kind === 'post') this.recon.addPost(e);
+        if (this.spotter) for (const e of entities) this.spotter.add(e);
         return entities;
       },
       radio: (speaker, text, priority) => this.radio.say(speaker, text, priority),
@@ -165,6 +176,7 @@ export class MissionSystem {
       bonus: (b) => { this.bonusScore += b.score; game.events.emit('score:bonus', { ...b }); },
       setHostile: (h) => { this.ai.hostile = h; },
       setMaxAttackers: (n) => { this.ai.maxAttackers = n; },
+      resupply: (r) => this._resupply(r),
       phase: (phase) => game.events.emit('mission:phase', { mission: this.info(), phase: { id: phase.id, name: phase.name, objective: phase.objective?.text } }),
       end: (state, reason) => this._onEnd(state, reason),
     });
@@ -178,6 +190,8 @@ export class MissionSystem {
     this._setOptic(false);
     if (this.game.flight) this.game.flight.turbulence = 0;
     if (this.combat) this.combat.active = false;
+    this.spotter?.clear();
+    this.spotter = null;
     this.ai?.clear();
     this.runner = null;
     this.mission = null;
@@ -234,6 +248,7 @@ export class MissionSystem {
   _onDestroyed({ target, killer, score }) {
     if (!this.runner) return;
     this.runner.notifyDestroyed(target.tags ?? []);
+    if (this.spotter && target.kind === 'truck' && this.spotter.watched.has(target)) this._scatter(target);
     if (killer !== this.combat.player) return;
     this.targetScore += score;
     if (target.fighter?.pilot) this.aceLine(target.fighter.pilot, 'down', 1);
@@ -354,6 +369,7 @@ export class MissionSystem {
           game.events.emit('recon:capture', { target: shot.entity, quality: shot.best, captured: this.recon.captured, total: this.recon.total });
         }
       }
+      if (this.spotter) this._spotting(dt, game);
       if (this.onboard?.enabled && game.playerControl) this._onboarding(game, hud, r);
       if (hud.warning === 'pullup') this.chatter('pullUp');
       r.update(dt, { player: f.position, health: p.health / p.maxHealth });
@@ -377,6 +393,9 @@ export class MissionSystem {
     hud.timeLimit = r.timeLimit;
     hud.timeRemaining = r.timeRemaining;
     hud.objective = r.objective();
+    // Night: the marker is where you last saw the column, not where it was briefed.
+    const seenTag = this._lastSeen?.size ? r.phase?.objective?.track?.destroyed : null;
+    if (seenTag && hud.objective.marker && this._lastSeen.has(seenTag)) hud.objective.marker = this._lastSeen.get(seenTag);
     hud.mission = { id: m.id, name: m.name, phase: r.phase?.id ?? null, phaseName: r.phase?.name ?? null, state: r.state };
     hud.conditions = c ? { time: c.time, weather: c.weather, label: c.label, night: c.night, light: c.light, turbulence: c.turbulence } : null;
     hud.recon = this.recon ? {
@@ -384,6 +403,62 @@ export class MissionSystem {
       progress: this.recon.progress, focus: this.recon.focus?.entity ?? null, quality: this.recon.focus?.quality ?? 0,
       axis: this.recon.axis, fov: OPTIC.fov,
     } : null;
+  }
+
+  // ------------------------------------------------------- night spotting --
+
+  _spotting(dt, game) {
+    const sp = this.spotter;
+    const f = game.flight;
+    sp.update(dt, f.position, sightLine);
+    // Where each column was last seen: the objective marker follows it.
+    for (const [e, st] of sp.watched) {
+      if (!st.spotted || st.kind !== 'truck') continue;
+      for (const tag of e.tags) this._lastSeen.set(tag, { x: e.position.x, z: e.position.z });
+    }
+    // A contact that has slipped back into the dark drops off the sight.
+    const t = this.combat.target;
+    if (t && t.hidden) this.combat.setTarget(null);
+    // The controller talks the pilot onto fighters he cannot see.
+    const pc = this.mission.spotting.picture;
+    if (!pc) return;
+    this._pictureTimer -= dt;
+    if (this._pictureTimer > 0) return;
+    let best = null, bd = pc.range ?? 16000;
+    for (const e of sp.unseen('fighter')) {
+      const d = e.position.distanceTo(f.position);
+      if (d < bd && e.fighter?.mem.aware) { bd = d; best = e; }
+    }
+    if (!best) { this._pictureTimer = 2; return; }
+    this._pictureTimer = pc.every ?? 25;
+    const heading = Math.atan2(f.forward.x, -f.forward.z);
+    this.radio.say('control', `Shikhar: bandit, ${pictureCall(f.position, heading, best.position)}. No lights on him.`, 1);
+  }
+
+  /** A truck died: the rest of its column go dark and run for it. */
+  _scatter(target) {
+    const convoy = this.ai.convoys.find((c) => c.trucks.some((u) => u.entity === target));
+    const trucks = convoy ? convoy.trucks.map((u) => u.entity) : [];
+    this.spotter.scatter(convoy, trucks, this.game.flight.position);
+    const line = this.mission.spotting.darkLine;
+    if (convoy && line && trucks.some((e) => e.alive) && !this._darkColumns.has(convoy)) {
+      this._darkColumns.add(convoy);
+      this.radio.say(line[0], line[1], line[2] ?? 1);
+    }
+  }
+
+  /** Arcade top-up: repair and rearm (mission action `resupply`). */
+  _resupply({ health = 0, flares = 0, msl = 0, sp = 0 } = {}) {
+    const c = this.combat;
+    const p = c.player;
+    if (!p.alive) return;
+    p.health = Math.min(p.maxHealth, p.health + health);
+    const f = this.game.flight;
+    if (f) f.damage = Math.min(1, Math.max(0, (0.6 - p.health / p.maxHealth) / 0.6));
+    c.flares.count = Math.min(PLAYER.flares, c.flares.count + flares);
+    c.msl.ammo = Math.min(c.msl.maxAmmo, c.msl.ammo + msl);
+    c.sp.ammo = Math.min(c.sp.maxAmmo, c.sp.ammo + sp);
+    this.game.events.emit('player:resupply', { health: p.health / p.maxHealth, flares: c.flares.count, msl: c.msl.ammo, sp: c.sp.ammo });
   }
 
   /**
