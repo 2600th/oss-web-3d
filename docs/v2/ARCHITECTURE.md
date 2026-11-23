@@ -828,3 +828,59 @@ Owner paths: `tools/blender/build_pilot.py`, `tools/blender/assets_ground.py` an
     curvature, detail height and slope shedding.
   - If `material.js` changes its `snowLine` / `snowRaw` formula, update
     `siteSnow` to match.
+
+### Realism polish: lighting, atmosphere, image pipeline (additive unless marked)
+
+Evidence, references and GPU costs: `docs/v2/evidence/polish-realism/README.md`.
+
+- **Quality (changed):** medium now has `ssao: true`. It gets a cheap AO variant
+  (half resolution, 8 samples, 160 m, layer-0 objects only: the terrain is
+  not an occluder in its prepass). Low is unchanged
+  (`ssao: false`, no rays, no sharpen).
+- **Post config (new keys in `src/fx/post/config.js`):**
+  - `ao`: `{ far, samples, scale, terrain }` or null. It is gated by the tier's
+    `ssao` flag. `?noao` turns it off.
+  - `godRays`: `{ samples, scale, gain }` or null (high and ultra only).
+    `?norays` turns them off.
+  - **(changed)** `sharpen` is now applied as written. PostFX used to hard-code
+    0.25. Medium is 0.4; high and ultra are 0.5. The filter is now CAS-style
+    adaptive, so the strength does not mean the same as before.
+- **Near-field AO (`post.ao`, new; WebGPU only, null elsewhere):** a
+  `NearFieldAO` from `src/fx/post/ambientOcclusion.js`.
+  - It runs a depth prepass and GTAO in its own pipeline before the main pass.
+  - It reaches lit materials through `post.scenePass.contextNode` (a
+    `context({ getAO })`), so it darkens **indirect** light only.
+  - It skips the terrain (`material.terrainLit`), transparent materials and
+    any material with `userData.noAO = true`.
+  - Each lit opaque material that receives it samples **one more texture**.
+    The terrain sits at 15 of 16 per-stage textures. That is why it is
+    excluded: adding a texture there invalidates the pipeline.
+  - If you add samplers to another material that is close to 16, set
+    `userData.noAO`.
+- **Crepuscular rays (new):** `src/fx/post/godRays.js` (`createGodRays`,
+  `godRayStrength`).
+  - New PostFX uniforms: `godRays` (per-frame strength), `godRayFloor`,
+    `godRayCap`, `godRayDecay` and `godRayAir`.
+  - `post.options.godRays`: null means auto (low sun near the frame); a
+    number forces that strength.
+- **Grade (changed look):**
+  - `post.look = { day, dim }` holds the ASC-CDL slope and power. `day` is
+    used in daylight; `dim` (the old softer look) in mesopic light. They are
+    blended by adapted scene luminance in `_updateExposure`, which writes
+    `uniforms.lookSlope` / `lookPower` every frame.
+  - The `lookSat` default is now 1.22.
+  - `src/timeofday/system.js` still scales `lookSat` / tints by its hint. It
+    does not touch slope or power.
+- **Lens flare (changed look):** in `src/fx/post/nodes.js`, ghosts are scaled
+  by `GHOST_GAIN` 0.35. The starburst, anamorphic streak and halo are about
+  2× weaker.
+- **Atmosphere (changed look):** new param `atmosphere.params.mieBase` (km,
+  default 2.4). Aerosol density is flat up to `mieBase`, then decays with the
+  Mie scale height. This applies in both the CPU LUT model (`model.js`) and
+  the GPU froxel integrate (`Atmosphere.js`). Valley-level haze and the sun
+  aureole now come from the aerosol at Ladakh valley floors (2.7–3.5 km)
+  instead of sea level.
+- **Cockpit material (changed look):** in `src/assets/materials.js`, the
+  INTERIOR branch sets `aoNode = 0.42` above the low tier. This is the
+  canopy-tub occlusion of sky and indirect light. Direct sun is unaffected.
+- **Debug views (new):** `post.debugView = 'ao' | 'rays'`.
