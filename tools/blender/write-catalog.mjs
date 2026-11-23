@@ -45,8 +45,8 @@ const MIG_SOCKETS = {
   eye: [0, 0.22, -2.95],
   hud: [0, 0.212, -3.364],
   nozzle: [0, 0.05, 7.58],
-  wingtipL: [-3.516, -0.05, 1.6],
-  wingtipR: [3.516, -0.05, 1.6],
+  wingtipL: [-3.64, -0.777, 2.74], // measured tip (tools/blender/probe_lamps.py); was the bbox guess [-3.516, -0.05, 1.6]
+  wingtipR: [3.64, -0.777, 2.74],
   gun: [0, -0.6, -2.5],
 };
 // Moving surfaces cut by tools/blender/build_mig_surfaces.py (rotation.x on the hinge line).
