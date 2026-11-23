@@ -8,13 +8,21 @@ import * as THREE from 'three/webgpu';
 // `mean` is the layer's mean linear albedo. The shader divides it out and
 // multiplies by its own palette, so the textures supply detail and the palette
 // supplies Ladakh's colours.
+//
+// [textures] scree is rock_ground_02 (grey-brown gravelly scree; it was
+// dry_ground_rocks, a cracked desert mud), talus (gray_rocks, angular
+// frost-shattered blocks) is new. Means and sizes from layers.json. The
+// ground-cover layers (scree, grass, gravel, talus) have their tile-scale
+// blotches flattened at build time (fetch-textures.mjs `flatten`) so they do
+// not repeat as a lattice.
 export const LAYERS = [
-  { name: 'scree', size: 4.0, mean: [0.3161, 0.1852, 0.0859] },
+  { name: 'scree', size: 3.0, mean: [0.2198, 0.1897, 0.1395] },
   { name: 'rock', size: 2.7, mean: [0.2326, 0.1456, 0.0837] },
   { name: 'strata', size: 1.83, mean: [0.213, 0.0918, 0.034] },
   { name: 'snow', size: 2.0, mean: [0.3791, 0.3785, 0.3886] },
-  { name: 'grass', size: 2.51, mean: [0.1585, 0.119, 0.0491] },
-  { name: 'gravel', size: 2.16, mean: [0.2326, 0.1956, 0.1554] },
+  { name: 'grass', size: 2.51, mean: [0.16, 0.1197, 0.0498] },
+  { name: 'gravel', size: 2.16, mean: [0.2421, 0.2041, 0.1624] },
+  { name: 'talus', size: 1.8, mean: [0.2039, 0.1803, 0.1438] },
 ];
 export const LAYER = Object.fromEntries(LAYERS.map((l, i) => [l.name, i]));
 

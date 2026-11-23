@@ -10,7 +10,7 @@ export const CATALOG = {
       {
         url: "models/mig21.glb",
         triangles: 231664,
-        bytes: 4402240
+        bytes: 4612172
       }
     ],
     scale: 1,
@@ -34,13 +34,13 @@ export const CATALOG = {
       {
         url: "models/mig21_hostile.glb",
         triangles: 231664,
-        bytes: 4349028,
+        bytes: 4352956,
         distance: 0
       },
       {
         url: "models/mig21_hostile_lod1.glb",
         triangles: 24186,
-        bytes: 1036468,
+        bytes: 1039312,
         distance: 600
       }
     ],
@@ -65,7 +65,7 @@ export const CATALOG = {
       {
         url: "models/mig21_cockpit.glb",
         triangles: 132,
-        bytes: 27176
+        bytes: 46320
       }
     ],
     scale: 1,

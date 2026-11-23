@@ -42,8 +42,9 @@ import { ShadowSweep, SHADOW_MIN, SHADOW_STEP } from './shadowSweep.js';
 // tier, so a tier changes angular vertex density, not the level ranges.
 const TIERS = {
   low: { N: 128, cell: 6, layerSize: 512, aniso: 2, triplanar: false, octaveBlend: false, fineDetail: false, normalStrength: 1, detailNear: 32, streak: 1.2 },
-  medium: { N: 192, cell: 4, layerSize: 1024, aniso: 4, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 28, streak: 1.1 },
-  high: { N: 256, cell: 3, layerSize: 1024, aniso: 8, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 24, streak: 1.1 },
+  // [textures] aniso medium 4 -> 8, high 8 -> 16 (clamped to the device maximum)
+  medium: { N: 192, cell: 4, layerSize: 1024, aniso: 8, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 28, streak: 1.1 },
+  high: { N: 256, cell: 3, layerSize: 1024, aniso: 16, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 24, streak: 1.1 },
   ultra: { N: 384, cell: 2, layerSize: 1024, aniso: 16, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 24, streak: 1.1 },
 };
 const LEVELS = 11; // radius of the last level: 384 m * 2^10 = 393 km (camera far plane is 260 km)
