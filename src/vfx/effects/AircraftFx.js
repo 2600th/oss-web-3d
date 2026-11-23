@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { Shells } from '../core/Shells.js';
-import { plumeState, vapourAmount, contrailAmount, vapourCone, speedOfSound, saturate, smoothstep, lerp } from '../core/ring.js';
+import { plumeState, vapourAmount, vapourGates, contrailAmount, vapourCone, speedOfSound, saturate, smoothstep, lerp } from '../core/ring.js';
 import { rnd, randDir, readPose, makePose, isAlive } from './util.js';
 
 const _d = new THREE.Vector3();
@@ -209,14 +209,18 @@ export class AircraftFx {
       const weather = v.game.env?.weather;
       const hum = weather ? (entity === this.player || dist < 700 ? weather.humidity : weather.settings.humidity) : 0.3;
       const amount = near ? vapourAmount(item.g, aoa, speed, pos.y, hum) : 0;
+      // Both need moisture: the tip vortex core condenses in its pressure
+      // drop at moderate G on a humid day but is rare in dry air; the sheet
+      // over the wing needs high G *and* humid air (vapourGates in ring.js).
+      const gates = vapourGates(amount, hum);
 
       // wingtip vortex cores
-      if (amount > 0.05) {
+      if (gates.tip > 0.05) {
         if (!item.vortexL) {
           item.vortexL = v.ribbons.create(v.emitters._style('vortex'));
           item.vortexR = v.ribbons.create(v.emitters._style('vortex'));
         }
-        item.vortexL.strength = item.vortexR.strength = saturate(amount * 1.6);
+        item.vortexL.strength = item.vortexR.strength = smoothstep(0.05, 0.7, gates.tip);
         item.vortexL.push(_p2.copy(socket(entity, 'wingtipL')).applyQuaternion(q).add(pos));
         item.vortexR.push(_p2.copy(socket(entity, 'wingtipR')).applyQuaternion(q).add(pos));
       } else if (item.vortexL) {
@@ -226,20 +230,21 @@ export class AircraftFx {
 
       // condensation sheets off the inner wing: a soft ribbon each side for
       // the body of it, and wisps born along the leading edge on top
-      if (amount > 0.22 && dist < 4000) {
+      const wing = gates.wing;
+      if (wing > 0.22 && dist < 4000) {
         if (!item.sheetL) {
           item.sheetL = v.ribbons.create(v.emitters._style('sheet'));
           item.sheetR = v.ribbons.create(v.emitters._style('sheet'));
         }
-        item.sheetL.strength = item.sheetR.strength = smoothstep(0.22, 0.75, amount);
+        item.sheetL.strength = item.sheetR.strength = smoothstep(0.22, 0.75, wing);
         item.sheetL.push(_p2.copy(socket(entity, 'wingRootL')).applyQuaternion(q).add(pos));
         item.sheetR.push(_p2.copy(socket(entity, 'wingRootR')).applyQuaternion(q).add(pos));
       } else if (item.sheetL) {
         item.sheetL.end(); item.sheetR.end();
         item.sheetL = item.sheetR = null;
       }
-      if (amount > 0.22 && dist < 1500) {
-        const n = Math.floor(1300 * amount * v.cfg.rate * dt + Math.random());
+      if (wing > 0.22 && dist < 1500) {
+        const n = Math.floor(1300 * wing * v.cfg.rate * dt + Math.random());
         const m = entity.vfxSockets ?? MIG21;
         const le0 = m.leRoot ?? MIG21.leRoot, le1 = m.leTip ?? MIG21.leTip, wy = m.wingY ?? MIG21.wingY;
         for (let i = 0; i < n; i++) {
@@ -248,7 +253,7 @@ export class AircraftFx {
           _p2.set(side * lerp(le0[0], le1[0], t), wy + 0.22, lerp(le0[1], le1[1], t) + rnd(0.2, 1.3)).applyQuaternion(q).add(pos);
           // born moving with the wing: they sit over it for a moment, then drag peels them back
           lit.spawn(L.wisp, _p2.x, _p2.y, _p2.z, vel.x * 0.98 + _up.x * 3, vel.y * 0.98 + _up.y * 3, vel.z * 0.98 + _up.z * 3,
-            rnd(0.06, 0.12), rnd(0.45, 0.7), rnd(1.0, 1.5), 1.25, 1.25, 1.3, 0.14 * amount);
+            rnd(0.06, 0.12), rnd(0.45, 0.7), rnd(1.0, 1.5), 1, 1, 1, 0.14 * wing);
         }
       }
 

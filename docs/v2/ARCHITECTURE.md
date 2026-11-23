@@ -921,3 +921,47 @@ Owner paths: `src/ui/**`, `src/camera/**`, `src/audio/**`, `src/core/Input.js`
     `normalTexture` / `ormTexture` sizes; `optimize-glb.mjs` takes `--ntex` /
     `--otex`. `tools/blender/montage.mjs` tiles evidence screenshots.
   - Evidence: `docs/v2/evidence/polish-models-2/README.md`.
+
+### Aircraft FX polish: wingtip vapour, rudder and airbrakes, headlight beams (additive unless marked)
+
+Owner paths: `src/vfx/**`, `src/assets/controlSurfaces*`,
+`src/world/timeofday/lights/**`, `src/timeofday/**`,
+`tools/blender/build_mig_moving.mjs` / `probe_mig_moving.mjs`, `mig21*.glb`.
+Hook-ups are in `src/flight/FlightModel.js` and `src/assets/system.js`
+(tagged `[aircraft fx]`), and the catalogue was regenerated. Evidence:
+`docs/v2/evidence/polish-aircraft-fx/`.
+
+- **MiG pivots (new):** `rudder`, `airbrake_L` and `airbrake_R` are in
+  `mig21`, `mig21_hostile` and `mig21_hostile_lod1`.
+  - Each sits under a fixed `<name>_hinge` frame and turns on `rotation.x`.
+    For the rudder, + is trailing edge right; for the airbrakes, + is open.
+  - The meshes are cut out of `airframe`, so `airframe` lost those faces.
+  - `SURFACE_NODES` lists the three nodes and the catalogue's pivots include
+    them.
+- **Flight model (new fields):** `flight.airbrake` (0..1, commanded) and
+  `flight.yawCommand` (-1..1).
+- **`controlSurfaces.js`:**
+  - New exports: `THROWS.rudder` / `THROWS.airbrake`, `rudderTravel(speed)`,
+    `airbrakeTravel(speed)`, and `demandsFromRates(rates, speed, accel, cfg,
+    out)`. The last one gives hostiles their demands from body rates and
+    acceleration.
+  - `surfaceTargets` takes `yaw`, `airbrake` and `airspeed`.
+- **VFX:**
+  - `Shared.vapourLight(ndl, cosSun, shadow)` and the `horizonColor` uniform
+    are new.
+  - A trail style with `glow < 0` is lit as water (condensation), not as
+    smoke. This is changed for the `vortex`, `sheet` and `contrail` styles.
+  - Thin particles (`thin = 1`) are lit as water as well.
+  - `vapourGates(amount, humidity)` → `{ tip, wing }` is new in `ring.js`.
+- **Headlight beams (new):** `game.systems.timeofday.beams`, a
+  `HeadlightBeams` (`src/world/timeofday/lights/HeadlightBeams.js`).
+  - It is created once `systems.vfx` is ready and drawn in the VFX scene.
+  - Every vehicle that gets headlights gets a beam (`vehicle:spawn`, the truck
+    scan and `attachHeadlights`). `attachHeadlights(obj, opts)` accepts
+    `opts.entity`.
+  - Tuning and per-tier limits are in `beams.js` (`BEAM`, `BEAM_TIERS`,
+    `beamSlots`).
+  - The beam axis follows the road slope through `terrainHeight`, imported
+    read-only.
+- **Changed:** a dead or unparented vehicle's lamp sprites and beam are
+  removed in `lateUpdate` on the frame it dies. Before, this was the 1 s scan.

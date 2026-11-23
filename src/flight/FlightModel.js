@@ -279,6 +279,9 @@ export class FlightModel {
     ) * (1 - damageLoss);
     // High-G turn: airbrake + a real pull.
     const brakeIn = clamp(control.brake ?? 0, 0, 1);
+    // [aircraft fx] the commanded airbrake and rudder, for the visual control surfaces (src/assets/controlSurfaces.js)
+    this.airbrake = brakeIn;
+    this.yawCommand = clamp(control.yaw ?? 0, -1, 1);
     this.highG = brakeIn * smoothstep(0.25, 0.7, Math.abs(control.pitch));
     // Very high speed stiffens control, which stops the jet from becoming a
     // twitchy dart when it is doing 550 m/s.

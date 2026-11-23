@@ -1,8 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Ring, DirtyRanges, Pool, explosionRadius, plumeState, vapourAmount, vapourCone, speedOfSound, rankLights,
+  Ring, DirtyRanges, Pool, explosionRadius, plumeState, vapourAmount, vapourGates, vapourCone, speedOfSound, rankLights,
 } from './ring.js';
+
+test('vapour gates: tip threads need some moisture, the wing sheet needs humid air', () => {
+  const dry = vapourGates(1, 0.3), humid = vapourGates(1, 0.8), wet = vapourGates(1, 1);
+  assert.ok(Math.abs(dry.tip - 0.4) < 1e-9);
+  assert.ok(dry.wing < 0.22, 'no sheet over the wing on a dry day');
+  assert.ok(humid.wing > 0.75 && humid.tip > 0.99);
+  assert.ok(wet.wing > 0.99);
+  assert.equal(vapourGates(0, 1).tip, 0);
+  assert.ok(vapourGates(5, 0.5).tip <= 1);
+});
 
 test('Ring recycles the oldest slots first', () => {
   const r = new Ring(4);

@@ -159,6 +159,23 @@ export function vapourAmount(gLoad, aoaRad, speed, altitude, humidity = 0.3) {
   return saturate(Math.max(g, a * 0.8, wet) * q * dens);
 }
 
+/**
+ * Split a vapourAmount into what shows where, by humidity (0..1; 0.3 = a dry
+ * Ladakh day, 1 = saturated / in cloud):
+ *   tip   the wingtip vortex cores: their low-pressure core condenses on a
+ *         moderately humid day; in dry air only the hardest pulls show a faint
+ *         thread (about 40 % of the amount at humidity 0.3)
+ *   wing  the condensation sheet over the wing: high G *and* humid air; on a
+ *         dry day it stays under its 0.22 threshold except in cloud
+ */
+export function vapourGates(amount, humidity = 0.3) {
+  const a = saturate(amount);
+  return {
+    tip: a * (0.4 + 0.6 * smoothstep(0.3, 0.7, humidity)),
+    wing: a * (0.2 + 0.8 * smoothstep(0.4, 0.85, humidity)),
+  };
+}
+
 /** Contrail strength: cold air aloft, lower in humid air. */
 export function contrailAmount(altitude, throttle = 0.8, humidity = 0.3) {
   const h = saturate((humidity - 0.3) / 0.7);

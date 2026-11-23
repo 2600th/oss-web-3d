@@ -60,7 +60,9 @@ export class Ribbons {
   /**
    * Start a trail. Style: { radius, growth (m per sqrt(s)), life (s), color [r,g,b],
    * opacity (optical depth through the fresh core), wobble (m), rise (m/s),
-   * glow (motor light on the first metres), wind (0..1), spacing (m) }.
+   * glow (motor light on the first metres; a negative value -w means water
+   * condensation, lit by Shared.vapourLight instead of as smoke, w = 1 fully),
+   * wind (0..1), spacing (m) }.
    */
   create(style) {
     return new Trail(this, style);
@@ -240,7 +242,11 @@ export class Ribbons {
       const fadeLife = smoothstep(0.55, 1, lifeT).oneMinus();
       // fade when the camera itself is inside the tube (the quad cannot cover the screen)
       const camSeg = a.add(ax.mul(wu.clamp(0, L)));
-      const inside = smoothstep(r.mul(0.6), r.mul(1.9), length(camSeg));
+      // (from the smooth radius, and well clear of it: with the camera a metre or
+      // two off a fresh tube, the chase view in a hard turn, every ray through
+      // the joint-clipped segment has a chord and the segment drew as a flat,
+      // straight-edged pane, plainest at night exposure)
+      const inside = smoothstep(rBase.mul(1.1), rBase.mul(2.8), length(camSeg));
       const tau = sigma.mul(chord).mul(pow(prof, 0.5)).mul(erosion).mul(fadeLife).mul(inside).mul(1.5);
       const alpha = float(1).sub(exp(tau.negate())).mul(u.fade).mul(sh.cloudVisAt(t0.add(t1).mul(0.5)));
 
@@ -254,9 +260,13 @@ export class Ribbons {
       const hemi = dot(nrm, upV).mul(0.5).add(0.5);
       const amb = mix(u.groundColor, u.skyColor, hemi);
       const fwd = pow(saturate(dot(D, u.sunDirView)), 8).mul(float(1).sub(alpha)).mul(0.9);
-      const col = v5.rgb.mul(u.sunColor.mul(v7).mul(diffuse.mul(0.62).add(fwd)).add(amb.mul(0.34))).toVar();
+      // style.glow >= 0: motor light on smoke; < 0: -glow = water (condensation) lighting
+      const glowK = v6.x.max(0), water = saturate(v6.x.negate());
+      const smokeLit = u.sunColor.mul(v7).mul(diffuse.mul(0.62).add(fwd)).add(amb.mul(0.34));
+      const waterLit = sh.vapourLight(ndl, dot(D, u.sunDirView), v7).mul(mix(float(0.85), float(1.05), n2));
+      const col = v5.rgb.mul(mix(smokeLit, waterLit, water)).toVar();
       // rocket motor lighting the first metres of smoke
-      const hot = v6.x.mul(exp(age.mul(-9))).mul(prof.mul(0.8).add(0.2));
+      const hot = glowK.mul(exp(age.mul(-9))).mul(prof.mul(0.8).add(0.2));
       col.addAssign(fireRamp(hot.mul(1.2)));
       return vec4(col.mul(alpha), alpha);
     })();

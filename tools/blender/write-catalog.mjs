@@ -49,9 +49,11 @@ const MIG_SOCKETS = {
   wingtipR: [3.64, -0.777, 2.74],
   gun: [0, -0.6, -2.5],
 };
-// Moving surfaces cut by tools/blender/build_mig_surfaces.py (rotation.x on the hinge line).
-const MIG_SURFACES = ['stab_L', 'stab_R', 'aileron_L', 'aileron_R', 'flap_L', 'flap_R'];
-const MIG_SURFACE_NOTE = 'stab_L/R, aileron_L/R, flap_L/R turn on rotation.x, + = trailing edge down.';
+// Moving surfaces cut by tools/blender/build_mig_surfaces.py and (rudder, airbrakes)
+// tools/blender/build_mig_moving.mjs; each turns on rotation.x on its hinge line.
+const MIG_SURFACES = ['stab_L', 'stab_R', 'aileron_L', 'aileron_R', 'flap_L', 'flap_R', 'rudder', 'airbrake_L', 'airbrake_R'];
+const MIG_SURFACE_NOTE = 'stab_L/R, aileron_L/R, flap_L/R turn on rotation.x, + = trailing edge down; rudder (+ = trailing ' +
+  'edge right) and airbrake_L/R (+ = open) turn on rotation.x under fixed `<name>_hinge` frames.';
 const MIG_ATTR ='CC BY 4.0 - derivative of "MiG-21 Bison Indian (War Thunder)" by KojfDiscord (Sketchfab); see public/THIRD_PARTY_NOTICES.txt';
 catalog.mig21 = {
   url: 'models/mig21.glb',
