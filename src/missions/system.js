@@ -23,7 +23,10 @@ const FAIL_TEXT = {
   objective: 'The objective was not met.',
 };
 const OUTRO_SECONDS = { complete: 6, failed: 3.5 };
-const los = (a, b) => clearLine(a, b);
+// Sight the top of the post, not its footing: a grazing line to a point on
+// the ground clips the ridge the post stands on.
+const _top = { x: 0, y: 0, z: 0 };
+const los = (a, b) => { _top.x = b.x; _top.y = b.y + 12; _top.z = b.z; return clearLine(a, _top); };
 
 export class MissionSystem {
   constructor(game) {

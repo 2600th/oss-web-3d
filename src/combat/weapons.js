@@ -63,13 +63,13 @@ export const WEAPONS = {
     id: 'e_aam', name: 'hostile AAM', type: 'missile', guidance: 'ir',
     seekerCone: 42 * D, nav: 3.5, maxG: 15,
     launchBoost: 30, accel: 250, maxSpeed: 820, burn: 2.6, coastDrag: 0.1, life: 10,
-    fuse: 11, blast: 18, damage: 30, flareChance: 0.62,
+    fuse: 11, blast: 18, damage: 30, flareChance: 0.52,
   },
   e_aam_ace: {
     id: 'e_aam_ace', name: 'hostile AAM', type: 'missile', guidance: 'ir',
     seekerCone: 55 * D, nav: 4, maxG: 20,
     launchBoost: 30, accel: 300, maxSpeed: 880, burn: 2.8, coastDrag: 0.1, life: 10,
-    fuse: 12, blast: 18, damage: 34, flareChance: 0.45,
+    fuse: 12, blast: 18, damage: 34, flareChance: 0.36,
   },
   e_manpads: {
     id: 'e_manpads', name: 'shoulder SAM', type: 'missile', guidance: 'ir', kind: 'sam',
@@ -82,9 +82,9 @@ export const WEAPONS = {
     id: 'e_sam', name: 'radar SAM', type: 'missile', guidance: 'radar', kind: 'sam',
     seekerCone: 60 * D, nav: 3.5, maxG: 9.5,
     launchBoost: 20, accel: 260, maxSpeed: 1050, burn: 4.5, coastDrag: 0.06, life: 16,
-    fuse: 18, blast: 36, damage: 36, flareChance: 0,
+    fuse: 18, blast: 36, damage: 28, flareChance: 0,
   },
-  e_gun: { id: 'e_gun', name: 'hostile gun', type: 'gun', muzzle: 900, life: 1.6, damage: 4, spread: 0.012, rate: 14 },
+  e_gun: { id: 'e_gun', name: 'hostile gun', type: 'gun', muzzle: 900, life: 1.6, damage: 3.5, spread: 0.012, rate: 14 },
   e_aaa: { id: 'e_aaa', name: 'AAA', type: 'gun', muzzle: 960, life: 3.0, damage: 2, spread: 0.012, rate: 12 },
 };
 

@@ -34,7 +34,7 @@ export const CAST = {
  */
 export const ACES = {
   cairn: {
-    id: 'cairn', callsign: 'IRBIS 2', name: 'Cairn', health: 190, score: 2000,
+    id: 'cairn', callsign: 'IRBIS 2', name: 'Cairn', health: 250, score: 2000,
     skillOverrides: { aggression: 1, gunRange: 950, gunError: 0.007, minFight: 140, vertical: 0.2, mslCooldown: 9 },
     airframeOverrides: { turnRate: 0.6, maxG: 9, bleed: 2.5 },
     lines: {
@@ -47,7 +47,7 @@ export const ACES = {
     },
   },
   verglas: {
-    id: 'verglas', callsign: 'IRBIS 3', name: 'Verglas', health: 170, score: 2000,
+    id: 'verglas', callsign: 'IRBIS 3', name: 'Verglas', health: 230, score: 2000,
     skillOverrides: { flareChance: 0.85, flares: 44, jink: 1.3, aggression: 0.7, lockTime: 1.6 },
     airframeOverrides: { roll: 5.6, turnRate: 0.55 },
     lines: {
@@ -60,7 +60,7 @@ export const ACES = {
     },
   },
   scree: {
-    id: 'scree', callsign: 'IRBIS 4', name: 'Scree', health: 180, score: 2000,
+    id: 'scree', callsign: 'IRBIS 4', name: 'Scree', health: 240, score: 2000,
     skillOverrides: { aggression: 0.4, extendTime: 6.5, mslRange: 4300, mslCone: 20 * Math.PI / 180, vertical: 0.8 },
     airframeOverrides: { maxSpeed: 500, accel: 40, turnRate: 0.46 },
     lines: {
@@ -73,7 +73,7 @@ export const ACES = {
     },
   },
   monsoon: {
-    id: 'monsoon', callsign: 'IRBIS 1', name: 'Monsoon', health: 270, score: 3500, lead: true,
+    id: 'monsoon', callsign: 'IRBIS 1', name: 'Monsoon', health: 360, score: 3500, lead: true,
     skillOverrides: { lockTime: 1.0, mslCooldown: 6, vertical: 0.9, jink: 1, missiles: 12, reaction: 0.14 },
     airframeOverrides: { maxG: 9.2, turnRate: 0.56, accel: 37, bleed: 2.5 },
     lines: {

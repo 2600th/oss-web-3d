@@ -39,7 +39,7 @@ export const SKILLS = {
   },
   ace: {
     reaction: 0.18, detect: 22000, engage: 12000,
-    mslRange: 3800, mslMin: 550, mslCone: 24 * D, lockTime: 1.3, mslCooldown: 7, missiles: 8, weapon: 'e_aam_ace',
+    mslRange: 4200, mslMin: 550, mslCone: 26 * D, lockTime: 1.1, mslCooldown: 6, missiles: 8, weapon: 'e_aam_ace',
     gunRange: 850, gunCone: 5 * D, gunError: 0.009,
     flareChance: 0.6, flares: 24, breakG: 1, minFight: 160, extendTime: 4.5,
     vertical: 0.6, jink: 0.8, aggression: 1,

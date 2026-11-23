@@ -325,18 +325,44 @@ export class Bot {
     this._gun = false;
   }
 
+  /** Recon: stand off, run in on a line that can see the post, frame it, break away. */
   _photo(f, t, input) {
+    const dx = t.position.x - f.position.x, dz = t.position.z - f.position.z;
+    const horiz = Math.hypot(dx, dz);
     const d = t.position.distanceTo(f.position);
-    if (d > OPTIC.hardMax - 200) {
-      this._goto(f, t.position.x, t.position.z, t.position.y + 900);
-      this._speed(f, 300);
+    if (this.photo?.target !== t) this.photo = { target: t, phase: 'setup', timer: 0 };
+    const ph = this.photo;
+    if (ph.phase === 'out') {
+      ph.timer -= 1 / 30;
+      this._hold(f, ph.bearing, Math.max(t.position.y + 900, f.position.y));
+      this._speed(f, 280);
+      if (ph.timer <= 0 || horiz > 4300) { ph.phase = 'setup'; this.ip = null; }
       return;
+    }
+    const bearingErr = Math.abs(wrapPi(Math.atan2(dx, -dz) - this._heading(f)));
+    if (ph.phase === 'setup') {
+      const placed = horiz > 2600 && horiz < OPTIC.hardMax - 300 && bearingErr < 35 * D && f.position.y > t.position.y + 200
+        && clearLine(f.position, _v.copy(t.position).setY(t.position.y + 10), 60);
+      if (placed) ph.phase = 'frame';
+      else {
+        if (horiz < 2200 && bearingErr < 80 * D) { ph.phase = 'out'; ph.timer = 14; ph.bearing = this._heading(f); return; }
+        if (!this.ip || this.ip.target !== t) this.ip = this._planIp(f, t) ?? { x: t.position.x, y: t.position.y + 1000, z: t.position.z, target: t, none: true };
+        const ip = this.ip;
+        const dIp = this._goto(f, ip.x, ip.z, ip.y);
+        if (dIp < 1300 || ip.reached) {
+          ip.reached = true;
+          this.intent.turn = clamp(wrapPi(Math.atan2(dx, -dz) - this._heading(f)) * 2, -1, 1);
+          if (horiz > 7500) ip.reached = false;
+        }
+        this._speed(f, 290);
+        return;
+      }
     }
     input.setAction('optic', true);
     // Put the depressed optic axis, not the nose, on the post.
     this._aim(f, t.position, OPTIC.depression - 0.02);
-    this._speed(f, 230);
-    if (d < 900) this.intent.climb = 0.6;
+    this._speed(f, 215);
+    if (d < 1100 || bearingErr > 70 * D) { ph.phase = 'out'; ph.timer = 14; ph.bearing = this._heading(f); }
   }
 
   /**
@@ -402,7 +428,9 @@ export class Bot {
     const above = f.position.y - t.position.y;
     const sp = combat.sp;
     const hard = t.armor === 'hard';
-    const rockets = this.opts.specials && sp.def.type === 'rocket' && sp.ammo > 0 && (hard || combat.msl.ammo <= 0);
+    // Rockets are the fallback: this pilot's hands are steadier on a lock-on
+    // than on a pipper (measured: 14-19 rocket passes did not clear M1 in 15 minutes).
+    const rockets = this.opts.specials && sp.def.type === 'rocket' && sp.ammo > 0 && (this.opts.rockets || combat.msl.ammo <= 0);
     const bombs = this.opts.specials && sp.def.type === 'bomb' && sp.ammo > 0 && hard && t.radius >= 12;
     const noMissiles = combat.msl.ammo <= 0 && !rockets && !bombs;
 

@@ -39,14 +39,14 @@ export const GROUND = {
  */
 export const AA = {
   trackLag: 0.9,          // s, first-order lag on the velocity used for lead
-  aaaError: 0.11,         // rad, half-width of the first burst's aiming error
+  aaaError: 0.105,        // rad, half-width of the first burst's aiming error
   aaaRanging: 0.85,       // error multiplier per following burst ...
   aaaRangingFloor: 0.6,   // ... down to this fraction
   aaaBurst: [0.9, 0.6],   // s, base + random
   aaaPause: [2.0, 1.6],   // s between bursts, base + random
-  flakError: [34, 0.017], // m at the gun + m per metre of range (per axis, half-width)
+  flakError: [38, 0.018], // m at the gun + m per metre of range (per axis, half-width)
   flakRadius: 55,         // m, burst radius (damage falls off linearly to 0)
-  flakDamage: 7.5,
+  flakDamage: 6.5,
   flakPause: [1.9, 1.5],  // s between shells, base + random
   flakSpeed: 820,         // m/s, shell
 };

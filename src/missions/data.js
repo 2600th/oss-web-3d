@@ -26,7 +26,7 @@ export const MISSIONS = [
     ],
     start: { x: -15500, z: 9300, alt: 5300, heading: 268, speed: 250 },
     specials: ['rkt', 'bomb', 'hobs'], special: 'rkt',
-    timeLimit: 900, parTime: 360, rank: { S: 10200, A: 8800, B: 7200, C: 5500 },
+    timeLimit: 900, parTime: 360, rank: { S: 10800, A: 9200, B: 7500, C: 5500 },
     maxAttackers: 2,
     // First sortie: contextual control prompts (missions/onboarding.js).
     onboarding: true,
@@ -106,7 +106,7 @@ export const MISSIONS = [
     ],
     start: { x: 6500, z: -8300, alt: 5000, heading: 58, speed: 260 },
     specials: ['hobs', 'rkt', 'lraam'], special: 'hobs',
-    timeLimit: 840, parTime: 360, rank: { S: 11400, A: 9800, B: 8000, C: 6000 },
+    timeLimit: 840, parTime: 360, rank: { S: 12300, A: 10500, B: 8500, C: 6000 },
     maxAttackers: 2,
     groups: {
       crest: { kind: 'base', kit: 'hollow', near: BATALIK, search: 800, snap: 'ridge', name: 'STRONGPOINT', tags: ['m2_cas'], isTarget: true, kitHealth: 170,
@@ -223,7 +223,7 @@ export const MISSIONS = [
     ],
     start: { x: -21500, z: 9400, alt: 5500, heading: 282, speed: 260 },
     specials: ['bomb', 'rkt', 'hobs'], special: 'bomb',
-    timeLimit: 960, parTime: 480, rank: { S: 19000, A: 16500, B: 13500, C: 10000 },
+    timeLimit: 960, parTime: 480, rank: { S: 20500, A: 17500, B: 14000, C: 10000 },
     maxAttackers: 2,
     groups: {
       summit: { kind: 'base', kit: 'marble', near: TIGER, search: 600, snap: 'ridge', name: 'SUMMIT BUNKER', tags: ['m4_primary'], isTarget: true, kitHealth: 260,
