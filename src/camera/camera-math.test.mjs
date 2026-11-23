@@ -143,3 +143,15 @@ test('action camera shots are deterministic and range-aware', () => {
   assert.ok(!far.has('enemy'));
   assert.ok(near.has('enemy') && near.has('shoulder') && near.has('side'));
 });
+
+test('springVec recovers from a non-finite target or state', async () => {
+  const THREE = await import('three');
+  const { springVec, newSpring } = await import('./views.js');
+  const s = newSpring();
+  springVec(s, new THREE.Vector3(1, 2, 3), 2, 0.9, 1 / 60);
+  springVec(s, new THREE.Vector3(NaN, 0, 0), 2, 0.9, 1 / 60);
+  assert.ok(Number.isFinite(s.x.x) && Number.isFinite(s.v.x), 'NaN target leaked into the spring');
+  s.x.set(NaN, 0, 0);
+  const out = springVec(s, new THREE.Vector3(4, 5, 6), 2, 0.9, 1 / 60);
+  assert.deepEqual([out.x, out.y, out.z], [4, 5, 6]);
+});

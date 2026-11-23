@@ -142,6 +142,41 @@ test('a traced road stays on the valley floor and follows it', () => {
   assert.ok(Math.abs(mid.y - height(mid.x, mid.z)) < 30);
 });
 
+test('a traced road keeps to the dry bank of a meandering river', () => {
+  // A valley along +x with a flat floodplain +-80 m wide and 0.5 walls; a river
+  // 40 m wide meanders +-50 m across the floor, carved 3 m into it, so the
+  // lowest ground (what the road used to follow) is the riverbed itself.
+  const rz = (x) => 50 * Math.sin(x / 600);
+  const edge = (x, z) => Math.abs(z - rz(x)) - 20;
+  const h = (x, z) => 3000 - x * 0.01 + Math.max(0, Math.abs(z) - 80) * 0.5 - (edge(x, z) < 0 ? 3 : 0);
+  // start in the middle of the river
+  const road = traceValleyRoad(0, 0, 90 * D, { length: 6000, height: h, edge });
+  assert.deepEqual(road, traceValleyRoad(0, 0, 90 * D, { length: 6000, height: h, edge }), 'deterministic');
+  const L = pathLength(road);
+  assert.ok(Math.abs(L - 6000) < 600, `length kept: ${L}`);
+  assert.ok(road[road.length - 1].x > 5000, 'general direction kept');
+  const o = {};
+  let minEdge = Infinity, near = 0, n = 0;
+  for (let d = 0; d <= L; d += 5) {
+    alongPath(road, d, o);
+    const e = edge(o.x, o.z);
+    minEdge = Math.min(minEdge, e);
+    if (e < 5) near++;
+    n++;
+    assert.ok(Math.abs(o.z) < 110, `stayed on the floor, not the wall: z ${o.z.toFixed(0)} at ${d} m`);
+  }
+  assert.ok(minEdge > 0, `never in the water (closest ${minEdge.toFixed(1)} m)`);
+  assert.ok(near / n < 0.05, `rarely at the waterline: ${(100 * near / n).toFixed(1)} %`);
+});
+
+test('sites avoid the water too', () => {
+  const edge = (x, z) => Math.abs(z) - 30; // a 60 m river along the flat floor
+  const flat = () => 3000;
+  for (const s of scatterSites(0, 0, 8, { seed: 3, height: flat, edge, rMin: 20, rMax: 120 })) assert.ok(edge(s.x, s.z) >= 6, `site at z ${s.z}`);
+  const v = findSite(0, 0, 300, 'valley', { height: (x, z) => 3000 + Math.abs(z) * 0.1, edge, step: 10 });
+  assert.ok(edge(v.x, v.z) > 0, 'valley site on the bank, not in the river');
+});
+
 test('scatterSites is deterministic and keeps units apart', () => {
   const a = scatterSites(0, 0, 6, { seed: 7, height });
   const b = scatterSites(0, 0, 6, { seed: 7, height });

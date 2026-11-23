@@ -22,6 +22,15 @@ export const DEFAULT_ATMOSPHERE = Object.freeze({
   mieScattering: 3.996e-3,
   mieAbsorption: 0.444e-3,
   mieH: 1.2,
+  /**
+   * [realism] Altitude (km ASL) the aerosol profile starts from. Hillaire's
+   * profile decays from sea level, so over this plateau (valley floors at
+   * 2.5-3.5 km) the boundary layer had all but gone: no haze band over the
+   * valleys, no forward-scattering glow toward a low sun. The aerosol rides
+   * on the ground, so it starts at the valley floors and is constant below.
+   * The column above is unchanged in shape (Hanle, 4.5 km: AOD ~0.04).
+   */
+  mieBase: 2.4,
   mieG: 0.8,
   /** Multiplies Mie density: haze. 1 = clean continental air. */
   haze: 1,
@@ -40,7 +49,7 @@ const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 /** Extinction and scattering at altitude h (km). Writes 3+3 values into out. */
 export function medium(a, h, out) {
   const dR = Math.exp(-h / a.rayleighH);
-  const dM = Math.exp(-h / a.mieH) * a.haze;
+  const dM = Math.exp(-Math.max(h - (a.mieBase ?? 0), 0) / a.mieH) * a.haze;
   const dO = Math.max(0, 1 - Math.abs(h - a.ozoneCentre) / a.ozoneHalfWidth);
   const mS = a.mieScattering * dM;
   const mE = (a.mieScattering + a.mieAbsorption) * dM;

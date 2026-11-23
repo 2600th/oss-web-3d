@@ -130,11 +130,122 @@ const ASSET_IDS = {
 };
 const DESTROYED_IDS = { aaa: 'aaa_gun_destroyed', flak: 'artillery_destroyed', sam: 'sam_launcher_destroyed', radar: 'radar_destroyed', truck: 'truck_destroyed', bunker: 'bunker_destroyed' };
 
+// ---- distance LOD ------------------------------------------------------------
+
+/** Animated nodes kept in step across LOD levels (plus each asset's catalog `pivots`). */
+const SYNC_NODES = ['turret', 'barrels', 'barrel', 'launcher', 'dish'];
+/** Field of view (deg, vertical) the catalog switch distances are meant for. */
+const LOD_REF_FOV = 60;
+const LOD_REF_TAN = Math.tan((LOD_REF_FOV * Math.PI) / 360);
+
+/**
+ * [ground polish] THREE.LOD for units, with three changes:
+ *  - The switch distance is in screen terms: it scales with the camera's field
+ *    of view, so the narrow recon optic or a cinematic close-up keeps LOD0 on a
+ *    unit that fills the frame, and a wide view swaps no earlier than intended.
+ *  - Only perspective cameras pick the level. The CSM cascade cameras
+ *    (orthographic) render whatever the main view chose, so a unit's shadow
+ *    never switches level on its own.
+ *  - Animated nodes (turret / barrels / launcher / dish, control surfaces) are
+ *    driven on LOD0 by the assets and AI systems; each update copies their
+ *    rotation onto the same-named nodes of the other levels, so a gun laid on
+ *    the player keeps its lay when it switches level.
+ */
+export class UnitLOD extends THREE.LOD {
+  constructor() {
+    super();
+    this.pairs = []; // [source node, [targets]]
+    this.isUnitLOD = true;
+  }
+
+  /** Pair the named nodes of LOD0 with their namesakes on the other levels. */
+  linkNodes(names) {
+    this.pairs.length = 0;
+    const [first, ...rest] = this.levels.map((l) => l.object);
+    if (!first) return this;
+    for (const name of new Set(names)) {
+      const src = first.getObjectByName(name);
+      if (!src) continue;
+      const dst = rest.map((o) => o.getObjectByName(name)).filter(Boolean);
+      if (dst.length) this.pairs.push([src, dst]);
+    }
+    return this;
+  }
+
+  /** Effective switch distance of the camera: metres, scaled to a 60 degree view. */
+  static viewDistance(lodPos, camera) {
+    const d = lodPos.distanceTo(camera.position) / (camera.zoom || 1);
+    const fov = camera.fov ?? LOD_REF_FOV;
+    return d * (Math.tan((fov * Math.PI) / 360) / LOD_REF_TAN);
+  }
+
+  update(camera) {
+    for (const [src, dst] of this.pairs) for (const o of dst) o.quaternion.copy(src.quaternion);
+    if (!camera.isPerspectiveCamera) return;
+    const levels = this.levels;
+    if (levels.length < 2) return;
+    _lodPos.setFromMatrixPosition(this.matrixWorld);
+    _camPos.setFromMatrixPosition(camera.matrixWorld);
+    const d = UnitLOD.viewDistance(_lodPos, { position: _camPos, zoom: camera.zoom, fov: camera.fov });
+    let cur = 0;
+    for (let i = 1; i < levels.length; i++) {
+      let at = levels[i].distance;
+      if (levels[i].object.visible) at -= at * levels[i].hysteresis;
+      if (d >= at) cur = i;
+      else break;
+    }
+    for (let i = 0; i < levels.length; i++) levels[i].object.visible = i === cur;
+    this._currentLevel = cur;
+  }
+}
+const _lodPos = new THREE.Vector3();
+const _camPos = new THREE.Vector3();
+
+// The catalogue, reached through a glob like combat/visuals.js does, so a
+// gameplay-only checkout without the assets area still builds.
+const catalogModules = import.meta.glob('../assets/catalog.js');
+let catalogPromise = null;
+function getCatalog() {
+  const load = Object.values(catalogModules)[0];
+  catalogPromise ??= load ? load().then((m) => m.CATALOG ?? {}).catch(() => ({})) : Promise.resolve({});
+  return catalogPromise;
+}
+
+/** LOD switch distance of a catalogue entry's level `i`, or null without one. */
+function lodDistance(entry, i) {
+  const l = entry?.lods?.[i];
+  return l && l.distance > 0 ? l.distance : null;
+}
+
+/**
+ * An asset as a UnitLOD (LOD0 + LOD1 at the catalog distance), or the plain
+ * LOD0 model when the asset has no second level. Null when LOD0 is missing.
+ * The LOD carries LOD0's userData (assetId, sockets) so code that reads the
+ * unit model's catalog id, bounds or sockets sees the same thing as before.
+ */
+async function loadUnitLOD(id, opts = {}) {
+  const entry = (await getCatalog())[id];
+  const dist = (opts.lod ?? 0) === 0 ? lodDistance(entry, 1) : null; // a pinned level stays pinned
+  const [near, far] = await Promise.all([
+    tryLoadModel(id, opts),
+    dist ? tryLoadModel(id, { ...opts, lod: 1 }) : null,
+  ]);
+  if (!near) return null;
+  if (!far || far.userData.lod !== 1) return near;
+  const lod = new UnitLOD();
+  lod.name = `${id}-lod`;
+  lod.hysteresis = 0.1;
+  lod.addLevel(near, 0, 0.1);
+  lod.addLevel(far, dist, 0.1);
+  lod.userData = { ...near.userData };
+  lod.linkNodes([...SYNC_NODES, ...(entry?.pivots ?? [])]);
+  return lod;
+}
 
 /** A fresh Object3D for a ground unit type. */
 export async function groundModel(type) {
   const id = ASSET_IDS[type];
-  const model = (id ? await tryLoadModel(id) : null) ?? (PLACEHOLDERS[type] ?? PLACEHOLDERS.bunker)();
+  const model = (id ? await loadUnitLOD(id) : null) ?? (PLACEHOLDERS[type] ?? PLACEHOLDERS.bunker)();
   model.userData.isUnitModel = true;
   if (!model.userData.spin) model.userData.spin = model.getObjectByName('dish') ?? null;
   return model;
@@ -153,7 +264,11 @@ export function wreck(object3d, type = null, flatten = 0.7) {
   const id = DESTROYED_IDS[type] ?? null;
   const base = ASSET_IDS[type] ?? (typeof type === 'string' && type.startsWith('base_') ? type : null);
   if (!id && !base) return blacken();
-  (id ? tryLoadModel(id) : tryLoadModel(base, { burned: true })).then((m) => {
+  // [ground polish] the wreck switches level at the same distance as the live
+  // unit did (both levels of the `_destroyed` asset, or of the burned recipe);
+  // a base kit stays on the level its live layout used (LOD1, see loadBaseKit)
+  const kit = !id && base.startsWith('base_');
+  (id ? loadUnitLOD(id) : loadUnitLOD(base, { burned: true, lod: kit ? 1 : 0 })).then((m) => {
     if (!m) return blacken();
     const keep = object3d.children.find((c) => c.userData.isUnitModel);
     if (keep) { m.position.copy(keep.position); object3d.remove(keep); }
@@ -235,11 +350,15 @@ export async function hostileFighterModel() {
     near.add(pilot);
   }
   if (far && far.userData.lod === 1) {
-    const lod = new THREE.LOD();
+    // [ground polish] UnitLOD: the shadow cascades no longer pick a level of
+    // their own, the switch follows the field of view, the 10 % hysteresis is
+    // real (it was set as an unused `lod.hysteresis` property) and LOD1's
+    // control surfaces follow LOD0's
+    const lod = new UnitLOD();
     lod.name = 'hostile-lod';
-    lod.hysteresis = 0.1;
-    lod.addLevel(near, 0);
-    lod.addLevel(far, HOSTILE_LOD1_DISTANCE);
+    lod.addLevel(near, 0, 0.1);
+    lod.addLevel(far, HOSTILE_LOD1_DISTANCE, 0.1);
+    lod.linkNodes((await getCatalog()).mig21_hostile?.pivots ?? []);
     g.add(lod);
   } else {
     g.add(near);

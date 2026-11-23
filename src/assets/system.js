@@ -19,7 +19,9 @@
  */
 import * as THREE from 'three/webgpu';
 import { smoothstep, positionWorld, normalWorld, mix, vec3, float, texture, triplanarTexture, attribute } from 'three/tsl';
-import { terrainHeight, detailHeight, demInset, DEM } from '../world/terrain/heightfield.js';
+import { terrainHeight, detailHeight, demInset, DEM, tileLayerHeight, streakAt } from '../world/terrain/heightfield.js';
+import { snowCover } from '../world/terrain/snow.js';
+import { DETAIL } from '../world/terrain/detail.js';
 import { configureAssets, loadModel } from './loadModel.js';
 import { PilotRig } from './pilot.js';
 import { CATALOG } from './catalog.js';
@@ -297,11 +299,15 @@ function demHeight(x, z) {
 
 /**
  * How much snow the terrain material puts on the ground at a site (0..1), from
- * the same inputs it uses (src/world/terrain/material.js, `snowLine` / `snowRaw`):
- * altitude against a 4760 m line moved by aspect (+-380 m), DEM curvature
- * (ridges shed, hollows hold: the 3-cell ring the `surf` texture stores) and the
- * sub-DEM detail height, then steep slopes shed it. Not reproduced: the macro
- * mask and fall-line streak terms, so it can be off near the line.
+ * the same inputs and the same constants (src/world/terrain/snow.js, shared
+ * with material.js): altitude against the line moved by aspect, DEM curvature
+ * (ridges shed, hollows hold: the 3-cell ring the `surf` layer stores), the
+ * 5.2 km macro mask, the sub-DEM detail height, the fall-line streak and the
+ * 97 m patch layer; then steep slopes shed it.
+ * [terrain-2] The macro (+-230 m), streak and patch terms were missing, so a
+ * berm could turn white where the ground around it was bare (or the reverse).
+ * Not reproduced: the shader's per-pixel layer-height and cavity terms (mean
+ * about zero) and its distance fade of the streak (irrelevant near a site).
  */
 export function siteSnow(heightAt, x, z) {
   const e = 4;
@@ -315,10 +321,14 @@ export function siteSnow(heightAt, x, z) {
     const ring = (demHeight(x + r, z) + demHeight(x - r, z) + demHeight(x, z + r) + demHeight(x, z - r)) * 0.25;
     curv = Math.max(-0.35, Math.min(0.35, (ring - demHeight(x, z)) / r));
   }
-  const hDet = detailHeight(x, z);
-  const line = 4760 + nz * 380 - Math.max(-0.12, Math.min(0.2, curv)) * 1500 + hDet * 55;
-  const raw = smooth01(-90, 90, heightAt(x, z) - line) * (1 - smooth01(0.8, 1.35, tan + hDet * 0.22)) - smooth01(0.45, 0.95, tan) * 0.3;
-  return smooth01(0.32, 0.68, raw);
+  const alt = heightAt(x, z);
+  return snowCover({
+    alt, tan, nz, curv,
+    hDet: detailHeight(x, z),
+    macro: tileLayerHeight(DETAIL.MASK, x, z),
+    streak: streakAt(x, alt, z, gx, gz),
+    patch: tileLayerHeight(DETAIL.SNOW_PATCH, x, z),
+  });
 }
 
 /**

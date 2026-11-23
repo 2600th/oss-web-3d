@@ -965,3 +965,165 @@ Hook-ups are in `src/flight/FlightModel.js` and `src/assets/system.js`
     read-only.
 - **Changed:** a dead or unparented vehicle's lamp sprites and beam are
   removed in `lateUpdate` on the frame it dies. Before, this was the 1 s scan.
+
+### Mission balance (Thunderhead, Black Road)
+All additive; nothing existing changed shape. Details in `docs/v2/evidence/polish-balance/README.md`.
+- Mission data: `spotting: { tags, truck: {lit, dark}, fighter: {lit, dark}, keep, hold, lose, scatter: {seconds, speed, spread}, darkLine, picture: {every, first, range} }` (`src/missions/spotting.js`).
+- Runner: action `{resupply: {health?, flares?, msl?, sp?}}`; condition `{zone: {x, z, r, below?}}`.
+- Event `player:resupply {health (0..1), flares, msl, sp}`.
+- Missions write `hidden` / `selectable` / `lockable` on watched trucks and fighters (existing combat flags), change `speed` and `spacing` of an ai `Convoy` while it scatters, and toggle the `visible` flag of a truck's `headlights` group. `HeadlightBeams` follows that flag, so a column that kills its lights loses its beams too.
+- AI: `CLOUD` (brain.js), `ROUGH_AIR` and `gunSettle` (Fighter.js), skill override `dark`.
+- Dev: `game.dev.tuning`, bot option `cloud`.
+
+### Realism polish: lighting, atmosphere, image pipeline (additive unless marked)
+
+Evidence, references and GPU costs: `docs/v2/evidence/polish-realism/README.md`.
+
+- **Quality (changed):** medium now has `ssao: true`. It gets a cheap AO variant
+  (half resolution, 8 samples, 160 m, layer-0 objects only: the terrain is
+  not an occluder in its prepass). Low is unchanged
+  (`ssao: false`, no rays, no sharpen).
+- **Post config (new keys in `src/fx/post/config.js`):**
+  - `ao`: `{ far, samples, scale, terrain }` or null. It is gated by the tier's
+    `ssao` flag. `?noao` turns it off.
+  - `godRays`: `{ samples, scale, gain }` or null (high and ultra only).
+    `?norays` turns them off.
+  - **(changed)** `sharpen` is now applied as written. PostFX used to hard-code
+    0.25. Medium is 0.4; high and ultra are 0.5. The filter is now CAS-style
+    adaptive, so the strength does not mean the same as before.
+- **Near-field AO (`post.ao`, new; WebGPU only, null elsewhere):** a
+  `NearFieldAO` from `src/fx/post/ambientOcclusion.js`.
+  - It runs a depth prepass and GTAO in its own pipeline before the main pass.
+  - It reaches lit materials through `post.scenePass.contextNode` (a
+    `context({ getAO })`), so it darkens **indirect** light only.
+  - It skips the terrain (`material.terrainLit`), transparent materials and
+    any material with `userData.noAO = true`.
+  - Each lit opaque material that receives it samples **one more texture**.
+    The terrain sits at 15 of 16 per-stage textures. That is why it is
+    excluded: adding a texture there invalidates the pipeline.
+  - If you add samplers to another material that is close to 16, set
+    `userData.noAO`.
+- **Crepuscular rays (new):** `src/fx/post/godRays.js` (`createGodRays`,
+  `godRayStrength`).
+  - New PostFX uniforms: `godRays` (per-frame strength), `godRayFloor`,
+    `godRayCap`, `godRayDecay` and `godRayAir`.
+  - `post.options.godRays`: null means auto (low sun near the frame); a
+    number forces that strength.
+- **Grade (changed look):**
+  - `post.look = { day, dim }` holds the ASC-CDL slope and power. `day` is
+    used in daylight; `dim` (the old softer look) in mesopic light. They are
+    blended by adapted scene luminance in `_updateExposure`, which writes
+    `uniforms.lookSlope` / `lookPower` every frame.
+  - The `lookSat` default is now 1.22.
+  - `src/timeofday/system.js` still scales `lookSat` / tints by its hint. It
+    does not touch slope or power.
+- **Lens flare (changed look):** in `src/fx/post/nodes.js`, ghosts are scaled
+  by `GHOST_GAIN` 0.35. The starburst, anamorphic streak and halo are about
+  2× weaker.
+- **Atmosphere (changed look):** new param `atmosphere.params.mieBase` (km,
+  default 2.4). Aerosol density is flat up to `mieBase`, then decays with the
+  Mie scale height. This applies in both the CPU LUT model (`model.js`) and
+  the GPU froxel integrate (`Atmosphere.js`). Valley-level haze and the sun
+  aureole now come from the aerosol at Ladakh valley floors (2.7–3.5 km)
+  instead of sea level.
+- **Cockpit material (changed look):** in `src/assets/materials.js`, the
+  INTERIOR branch sets `aoNode = 0.42` above the low tier. This is the
+  canopy-tub occlusion of sky and indirect light. Direct sun is unaffected.
+- **Debug views (new):** `post.debugView = 'ao' | 'rays'`.
+
+### Ground polish (seating, ground LOD, terrain shadow reach, WebGL2 thin casters, cloud pass guard, river roads)
+Details and evidence in `docs/v2/evidence/polish-ground/README.md`.
+- **`seatUnit` (`src/assets/unitRig.js`):**
+  - Returns `{ offset, pitch, roll, foundation, relief, hang, bury }`. `hang` and `bury` are new.
+  - `UNIT_RIGS` entries take `maxBury`, `sink` and `clear`, plus optional `maxHang` and `steepTilt`. `bury` is gone.
+  - Pitch and roll are exact for the `'YXZ'` order used in `assets/system.js`.
+- **Sites (`src/ai/sites.js`):**
+  - New exports: `padSlope(x, z, r, height)`, `bankPenalty(edge, bank)` and `ROAD_BANK` (25 m).
+  - `findSite` has a `'pad'` mode, and its `valley`, `flat` and `pad` modes pay `bankPenalty`. It takes an `edge` option (default `riverEdge`).
+  - `scatterSites` uses `'pad'`, rejects sites within 6 m of water, and takes `edge`.
+  - `traceValleyRoad` takes `edge`, `bank`, `spacing` (40) and `reach` (200). It returns a polyline at about 40 m spacing (was 160 m), laid on the dry bank beside the traced valley axis.
+- **Ground LOD (`src/ai/models.js`):**
+  - `UnitLOD` (a `THREE.LOD`) is new. `groundModel()` and `wreck()` return one when a `*_lod1.glb` exists.
+  - `userData` is copied from LOD0. Aim nodes are driven on LOD0 (`getObjectByName` finds them first) and copied to the other levels in `update()`.
+  - Shadow cameras keep the main view's level.
+  - The hostile fighter LOD is a `UnitLOD` too.
+- **Terrain shadow sweep:**
+  - The texture is R16F in metres, clamped to `[SHADOW_MIN, SHADOW_MAX]` = `[-64, 8000]`. Before, it was R8 with `byte * SHADOW_STEP + SHADOW_MIN`.
+  - New in `shadowConst.js`: `toHalfBits`, `fromHalfBits` and `encodeShadow`. `SHADOW_STEP` remains only as a deprecated export.
+  - `env.terrainShadow` (`makeShadowFn`) applies at every height. The 36-46 m fade is gone, so `SWEEP_REACH` in `world/shadows/shadowMath.js` is stale.
+  - The penumbra grows with height (`PENUMBRA_PER_M`).
+  - Terrain uniforms `shadowStep` and `shadowMin` were removed.
+- **Sun shadows (`src/world/shadows/SunShadows.js`):**
+  - The disc PCF used by WebGL2 and the low tier has a second, far slab. The controller exposes the `farSlab` and `farRadius` uniforms.
+  - With neither uniform set, the filter is unchanged.
+- **Clouds:**
+  - `renderPasses` and `update` always restore the renderer state.
+  - A failing cloud pass is reported once through `PassGuard` (`src/world/clouds/passGuard.js`, with `brokenRenderables(root)`) and then backs off. Before, it threw every frame.
+- **Terrain:** `Terrain.update` ignores a non-finite camera position and keeps the last layout.
+
+- **Models polish 3 (pilot realism, truck cab, thin shells):**
+  - `pilot.glb` / `pilot_lod1.glb` have a new child node `pilot_visor` under
+    `pilot_head` (so hiding `pilot_head` hides it). It is the only unbaked
+    part: an alpha-blended, clearcoat glass material
+    (`KHR_materials_clearcoat`, `KHR_materials_specular`). `pilot`,
+    `pilot_body`, `pilot_head` and `pilot_eye` are unchanged.
+  - `src/assets/materials.js` `upgradeGroundMaterials`: a GLB material that
+    arrives as a physical material with clearcoat stays a
+    `MeshPhysicalNodeMaterial` (clearcoat copied, no ground detail). All other
+    materials take the same path as before, including `shadowSide =
+    DoubleSide`.
+  - `tools/blender/kit.py` `Part.sheet(thick=...)`: the back skin now sits
+    behind the front skin (it used to sit in front, so the two skins faced
+    each other), and `rim=True` closes the edge so canvas, nets, wings and
+    flaps have a visible thickness edge-on. Every ground unit was rebuilt.
+  - `src/assets/catalog.test.mjs` budgets: `vehicle` 12000 (was 8000),
+    `pilot` 18000 (was 15000), as in the task brief.
+  - Evidence: `docs/v2/evidence/polish-models-3/README.md`.
+
+- **MiG skin pass (baked AO, panel-line normals, weathering, ORM):**
+  - `mig21.glb`, `mig21_hostile.glb`, `mig21_hostile_lod1.glb` and
+    `mig21-low.glb`: every opaque textured material now has one
+    `<part>_orm` texture bound as both `occlusionTexture` and
+    `metallicRoughnessTexture` (R = baked ambient occlusion, G = roughness,
+    B = metalness; factors are 1). It replaces the `KHR_materials_specular`
+    map, which is gone from those materials. Node names, pivots and the
+    texture count (33) are unchanged. The player airframe base colour and
+    normal map are 2048 px (were 1024).
+  - `src/assets/materials.js` `upgradeAircraftMaterials`: a source material
+    whose `aoMap` and `roughnessMap` are the same texture takes the authored
+    path: `aoNode`, `roughnessNode` and `metalnessNode` come from one fetch,
+    the material is a `MeshStandardNodeMaterial` (no clearcoat, paint
+    metalness 0). The cockpit interior's constant `aoNode = 0.42` is now the
+    baked occlusion times `COCKPIT_AO_GAIN`; the constant remains the
+    fallback for a GLB without the map. Materials without an ORM map (pitot,
+    decal cards, glass) take the old path unchanged.
+  - Built by `node tools/blender/build-mig-skin.mjs` (pure Node: it reads the
+    pre-pass GLBs from git and is idempotent), then
+    `node tools/blender/write-catalog.mjs`. A later script that edits the MiG
+    GLBs in place must run before it, or be folded into its `BASE` inputs.
+  - Test: `src/assets/migSkin.test.mjs`.
+  - Evidence: `docs/v2/evidence/polish-mig-skin/README.md`.
+
+### Terrain and sky polish 2: ground cover, close-range detail, terrain AO, clouds (additive unless marked)
+Details and evidence are in `docs/v2/evidence/polish-terrain-2/README.md`.
+
+- **Terrain textures (changed):**
+  - `tex.surf` and `tex.river` are gone. They are now layers of `tex.land`, a 3-layer RGBA8 `DataArrayTexture`.
+  - Index the layers with `LAND = { surf: 0, river: 1, ground: 2 }` from `terrain/textures.js` (`texture(tex.land, uv).depth(int(LAND.surf))`).
+  - The ground layer is R near-sky visibility, G debris fan, B moisture and A irrigable field. It is computed off-thread by `groundData.js` in `groundWorker.js`, then written by `fillGround(land, data)`. Until then it is `GROUND_NEUTRAL`.
+  - This frees two fragment sampler slots: the terrain uses 14 of 16.
+- **Terrain API (additive):**
+  - `terrain.groundReady` is a promise for when the ground layer is filled.
+  - `terrain.bindNearAO(ao)`: the terrain samples `post.ao` (GTAO) itself, using the same same-surface test as the scene-pass context. `world/system.js` calls it every frame.
+  - `terrain.setScorches(items, { life })` takes `items` of `{x, z, radius, age}`, up to `SCORCH_MAX` = 16, exported from `terrain/material.js`. It is ready for `vfx.scorches`.
+  - New uniforms: `aoTex`, `aoStrength`, `nearAO`, `scorch`, `scorchCount`.
+  - The detail amplitude moved to a vertex varying (`nodes.ampFrag`).
+- **Snow line (shared):**
+  - The constants and pure functions are in `terrain/snow.js`: `SNOW`, `snowLine(...)` and `snowCover(...)`. The shader and `assets/system.js` `siteSnow` both use them.
+  - `heightfield.js` adds `tileLayerHeight(L, x, z)` and `streakAt(x, y, z, gx, gz)`.
+  - `detail.js` adds `DETAIL.SNOW_PATCH`.
+- **`SWEEP_REACH` (changed):** in `world/shadows/shadowMath.js` it is now `{ full: SHADOW_MAX - 500, none: SHADOW_MAX }`, following the R16F sweep.
+- **Clouds (additive):**
+  - New uniforms on `clouds.u`: `silverG`, `phaseCap`, `glowSoft`, `glowHistory`, `anvilDir`, `anvilReach`, `windShear` and `rainShaft`.
+  - New render target `clouds.anvilTarget`. Its pass runs only while `storm > 0`.
+  - The erosion is now the Nubis remap. The silver lobe is HG(0.9), capped. Rain shafts are gated to wet cores.

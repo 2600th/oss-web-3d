@@ -18,6 +18,16 @@ const _v2 = new Vector3();
 const _tf = new Vector3();
 const _right = new Vector3();
 
+/**
+ * Rough air and the gun: seconds a pilot needs to settle the pipper between
+ * bursts, `(turbulence - from) * perUnit` (0 below moderate air, 1 s in a storm).
+ */
+export const ROUGH_AIR = { from: 0.5, perUnit: 2 };
+export const gunSettle = (turbulence) => Math.max(0, turbulence - ROUGH_AIR.from) * ROUGH_AIR.perUnit;
+
+/** States a `dark` pilot (skill override) flies without afterburner. */
+const DARK_MODES = new Set(['patrol', 'formation', 'intercept', 'bracket', 'pure', 'lead', 'lag']);
+
 const DEFAULT_HEALTH = { bandit: 60, veteran: 100, ace: 190 };
 const DEFAULT_SCORE = { bandit: 400, veteran: 650, ace: 2000 };
 
@@ -110,6 +120,13 @@ export class Fighter {
     s.lockedBy = this.entity.lockedByPlayer ?? 'none';
     s.alerted = ctx.alerted === true;
     s.visibility = ctx.conditions?.visibility ?? 1;
+    // The player is inside a solid cloud layer: an infra-red lock on him takes
+    // 2.5x as long (as the player's own lock on a clouded target does) and a
+    // gunner cannot see far enough into it to lay a burst. Only the target's
+    // cloud counts: hostile pilots hold in the layer by design, and letting
+    // their own cover blind them too left them unable to shoot at all (in a
+    // trial, not one missile in four sorties).
+    s.inCloud = ctx.world?.cloaked?.(t) === true;
     s.role = this.role;
     s.leaderAlive = !!this.leader?.entity.alive;
     s.leaderEngaged = !!this.leader && !['patrol', 'formation', 'intercept'].includes(this.leader.mem.mode);
@@ -167,7 +184,13 @@ export class Fighter {
         ctx.world.fireMissile({ weapon: k.weapon, owner: e, target: ctx.player, position: _v, direction: f.forward, velocity: f.velocity });
         ctx.events.emit('ai:fire', { entity: e, fighter: this });
       }
-      if (act.gun) m.gunBurst = 0.55;
+      // In violent air (a storm) the pipper will not sit still: after each
+      // burst the pilot has to settle it again before the next one.
+      if (act.gun) {
+        const settle = gunSettle(ctx.conditions?.turbulence ?? 0);
+        if (settle <= 0) m.gunBurst = 0.55; // smooth air: hold the trigger down
+        else if ((m.gunRest ?? 0) <= 0) { m.gunBurst = 0.55; m.gunRest = 0.55 + settle; }
+      }
     }
 
     // Steering (every frame, from the current state).
@@ -198,12 +221,16 @@ export class Fighter {
     // Never descend into the floor outside of a committed attack.
     const agl = f.position.y - terrainHeight(f.position.x, f.position.z);
     if (agl < 380 && _des.y < 0) { _des.normalize(); _des.y = Math.max(_des.y, 0.15); }
+    // A night fighter running dark keeps out of burner until he has to fight
+    // for his life (missions/spotting.js: a burner shows from far off).
+    if (k.dark && DARK_MODES.has(m.mode)) st.throttle = Math.min(st.throttle, 1);
     f.step(dt, _des, st.throttle, st.g);
     e.engine.throttle = Math.min(1, st.throttle);
     e.engine.reheat = st.throttle > 1 ? 1 : 0;
 
     // Gun.
     m.gunBurst = Math.max(0, m.gunBurst - dt);
+    m.gunRest = Math.max(0, (m.gunRest ?? 0) - dt);
     const firing = m.gunBurst > 0 && ctx.player.alive;
     if (firing !== this.gunFiring) {
       this.gunFiring = firing;

@@ -21,6 +21,13 @@ import { leadPoint } from '../combat/guidance.js';
 
 const D = Math.PI / 180;
 
+/**
+ * The target is inside a solid cloud layer:
+ *   lock      IR lock time multiplier (the player's own lock pays 2.5x too)
+ *   gunRange  m, how far a pilot can see into it to lay a gun burst
+ */
+export const CLOUD = { lock: 2.5, gunRange: 420 };
+
 /** Pilot skill. Airframe limits live in aiFlight.js AIRFRAMES. */
 export const SKILLS = {
   bandit: {
@@ -262,7 +269,8 @@ export function employ(s, m, k, dt, rng = Math.random) {
   const offensive = m.mode === 'pure' || m.mode === 'lead' || m.mode === 'intercept' || m.mode === 'bracket';
   const inParams = offensive && s.targetAlive && s.los && s.range < k.mslRange && s.range > k.mslMin && s.angleOff < k.mslCone;
   if (inParams && m.missiles > 0 && m.mslCooldown <= 0 && s.token) {
-    m.lock += dt;
+    // Infra-red seeker through cloud: slow (missions/conditions.js; the player's lock pays the same).
+    m.lock += s.inCloud ? dt / CLOUD.lock : dt; // every hostile air-to-air missile is a heat-seeker
     out.locking = true;
     if (m.lock >= k.lockTime) {
       m.lock = 0;
@@ -274,6 +282,7 @@ export function employ(s, m, k, dt, rng = Math.random) {
     m.lock = Math.max(0, m.lock - dt * 2);
   }
 
-  out.gun = s.targetAlive && s.los && s.range < k.gunRange && s.leadAngle < k.gunCone && m.mode !== 'evade' && m.mode !== 'recover';
+  const gunRange = s.inCloud ? Math.min(k.gunRange, CLOUD.gunRange) : k.gunRange;
+  out.gun = s.targetAlive && s.los && s.range < gunRange && s.leadAngle < k.gunCone && m.mode !== 'evade' && m.mode !== 'recover';
   return out;
 }

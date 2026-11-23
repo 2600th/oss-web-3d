@@ -68,6 +68,9 @@ export function createSystem(game) {
     },
     update(dt) {
       syncPost();
+      // [terrain-2] the terrain samples the post chain's GTAO itself (the
+      // scene-pass AO context skips it); post.ao can be rebuilt on a tier change
+      game.terrain?.bindNearAO?.(post.ao);
       timer += dt;
       if (timer > 1) { timer = 0; hookTerrain(); }
     },

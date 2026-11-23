@@ -1,12 +1,20 @@
 import * as THREE from 'three/webgpu';
-import { Fn, vec2, ivec2, float, texture, textureLoad, floor, clamp, mix, smoothstep, step } from 'three/tsl';
-import { SHADOW_MIN, SHADOW_STEP } from './shadowConst.js';
-import { SWEEP_REACH } from '../shadows/shadowMath.js';
-export { SHADOW_MIN, SHADOW_STEP };
-
+import { Fn, vec2, ivec2, float, texture, textureLoad, floor, clamp, mix, smoothstep, step, max } from 'three/tsl';
+import { SHADOW_MIN, SHADOW_MAX, SHADOW_STEP, encodeShadow } from './shadowConst.js';
+export { SHADOW_MIN, SHADOW_MAX, SHADOW_STEP };
 
 /**
- * Long-range terrain self-shadowing. Owns an R8 texture registered to the DEM
+ * [ground polish] How the sweep's shadow reaches receivers above the ground
+ * (`makeShadowFn`). The half-float sweep holds the boundary height exactly up
+ * to SHADOW_MAX, so there is no 36-46 m fade any more: the term applies at
+ * every height inside the DEM. The penumbra widens with height above the
+ * ground (`soft + agl * PENUMBRA_PER_M`), roughly the sun disc's spread over
+ * the distance back to the ridge that casts it.
+ */
+export const PENUMBRA_PER_M = 0.02;
+
+/**
+ * Long-range terrain self-shadowing. Owns an R16F texture registered to the DEM
  * and a worker that refills it whenever the sun has moved (see shadowWorker.js
  * for the algorithm). Until the first sweep lands the texture reads "lit".
  */
@@ -14,7 +22,9 @@ export class ShadowSweep {
   constructor(DEM) {
     const n = DEM.res;
     this.res = n;
-    this.texture = new THREE.DataTexture(new Uint8Array(n * n), n, n, THREE.RedFormat, THREE.UnsignedByteType);
+    // [ground polish] R16F metres (was R8, 0.25 m steps from -16 m: saturated at 47.75 m)
+    const lit = new Uint16Array(n * n).fill(encodeShadow(SHADOW_MIN));
+    this.texture = new THREE.DataTexture(lit, n, n, THREE.RedFormat, THREE.HalfFloatType);
     this.texture.magFilter = this.texture.minFilter = THREE.LinearFilter;
     this.texture.colorSpace = THREE.NoColorSpace;
     this.texture.needsUpdate = true;
@@ -32,11 +42,13 @@ export class ShadowSweep {
       this.worker.postMessage({ type: 'init', heights: copy, res: n, cellX: DEM.cellX, cellZ: DEM.cellZ }, [copy.buffer]);
       this.worker.onmessage = (e) => {
         if (e.data.type !== 'done') return;
-        this.texture.image.data.set(e.data.data);
+        // the worker transferred a fresh buffer: take it rather than copy 19 MB
+        this.texture.image.data = e.data.data;
         this.texture.needsUpdate = true;
         this._busy = false;
         this.sweeps++;
         this.lastMs = performance.now() - this._t0;
+        this.workerMs = e.data.ms; // the sweep itself, without queueing and transfer
       };
       this.worker.onerror = (e) => { console.warn('[terrain] shadow worker failed', e.message); this.worker = null; };
     } catch (e) {
@@ -60,9 +72,9 @@ export class ShadowSweep {
    * the ground, for receivers other than the terrain (units, props, a jet on a
    * low pass). The sweep stores, per DEM texel, how far the shadow boundary
    * lies above the DEM ground (S - h), so a point `agl` metres up is shadowed
-   * by (S - h) - agl metres. The 8-bit field saturates at 47.75 m, so the term
-   * fades out between SWEEP_REACH.full and .none metres above the ground
-   * (higher points keep the old behaviour: no terrain shadow).
+   * by (S - h) - agl metres. [ground polish] The field is half-float metres
+   * now (shadowConst.js), exact to SHADOW_MAX, so this applies at any height
+   * (it used to fade out at 36-46 m, where the 8-bit field saturated).
    * `heightTex` is the terrain's R32F DEM texture (bilinear by hand: float32
    * textures are not filterable everywhere).
    */
@@ -74,7 +86,7 @@ export class ShadowSweep {
     return Fn(([p]) => {
       const g = p.xz.sub(minXZ).div(cell).toVar();
       const inside = step(0, g.x).mul(step(0, g.y)).mul(step(g.x, n - 1)).mul(step(g.y, n - 1));
-      const sweep = texture(tex, g.add(0.5).div(n)).level(0).r.mul(255 * SHADOW_STEP).add(SHADOW_MIN);
+      const sweep = texture(tex, g.add(0.5).div(n)).level(0).r;
       const f = clamp(g, vec2(0), vec2(n - 1.0001));
       const i = floor(f);
       const k = f.sub(i);
@@ -86,9 +98,9 @@ export class ShadowSweep {
       const top = a.add(b.sub(a).mul(k.x));
       const h = top.add(c.add(d.sub(c).mul(k.x)).sub(top).mul(k.y));
       const agl = p.y.sub(h);
-      const lit = smoothstep(soft, -soft, sweep.sub(agl));
-      const reach = float(1).sub(smoothstep(SWEEP_REACH.full, SWEEP_REACH.none, agl)).mul(inside);
-      return mix(float(1), lit, reach);
+      const pen = max(agl, 0).mul(PENUMBRA_PER_M).add(soft);
+      const lit = smoothstep(pen, pen.negate(), sweep.sub(agl));
+      return mix(float(1), lit, inside);
     });
   }
 
