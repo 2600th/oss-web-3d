@@ -68,6 +68,23 @@ const SENSITIVITY = {
     verticalResponse: 1.15,
     rollLimit: 0.94,
   },
+  /**
+   * Standard-mode combat profile: the stick asks for a hard coordinated turn
+   * and a steep flight path, enough to fight with. With the airbrake held the
+   * `highG*` numbers blend in, so brake + turn is the genre's high-G turn.
+   */
+  combat: {
+    turnRate: 27 * Math.PI / 180,
+    turnLoad: 8.8,
+    highGTurnRate: 40 * Math.PI / 180,
+    highGTurnLoad: 13,
+    climb: 68 * Math.PI / 180,
+    climbLoad: 7.5,
+    response: 1.3,
+    verticalResponse: 1.2,
+    rollLimit: 1,
+    liftVector: true,
+  },
 };
 
 /** Proportional and rate gains on the bank loop. */
@@ -132,6 +149,7 @@ export class AssistController {
     if (!hasValidTelemetry(flight)) return setNeutral(control);
 
     const profile = SENSITIVITY[options?.sensitivity] ?? SENSITIVITY.normal;
+    if (profile.liftVector) return this._updateLiftVector(dt, intent, flight, profile, control);
     const reconScale = options?.reconActive === true ? 0.52 : 1;
     const turn = clampSigned(finite(intent?.turn));
     const climb = clampSigned(finite(intent?.climb));
@@ -220,7 +238,7 @@ export class AssistController {
 
     // Rudder follows turn intent at modest authority. The bank loop supplies
     // most of the turn; yaw only keeps the nose from skidding across it.
-    control.yaw = clampSigned(turn * 0.28 * profile.response * reconScale);
+    control.yaw = clampSigned((turn * 0.28 * profile.response + finite(intent?.yaw)) * reconScale);
 
     const brake = finite(intent?.brake);
     control.brake = clampUnit(brake);
@@ -248,6 +266,89 @@ export class AssistController {
       control.throttle = Math.max(scheduledThrottle, recoveryThrottle);
     }
 
+    return control;
+  }
+
+  /**
+   * Combat (Standard mode) law: command the *lift vector*.
+   *
+   * The stick asks for a horizontal turn rate and a flight-path angle. Those
+   * are turned into the acceleration the wing must produce — a horizontal
+   * part V·omega for the turn and a vertical part V·gammaDot + g for the
+   * path — and the aircraft is rolled so its lift points along that vector
+   * and pulled to its magnitude. Bank and load are therefore one decision,
+   * not two loops: left + down is an over-banked descending slice, left + up
+   * a climbing turn, and neither axis can starve the other (which is what the
+   * bank-then-hold-path law above does once the wing is near vertical).
+   *
+   *   bank = atan2(aH, aV)            may pass 90 degrees when aV < 0
+   *   q    = (L - g·cos(bank)·cos(gamma)) / V,   L = aH·sin(bank) + aV·cos(bank)
+   *
+   * L is the demanded acceleration projected on where the lift points *now*,
+   * so the pull builds as the roll arrives instead of ahead of it. With the
+   * airbrake held the turn-rate and load ceilings blend to the high-G values.
+   */
+  _updateLiftVector(dt, intent, flight, profile, control) {
+    const turn = clampSigned(finite(intent?.turn));
+    const climb = clampSigned(finite(intent?.climb));
+    const speed = Math.max(safeSpeed(flight), 60);
+    const highG = clampUnit(finite(intent?.brake));
+    // Near the stall the turn demand is unloaded so the assist never departs.
+    const protection = 0.3 + 0.7 * smoothstep(AIRCRAFT.stallSpeed * 1.05, AIRCRAFT.stallSpeed * 1.7, speed);
+    const rate = (profile.turnRate + (profile.highGTurnRate - profile.turnRate) * highG) * protection;
+    const loadCap = profile.turnLoad + (profile.highGTurnLoad - profile.turnLoad) * highG;
+
+    const path = Math.asin(clampSigned(finite(flight?.velocity?.y) / speed));
+    const stepSeconds = Number.isFinite(dt) && dt > 1e-4 ? Math.min(dt, 0.25) : 1 / 60;
+    if (this._hasPath) {
+      const measured = (path - this._previousPath) / stepSeconds;
+      this._pathRate += (measured - this._pathRate) * (1 - Math.exp(-PATH_RATE_SMOOTHING * stepSeconds));
+    } else {
+      this._pathRate = 0;
+      this._hasPath = true;
+    }
+    this._previousPath = path;
+
+    const climbAuthority = ((profile.climbLoad - 1) * GRAVITY) / speed;
+    const pathRate = clamp(PATH_P * (climb * profile.climb - path) - PATH_D * this._pathRate, -climbAuthority, climbAuthority);
+    const cosPath = Math.cos(path);
+    // Push no harder than -2.5 g: an assisted dive is a bunt, not a split-S.
+    const aV = Math.max(speed * pathRate + GRAVITY * cosPath, -2.5 * GRAVITY);
+    // Load limit: the vertical demand is kept, the turn gives way.
+    const maxA = loadCap * GRAVITY;
+    const aHMax = Math.sqrt(Math.max(maxA * maxA - aV * aV, 0));
+    const aH = clamp(-turn * rate * speed * cosPath, -aHMax, aHMax);
+
+    const bank = Math.atan2(finite(flight?.right?.y), finite(flight?.up?.y, 1));
+    // Bank along the lift vector. When the path demand is strongly downward
+    // that vector points below the horizon and the honest answer is "roll past
+    // ninety and pull" — fine in a hard turn (a descending slice), but for a
+    // small heading correction it would flip the aircraft on its back. So the
+    // bank is capped: level-turn bank for gentle turns (the dive is then flown
+    // as a bunt), opening up to ~115 degrees once the turn is a real one.
+    const absH = Math.abs(aH);
+    const bankCap = Math.max(
+      Math.atan2(absH, GRAVITY),
+      2.0 * smoothstep(1.2 * GRAVITY, 3.2 * GRAVITY, absH),
+    );
+    const natural = Math.atan2(aH, aV);
+    const targetBank = clamp(natural, -bankCap, bankCap);
+    let bankError = bank - targetBank;
+    if (bankError > Math.PI) bankError -= 2 * Math.PI;
+    else if (bankError < -Math.PI) bankError += 2 * Math.PI;
+    control.roll = clamp(
+      (bankError * ROLL_P + finite(flight?.rates?.z) * ROLL_D) * profile.response,
+      -profile.rollLimit,
+      profile.rollLimit,
+    );
+
+    const lift = aH * Math.sin(bank) + aV * Math.cos(bank);
+    const pitchRate = (lift - GRAVITY * Math.cos(bank) * cosPath) / speed;
+    const pitchAuthority = Math.max(finite(flight?.pitchAuthority, 1.05), 1e-3);
+    control.pitch = clampSigned((-pitchRate / pitchAuthority) * profile.verticalResponse);
+    control.yaw = clampSigned(turn * 0.25 + finite(intent?.yaw));
+    control.brake = highG;
+    control.throttle = clampUnit(finite(intent?.throttle, 0.8));
     return control;
   }
 
