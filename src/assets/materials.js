@@ -20,6 +20,10 @@ import { premultipliedGlassClass, setupGlass, setupLensGlass, bindGlassEnv } fro
  * roughness ~0.42 with the texture's own grime/panel-line contrast (texel vs. a
  * blurred mip of itself) pushing dirty areas rougher, a little metalness so the
  * sky reflection takes the paint colour, and on the player a thin clearcoat.
+ * [mig skin] The shipped MiG GLBs now carry a baked `<part>_orm` map (ambient
+ * occlusion, roughness, metalness) and a panel-line normal map
+ * (tools/blender/build-mig-skin.mjs); when it is present the heuristic above
+ * is replaced by the authored maps and there is no clearcoat.
  * The canopy is clear glass: almost transparent head-on, a Fresnel-weighted
  * reflection of `scene.environment` toward grazing angles.
  *
