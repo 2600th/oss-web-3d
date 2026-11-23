@@ -312,6 +312,8 @@ export class PostFX {
     else if (this.debugView === 'exposure') out = vec4(vec3(meter1.sample(uv0).x.div(meter1.sample(uv0).y.max(1e-4)).add(8).div(16)), 1);
     else if (this.debugView === 'flare') out = vec4(sunFlare(uv0, u.sunUV, aspect, select(vis.greaterThan(0), float(1), float(0.2)), u.flareRot), 1);
     else if (this.debugView === 'bloom' && bloomTex) out = vec4(bloomTex.rgb.mul(u.exposure), 1);
+    // 'passthrough': scene (+ stages) tone-mapped only — the A/B baseline for timing the chain
+    else if (this.debugView === 'passthrough') out = renderOutput(vec4(color.rgb.mul(u.exposure), 1), THREE.AgXToneMapping, THREE.SRGBColorSpace);
 
     this.pipeline.outputNode = out;
     this.pipeline.needsUpdate = true;
