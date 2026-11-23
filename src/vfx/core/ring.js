@@ -155,7 +155,7 @@ export function vapourAmount(gLoad, aoaRad, speed, altitude, humidity = 0.3) {
   const a = smoothstep(0.16 - 0.06 * h, 0.34 - 0.1 * h, Math.abs(aoaRad));
   const q = smoothstep(110, 240, speed);
   const dens = 1 - smoothstep(5500, 9500, altitude) * 0.6 * (1 - h);
-  const wet = smoothstep(0.7, 1, humidity) * 0.5;
+  const wet = smoothstep(0.86, 1, humidity) * 0.5;
   return saturate(Math.max(g, a * 0.8, wet) * q * dens);
 }
 

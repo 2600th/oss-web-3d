@@ -301,13 +301,13 @@ export class AircraftFx {
       for (let i = 0; i < n; i++) {
         randDir(_d);
         const ahead = rnd(0.1, 1) * reach;
-        const lat = rnd(2, 38);
+        const lat = 1.5 + 26 * Math.random() ** 1.5;
         _d.addScaledVector(_fwd, -_d.dot(_fwd)).normalize();
         const x = cam.x + _fwd.x * ahead + _d.x * lat, y = cam.y + _fwd.y * ahead + _d.y * lat, z = cam.z + _fwd.z * ahead + _d.z * lat;
         glow.spawn(type, x, y, z, wind.x, vy, wind.z, rnd(life0, life1), rnd(w0, w1), w0, r, g, b, 1, k * rnd(0.5, 1.1));
       }
     };
-    if (rain >= 0.03) fall(G.rain, Math.floor(900 * rain * v.cfg.rate * dt + Math.random()), -9, 0.5, 0.9, 0.03, 0.06, 0.8, 0.86, 1, 5 * lum * rain);
+    if (rain >= 0.03) fall(G.rain, Math.floor(2200 * rain * v.cfg.rate * dt + Math.random()), -9, 0.4, 0.8, 0.02, 0.045, 0.8, 0.86, 1, 16 * lum * rain);
     if (snow >= 0.03) fall(G.snow, Math.floor(650 * snow * v.cfg.rate * dt + Math.random()), -1.5, 0.5, 1.0, 0.035, 0.08, 0.95, 0.97, 1, 8 * lum * snow);
     const amt = Math.max(rain, snow * 0.6);
     const m = Math.floor(5 * amt * v.cfg.rate * dt + Math.random());

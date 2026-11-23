@@ -310,7 +310,9 @@ export class ParticlePool {
       .sub(vec2(dot(rel, u.camRight), dot(rel, u.camUp)).div(depth).mul(along));
     const sl = length(s2);
     const dir2 = select(sl.greaterThan(1e-3), s2.div(sl.max(1e-3)), vec2(1, 0));
-    const streak = sl.mul(stretch).min(c.size.mul(60).add(4));
+    // (never longer than a fraction of its distance: a streak a metre from
+    // the lens would otherwise be a line across the whole screen)
+    const streak = sl.mul(stretch).min(c.size.mul(60).add(4)).min(c.dist.mul(0.45));
     const angle = c.seed.mul(6.283);
     const rot = vec2(cos(angle), sin(angle));
     const d = select(stretch.greaterThan(0), dir2, rot);

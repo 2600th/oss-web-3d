@@ -23,7 +23,7 @@ export function defineTypes(lit, glow) {
     // burning fuel streaming off something fast: flame for a moment, then soot
     burn: lit.type({ drag: 4, gravity: 1.2, turbulence: 5, turbScale: 0.04, wind: 1, sizePow: 0.5, fadeIn: 0.03, fadeOut: 0.45, heatDecay: 13, soft: 0.4, spin: 0.6 }),
     // sooty burn smoke off a damaged aircraft or a falling wreck: rolls hard, swells fast
-    soot: lit.type({ drag: 3.2, gravity: 0.9, turbulence: 7, turbScale: 0.045, wind: 1, sizePow: 0.42, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 8, soft: 0.4, spin: 0.8 }),
+    soot: lit.type({ drag: 3.2, gravity: 0.9, turbulence: 7, turbScale: 0.045, wind: 1, sizePow: 0.42, fadeIn: 0.02, fadeOut: 0.5, heatDecay: 13, soft: 0.4, spin: 0.8 }),
     // the upper, older part of a smoke column: paler, huge, drifting downwind for a minute
     columnTop: lit.type({ drag: 0.4, gravity: 2.7, turbulence: 2.8, turbScale: 0.008, wind: 1, sizePow: 0.8, fadeIn: 0.1, fadeOut: 0.5, heatDecay: 2, soft: 0.6, spin: 0.15, thin: 0.15 }),
     // big explosions: the fireball stays hot longer and lifts into a mushroom
@@ -76,6 +76,6 @@ export const TRAILS = {
   // condensation rolling off the inner wing in a hard pull: wide, soft, gone in a moment
   sheet: { radius: 0.3, growth: 3, life: 0.11, color: [1, 1, 1], opacity: 0.17, wobble: 0.5, rise: 0, glow: 0, wind: 1, spacing: 3 },
   // dry-thrust exhaust: the faint smoky thread a turbojet leaves at military power
-  exhaust: { radius: 0.4, growth: 1.1, life: 3.2, color: [0.2, 0.19, 0.18], opacity: 0.32, wobble: 3, rise: 0.1, glow: 0, wind: 1, spacing: 5 },
+  exhaust: { radius: 0.3, growth: 1.0, life: 2.2, color: [0.3, 0.29, 0.28], opacity: 0.07, wobble: 3, rise: 0.1, glow: 0, wind: 1, spacing: 5 },
   contrail: { radius: 0.9, growth: 2.4, life: 36, color: [1, 1, 1], opacity: 1.5, wobble: 12, rise: 0, glow: 0, wind: 1, spacing: 18 },
 };

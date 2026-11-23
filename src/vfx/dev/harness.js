@@ -44,7 +44,7 @@ export function installHarness(vfx, game) {
     }
     if (!camSpec) return;
     const from = camSpec.from ? V(...camSpec.from) : rel(...camSpec.rel);
-    const to = camSpec.to ? V(...camSpec.to) : camSpec.look ? rel(...camSpec.look) : game.flight.position;
+    const to = camSpec.to ? V(...camSpec.to) : camSpec.look ? rel(...camSpec.look) : game.flight.position.clone();
     if (camSpec.follow?.position) to.copy(camSpec.follow.position);
     camera.position.copy(from);
     camera.up.set(0, 1, 0);
