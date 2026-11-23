@@ -7,6 +7,7 @@ import {
 import { generateShapeNoise, generateDetailNoise, generateCirrusNoise, perlinFbm, worley } from './noise.js';
 import { generateBlueNoise } from './blueNoise.js';
 import { DEM, terrainHeight } from '../terrain/heightfield.js';
+import { CLOUD_SHADOW_PATH } from '../shadows/shadowMath.js'; // [shadows]
 
 /**
  * Volumetric clouds.
@@ -382,18 +383,27 @@ export class Clouds {
 
   _shadowPass() {
     const u = this.u;
-    const N = this.low ? 8 : 12;
+    // [shadows] was 8 / 12 steps over the whole base-to-top crossing of the sun
+    // ray: at a low sun that is 30-50 km, 2.5-4 km a step, and the steps alias
+    // into straight bands across the sun azimuth. The ray is now capped at
+    // CLOUD_SHADOW_PATH (Unreal's "shadow tracing distance"; Hillaire 2016) and
+    // each texel starts at its own jittered offset (interleaved gradient noise on
+    // the world texel index: stable as the snapped map moves, no banding).
+    const N = this.low ? 10 : 16;
+    const texelM = SHADOW_EXTENT / this.shadowTarget.width;
     return Fn(() => {
       const st = uv();
       const q = st.sub(0.5).mul(SHADOW_EXTENT).add(u.shadowCentre).toVar();
       const sd = u.shadowSunDir;
       const tB = u.base.sub(SHADOW_REF_Y).div(sd.y).toVar();
-      const tT = u.top.sub(SHADOW_REF_Y).div(sd.y).toVar();
+      const tT = min(u.top.sub(SHADOW_REF_Y).div(sd.y), tB.add(CLOUD_SHADOW_PATH)).toVar();
       const ds = tT.sub(tB).div(N).toVar();
       const origin = vec3(q.x, SHADOW_REF_Y, q.y).toVar();
+      const cellIdx = floor(q.div(texelM));
+      const jitter = fract(fract(dot(cellIdx, vec2(0.06711056, 0.00583715))).mul(52.9829189)).toVar();
       const tau = float(0).toVar();
       Loop(N, ({ i }) => {
-        const t = tB.add(float(i).add(0.5).mul(ds));
+        const t = tB.add(float(i).add(jitter).mul(ds));
         const pos = origin.add(sd.mul(t)).toVar();
         const w = this._weatherAt(pos).toVar();
         tau.addAssign(this._density(pos, pos.y, w, false).mul(ds));

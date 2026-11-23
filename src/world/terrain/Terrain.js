@@ -47,7 +47,11 @@ const TIERS = {
   ultra: { N: 384, cell: 2, layerSize: 1024, aniso: 16, triplanar: true, octaveBlend: true, fineDetail: true, normalStrength: 1, detailNear: 24, streak: 1.1 },
 };
 const LEVELS = 11; // radius of the last level: 384 m * 2^10 = 393 km (camera far plane is 260 km)
-const SHADOW_CAST_CELL = 24; // levels with cells up to this size go into the sun shadow map
+// levels with cells up to this size go into the sun shadow map. [shadows] None
+// now: the camera-fitted cascades (src/world/shadows/SunShadows.js) carry only
+// objects; the terrain's own shadow is the heightfield sweep, which has no acne
+// at a grazing sun and was the only terrain shadow outside the old 120 m box anyway.
+const SHADOW_CAST_CELL = 0;
 // [engine perf] Render layers for the terrain blocks: the main camera sees
 // VIEW_LAYER, the sun's shadow camera SHADOW_LAYER (plus layer 0, where every
 // other object stays). A block is on one, both or neither (see update()).
@@ -95,6 +99,8 @@ export class Terrain {
     release(this.layers.albedo, () => this.layers.loaded);
     release(this.layers.nrm, () => this.layers.loaded);
     this.shadow = new ShadowSweep(DEM);
+    // [shadows] units and props near the ground take the same heightfield shadow
+    if (env) env.terrainShadow = this.shadow.makeShadowFn(this.textures.height, DEM);
 
     this.uniforms = {
       cam: uniform(new THREE.Vector3()),
