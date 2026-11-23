@@ -1,25 +1,20 @@
 import { inject } from '@vercel/analytics';
-import { Renderer } from './engine/Renderer.js';
 import { PostFX } from './engine/PostFX.js';
+import { installPerf } from './engine/Perf.js';
 import { Input } from './core/Input.js';
+import { createRenderer, showStatus, handleDeviceLoss } from './core/BootLifecycle.js';
 import { loadDEM } from './world/terrain/heightfield.js';
 import { Game } from './game/Game.js';
-
-function bootFailure(message) {
-  const el = document.getElementById('boot-status');
-  if (!el) return;
-  el.querySelector('[data-boot-message]').textContent = message;
-  el.hidden = false;
-  el.style.display = 'grid';
-}
 
 inject();
 
 async function start() {
-  const canvas = document.getElementById('viewport');
   const params = new URLSearchParams(location.search);
-  const r = new Renderer(canvas, { forceWebGL: params.has('webgl') });
-  await Promise.all([r.init(), loadDEM()]);
+  // Backend: WebGPU if an adapter exists, else WebGL2; overlay only if neither
+  // works (src/core/BootLifecycle.js). The DEM download runs in parallel.
+  const dem = loadDEM();
+  const { r } = await createRenderer(document.getElementById('viewport'), params);
+  await dem;
 
   const input = new Input();
   const post = new PostFX(r);
@@ -35,13 +30,18 @@ async function start() {
   }
   await game.init();
 
+  // GPU pass timing, adaptive resolution, ?perfhud (src/engine/Perf.js).
+  const perf = await installPerf({ r, game, params });
+
   let last = performance.now();
-  r.renderer.setAnimationLoop((now) => {
+  const loop = (now) => {
     const dt = Math.max(0, (now - last) / 1000);
     last = now;
-    game.update(dt);
-    post.render();
-  });
+    perf.frame(dt, () => game.update(dt), () => post.render());
+  };
+  perf.loop = loop; // tools/perf/bench.js pauses it for its queue-flush timing
+  r.renderer.setAnimationLoop(loop);
+  handleDeviceLoss(r, () => r.renderer.setAnimationLoop(null));
 
   if (import.meta.env.DEV) {
     window.__game = game;
@@ -52,5 +52,5 @@ async function start() {
 
 start().catch((e) => {
   console.error(e);
-  bootFailure('The experience could not start: ' + (e?.message ?? e));
+  showStatus('The experience could not start: ' + (e?.message ?? e));
 });
