@@ -23,7 +23,8 @@
   let spec = null;
   let timer = null;
   let grabRT = null;
-  const fov0 = window.__capFov0 ??= g.camera.fov;
+  // a fixed lens: the camera at load can be mid-cinematic (26-38 degrees)
+  const fov0 = 26;
   const RT = g.post.scenePass.renderTarget.constructor; // THREE.RenderTarget
   const UBYTE = 1009; // THREE.UnsignedByteType
   const realRandom = Math.random;
@@ -65,6 +66,7 @@
     at,
     async setup({ x = -14000, z = 4000, agl = 900, heading = 270, speed = 240, tod = 13, weather = null, preset = 'default' } = {}) {
       Math.random = realRandom;
+      window.__capInCloud = null;
       g.systems.combat.world.god = true;
       // effects only: no HUD or menus over the frame
       for (const id of ['ui', 'dev-overlay']) { const el = document.getElementById(id); if (el) el.style.visibility = 'hidden'; }

@@ -178,7 +178,7 @@
       await setup({ tod });
       T('flares');
       await C.step(t);
-      C.cam({ rel: [14, 8, 60], look: [0, -40, -40] });
+      C.cam({ rel: [70, 4, 225], look: [0, -18, 150] });
     },
     // ---- weather ----
     async lightning(tod = 21.5) {
@@ -195,7 +195,14 @@
     },
     async cloud(tod = 13) {
       await setup({ tod });
-      T('cloud', { amount: 1, duration: 30 });
+      // hold the camera 'in cloud' (the world system rewrites env.inCloud
+      // every frame from the cloud field; this pins it for the shot)
+      const env = g.env;
+      if (!Object.getOwnPropertyDescriptor(env, 'inCloud')?.get) {
+        Object.defineProperty(env, 'inCloud', { get: () => (window.__capInCloud ?? null) ?? env._inCloudReal ?? 0, set: (x) => { env._inCloudReal = x; }, configurable: true });
+      }
+      window.__capInCloud = 0.9;
+      setTimeout(() => { window.__capInCloud = null; }, 20000);
       C.cam({ rel: [0, 0.25, -2.6], look: [0, 0.1, -200] });
       await C.step(0.6);
     },
