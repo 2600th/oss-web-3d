@@ -828,3 +828,25 @@ Owner paths: `tools/blender/build_pilot.py`, `tools/blender/assets_ground.py` an
     curvature, detail height and slope shedding.
   - If `material.js` changes its `snowLine` / `snowRaw` formula, update
     `siteSnow` to match.
+- **Models polish 2 (pilot, truck, ground units, weapons; same nodes, pivots and sockets):**
+  - Every non-MiG GLB now ships base colour + tangent-space normal + ORM
+    (WebP, meshopt) and exports tangents. The normal map carries rounded
+    edges (Cycles bevel bake) and surface relief; LOD1 shares the LOD0 UVs.
+  - `src/assets/materials.js` `upgradeGroundMaterials` no longer discards a
+    GLB's normal map: when `material.normalMap` exists the detail bump is
+    layered on it (`bumpMap(height, scale, normalMap(...))`); models without
+    one behave as before.
+  - `pilot.glb` uses a baked material flagged `noDetail` and renders its own
+    normal map. `pilot` > `pilot_body` / `pilot_head` (pivot at the neck top)
+    and socket `pilot_eye` are unchanged.
+  - Truck family is rebuilt in `tools/blender/assets_truck.py`; shared props
+    (wheels, sandbags, stones, crates, drums) live in
+    `tools/blender/ground_parts.py`. Single mesh node `body`, socket
+    `exhaust` as before.
+  - Catalogue bounds are regenerated. Scattered rubble, guy lines and debris
+    are excluded from the bounds (`Asset.footprint`) so `seatUnit` foundations
+    keep the size of the structure.
+  - Pipeline options: `tools/blender/gltf-pipeline.mjs` `optimize()` takes
+    `normalTexture` / `ormTexture` sizes; `optimize-glb.mjs` takes `--ntex` /
+    `--otex`. `tools/blender/montage.mjs` tiles evidence screenshots.
+  - Evidence: `docs/v2/evidence/polish-models-2/README.md`.
