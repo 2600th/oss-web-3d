@@ -3,7 +3,7 @@ import { computeLayout } from './layout.js';
 import { projectPoint, boxClamp, gunLead } from './projection.js';
 import { worldToRadar, autoRange } from './radar.js';
 import { RadioQueue, Callouts } from './radio.js';
-import { resolveTheme, targetColor, isGroundKind } from './theme.js';
+import { resolveTheme, targetColor, isGround } from './theme.js';
 import {
   formatHeading, headingTickLabel, formatSpeed, formatAltitude, toKnots, toFeet,
   formatRange, formatScore, formatClock, formatG, formatAmmo, formatPercent, groupThousands,
@@ -225,6 +225,7 @@ export class Hud {
     this._drawHeadingTape(d, L, s);
     this._drawSpeedTape(d, L, s);
     this._drawAltTape(d, L, s);
+    this._drawRecon(d, L, s);
     this._drawWarnings(d, L, s);
     this._drawObjective(d, L, s);
     this._drawScore(d, L, s);
@@ -452,10 +453,11 @@ export class Hud {
   _resolveLockTarget(d) {
     const lk = d.lock;
     if (!lk || !lk.target || lk.state === 'none') return null;
-    if (lk.target.position) return lk.target;
-    const id = lk.target;
-    for (const t of d.targets) if (t.id === id) return t;
-    return null;
+    const lt = lk.target;
+    // Gameplay hands over the combat entity; prefer its `targets[]` entry
+    // (it carries isAce / isTarget / class for colour and shape).
+    for (const t of d.targets) if (t === lt || t.entity === lt || (t.id != null && t.id === lt)) return t;
+    return lt.position ? lt : null;
   }
 
   _drawTargets(d, game, L, s) {
@@ -470,7 +472,7 @@ export class Hud {
       const p = t.position;
       const dist = t.distance ?? (me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0);
       const color = targetColor(th, t);
-      const isLock = !!lockT && (lockT === t || lockT.id === t.id);
+      const isLock = !!lockT && (lockT === t || (lockT.id != null && lockT.id === t.id));
       this._project(p.x, p.y, p.z, _p, 6);
       // On touch, a marker under a button is as good as off-screen: hand it
       // to the edge arrows, which stay clear of the thumbs.
@@ -478,19 +480,40 @@ export class Hud {
       if (_p.onScreen && !hidden) on.push({ t, dist, color, isLock, x: _p.x, y: _p.y });
       else off.push({ t, dist, color, x: _p.x, y: _p.y });
     }
-    // Labels only where they help: the lock, priority and lead targets, and
-    // the two nearest others. Everything else is a bare shape.
-    on.sort((a, b) => a.dist - b.dist);
-    let free = 2;
+    // A dug-in position is a dozen entities within a few hundred metres: at
+    // range they would stack into one unreadable knot. Markers closer than
+    // `merge` px fold into the most important one, which carries a "+n".
+    // Order: lock, selected, lead, priority, then nearest.
+    on.sort((a, b) => rankOn(b) - rankOn(a) || a.dist - b.dist);
+    const merge = 30 * s;
+    const shown = [];
     for (const o of on) {
-      const keyed = o.isLock || o.t.isTarget || o.t.isAce;
+      const host = o.isLock ? null : shown.find((h) => Math.abs(h.x - o.x) < merge && Math.abs(h.y - o.y) < merge);
+      if (host) host.extra++;
+      else shown.push(Object.assign(o, { extra: 0 }));
+    }
+    // Labels only where they help: lock, selected, lead and priority targets,
+    // and the two nearest others. Everything else is a bare shape.
+    let free = 2;
+    for (const o of shown) {
+      const keyed = o.isLock || o.t.selected || o.t.isAce || o.t.isTarget;
       const labelled = keyed || free-- > 0;
-      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock, o.isLock ? lockState : 'none', labelled);
+      // the selected (next-to-lock) target draws heavy, like the lock
+      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock || !!o.t.selected, o.isLock ? lockState : 'none', labelled);
+      if (o.extra) this._text(`+${o.extra}`, o.x - 15 * s, o.y + 15 * s, o.color, 10 * s, { align: 'right', weight: 700 });
     }
     // Off-screen arrows: priority first, then nearest; capped.
     off.sort((a, b) => rankOff(b.t) - rankOff(a.t) || a.dist - b.dist);
-    const n = Math.min(off.length, L.touch ? 6 : 9);
-    for (let i = 0; i < n; i++) this._drawEdgeArrow(off[i], L, s);
+    const cap = L.touch ? 6 : 9;
+    const drawn = [];
+    for (let i = 0; i < off.length && drawn.length < cap; i++) this._drawEdgeArrow(off[i], L, s, drawn);
+    for (const h of drawn) {
+      if (!h.extra) continue;
+      // count sits on the inward side of the arrow, opposite the range
+      const ca = Math.cos(h.angle);
+      const sa = Math.sin(h.angle);
+      this._text(`+${h.extra}`, h.x - ca * 20 * s - sa * 13 * s, h.y - sa * 20 * s + ca * 13 * s, h.color, 10 * s, { weight: 700 });
+    }
     // Lock reticle draws over everything else
     if (lockT && lockState !== 'none') this._drawLock(d, lockT, L, s);
     this._drawGunPipper(d, game, L, s, lockT);
@@ -510,7 +533,7 @@ export class Hud {
     const th = this.theme;
     const near = Math.max(0, 1 - dist / 6000);
     const m = (11 + near * 5) * s;
-    const ground = isGroundKind(t.kind);
+    const ground = isGround(t);
     ctx.beginPath();
     if (t.team === 'friendly' || t.team === 'blue') {
       ctx.arc(x, y, m * 0.8, 0, Math.PI * 2);
@@ -576,7 +599,7 @@ export class Hud {
     }
   }
 
-  _drawEdgeArrow(o, L, s) {
+  _drawEdgeArrow(o, L, s, drawn = null) {
     const ctx = this.ctx;
     const ab = L.arrowBox;
     boxClamp(o.x, o.y, ab.cx, ab.cy, ab.hw, ab.hh, _e);
@@ -592,6 +615,15 @@ export class Hud {
       _e.x += (ab.cx - _e.x) * 0.06;
       _e.y += (ab.cy - _e.y) * 0.06;
     }
+    // Arrows that land on top of one another (a whole position below or
+    // behind) fold into the first, more important one, which counts them.
+    const near = 34 * s;
+    const host = drawn?.find((h) => Math.abs(h.x - _e.x) < near && Math.abs(h.y - _e.y) < near);
+    if (host) {
+      host.extra++;
+      return;
+    }
+    drawn?.push({ x: _e.x, y: _e.y, angle: _e.angle, color: o.color, extra: 0 });
     const big = o.t.isTarget || o.t.isAce;
     const a = _e.angle;
     const len = (big ? 15 : 11) * s;
@@ -674,11 +706,11 @@ export class Hud {
     if (!f?.position) return;
     const gunActive = d.weapon?.current === 'gun' || d.gun?.firing;
     // choose: locked air target, else nearest air target ahead within 1.6 km
-    let t = lockT && !isGroundKind(lockT.kind) ? lockT : null;
+    let t = lockT && !isGround(lockT) ? lockT : null;
     let best = 1600;
     if (!t) {
       for (const c of d.targets) {
-        if (c.alive === false || !c.position || isGroundKind(c.kind) || c.team === 'friendly') continue;
+        if (c.alive === false || !c.position || isGround(c) || c.team === 'friendly') continue;
         const p = c.position;
         const dist = Math.hypot(p.x - f.position.x, p.y - f.position.y, p.z - f.position.z);
         if (dist < best) {
@@ -692,13 +724,21 @@ export class Hud {
         }
       }
     }
-    if (!t) return;
-    const p = t.position;
+    // Gameplay's own aim point (gun.lead) wins: it knows the real ballistics.
+    const lead = d.gun?.lead;
+    if (!t && !lead) return;
+    const p = t?.position ?? lead;
     const dist = Math.hypot(p.x - f.position.x, p.y - f.position.y, p.z - f.position.z);
     if (dist > 1600 || (!gunActive && dist > 1200)) return;
-    const tr = this._tracks.get(t.id);
-    const tv = t.velocity ?? t.entity?.velocity ?? (tr ? { x: tr.vx, y: tr.vy, z: tr.vz } : null);
-    gunLead(f.position, f.velocity, p, tv, MUZZLE, _lead);
+    if (lead) {
+      _lead.x = lead.x;
+      _lead.y = lead.y;
+      _lead.z = lead.z;
+    } else {
+      const tr = this._tracks.get(t.id);
+      const tv = t.velocity ?? t.entity?.velocity ?? (tr ? { x: tr.vx, y: tr.vy, z: tr.vz } : null);
+      gunLead(f.position, f.velocity, p, tv, MUZZLE, _lead);
+    }
     this._project(_lead.x, _lead.y, _lead.z, _q);
     if (_q.behind) return;
     const ctx = this.ctx;
@@ -994,6 +1034,8 @@ export class Hud {
       const alert = threat === 'alert' || d.threats.some((m) => (m.distance ?? 9999) < 1500);
       items.push([alert ? 'MISSILE — BREAK' : 'MISSILE', th.warning, alert ? 6 : 2.5]);
     }
+    // a hostile radar has us locked but nothing is in the air yet
+    if (d.lockWarning && !items.some((i) => i[0].startsWith('MISSILE'))) items.push(['RADAR LOCK', th.caution, 2]);
     if (w === 'terrain') items.push(['TERRAIN', th.caution, 2]);
     if (w === 'stall') items.push(['STALL', th.caution, 2.5]);
     if (w === 'damage') items.push(['DAMAGE', th.caution, 1.5]);
@@ -1007,6 +1049,66 @@ export class Hud {
       const n = d.flares.count;
       if (n > 0) this._text(`FLARES  [${this.keyHint.flares}]`, L.warn.x, y - 6 * s, th.dim, 10 * s, { weight: 700 });
     }
+  }
+
+  /**
+   * Recon optic (gameplay's `recon`, held on the optic key): a framing gate
+   * that tightens as quality rises, a focus box on the post being framed and
+   * a hold bar that fills while the frame is good enough to keep.
+   */
+  _drawRecon(d, L, s) {
+    const r = d.recon;
+    if (!r) return;
+    const th = this.theme;
+    const ctx = this.ctx;
+    const tally = `${r.captured ?? 0}/${r.total ?? 0}`;
+    if (!r.active) {
+      // a quiet reminder while the optic is stowed
+      this._text(`RECON  ${tally}`, L.cx, L.cy + L.tapeH * 0.5 + 20 * s, th.dim, 11 * s, { weight: 700 });
+      return;
+    }
+    const q = Math.max(0, Math.min(1, r.quality ?? 0));
+    const good = q >= 0.42; // recon.js OPTIC.threshold
+    const col = good ? th.good : th.ink;
+    const gw = Math.min(L.fieldW * 0.34, 300 * s) * (1 - 0.25 * q);
+    const gh = gw * 0.62;
+    const c = 22 * s;
+    ctx.beginPath();
+    for (const [sx, sy] of CORNERS) {
+      const x = L.cx + sx * gw;
+      const y = L.cy + sy * gh;
+      ctx.moveTo(x, y - sy * c);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x - sx * c, y);
+    }
+    this._stroke(col, 2);
+    // centre cross
+    ctx.beginPath();
+    ctx.moveTo(L.cx - 10 * s, L.cy);
+    ctx.lineTo(L.cx + 10 * s, L.cy);
+    ctx.moveTo(L.cx, L.cy - 10 * s);
+    ctx.lineTo(L.cx, L.cy + 10 * s);
+    this._stroke(th.dim, 1.2);
+    // focus box on the framed post
+    const f = r.focus?.position;
+    if (f) {
+      this._project(f.x, f.y, f.z, _q);
+      if (!_q.behind) {
+        const b = 16 * s;
+        ctx.beginPath();
+        ctx.rect(_q.x - b, _q.y - b, b * 2, b * 2);
+        this._stroke(col, good ? 2.2 : 1.4);
+      }
+    }
+    // labels + hold bar under the gate
+    const y0 = L.cy + gh + 18 * s;
+    this._text(`RECON  ${tally}`, L.cx - gw, L.cy - gh - 12 * s, col, 12 * s, { align: 'left', weight: 700 });
+    this._text(good ? 'HOLD' : q > 0 ? 'FRAME IT' : 'NO SUBJECT', L.cx + gw, L.cy - gh - 12 * s, col, 12 * s, { align: 'right', weight: 700 });
+    const bw = gw * 2;
+    ctx.fillStyle = th.faint;
+    ctx.fillRect(L.cx - gw, y0, bw, 4 * s);
+    ctx.fillStyle = col;
+    ctx.fillRect(L.cx - gw, y0, bw * Math.max(0, Math.min(1, r.progress ?? 0)), 4 * s);
   }
 
   _warnPlate(label, x, y, color, s, on) {
@@ -1102,6 +1204,11 @@ export class Hud {
     if (w && w.current !== 'gun') {
       rows.push({ big: true, label: w.name ?? (cur === 'sp' ? 'SPECIAL' : 'MSL'), value: formatAmmo(w.ammo), ready: w.ready !== false, reload: w.reload });
     }
+    // the other pylon (missiles while the special is up, and vice versa)
+    for (const k of cur === 'gun' ? ['msl', 'sp'] : [cur === 'sp' ? 'msl' : 'sp']) {
+      const o = d.weapons?.[k];
+      if (o) rows.push({ label: o.short ?? o.name ?? k.toUpperCase(), value: formatAmmo(o.ammo) });
+    }
     if (gun) rows.push({ label: 'GUN', value: formatAmmo(gun.ammo), active: cur === 'gun', firing: gun.firing });
     if (fl) rows.push({ label: 'FLR', value: formatAmmo(fl.count), ready: fl.ready !== false, flare: true });
     // stack from bottom (or from top on landscape touch)
@@ -1175,7 +1282,7 @@ export class Hud {
     const dists = [];
     for (const t of d.targets) {
       if (t.alive === false || !t.position) continue;
-      if (t.isTarget || !isGroundKind(t.kind)) dists.push(Math.hypot(t.position.x - me.x, t.position.z - me.z));
+      if (t.isTarget || !isGround(t)) dists.push(Math.hypot(t.position.x - me.x, t.position.z - me.z));
     }
     const range = d.radar?.range ?? (this._radarRange = autoRange(dists, this._radarRange));
 
@@ -1231,7 +1338,7 @@ export class Hud {
       const col = targetColor(th, t);
       const sz = (t.isTarget || t.isAce ? 4.5 : 3.4) * s;
       ctx.beginPath();
-      if (isGroundKind(t.kind)) {
+      if (isGround(t)) {
         ctx.moveTo(px, py - sz);
         ctx.lineTo(px + sz, py);
         ctx.lineTo(px, py + sz);
@@ -1387,6 +1494,10 @@ export class Hud {
 }
 
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+function rankOn(o) {
+  return (o.isLock ? 8 : 0) + (o.t.selected ? 4 : 0) + (o.t.isAce ? 2 : 0) + (o.t.isTarget ? 1 : 0);
+}
 
 function rankOff(t) {
   return (t.isAce ? 2 : 0) + (t.isTarget ? 1 : 0);

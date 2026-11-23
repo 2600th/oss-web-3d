@@ -105,8 +105,11 @@ export class FlowAdapter {
   /** Mission list with UI-side records folded in (best score/rank). */
   get missions() {
     const list = this.real?.missions;
-    const src = Array.isArray(list) && list.length ? list : FALLBACK_MISSIONS;
-    return src.map((m) => {
+    if (Array.isArray(list) && list.length) {
+      const defs = this.game.systems?.missions?.list ?? [];
+      return list.map((m) => fromRealMission(m, defs.find((d) => d.id === m.id)));
+    }
+    return FALLBACK_MISSIONS.map((m) => {
       const rec = this.records[m.id] ?? {};
       return {
         ...m,
@@ -127,6 +130,43 @@ export class FlowAdapter {
   get currentMission() {
     const id = this.real?.mission?.id ?? this.real?.currentMission?.id ?? this.local.missionId;
     return id ? this.mission(id) : null;
+  }
+
+  // Menu steps the gameplay flow owns (title -> select -> briefing). Each
+  // returns true when the real flow took it; it then answers with ui:screen.
+  toTitle() {
+    if (this.real?.toTitle) return this.real.toTitle(), true;
+    return false;
+  }
+
+  openSelect() {
+    if (this.real?.openSelect) return this.real.openSelect(), true;
+    return false;
+  }
+
+  openBriefing(id) {
+    if (this.real?.selectMission) return this.real.selectMission(id) !== false;
+    return false;
+  }
+
+  /** Special-weapon choice on the briefing (real flow only). */
+  get special() {
+    return this.real?.special ?? null;
+  }
+
+  setSpecial(id) {
+    return this.real?.setSpecial?.(id) ?? false;
+  }
+
+  /** Leave the remembrance screen (real flow moves on to the debrief). */
+  confirm() {
+    if (this.real?.confirm) return this.real.confirm(), true;
+    return false;
+  }
+
+  /** Result of the last sortie as gameplay reported it, if any. */
+  get result() {
+    return this.real?.result ?? null;
   }
 
   startMission(id) {
@@ -220,6 +260,63 @@ export class FlowAdapter {
       });
     });
   }
+}
+
+/** Gameplay flow state -> UI screen id (where they differ). */
+export const FLOW_TO_UI = { select: 'missionSelect', remembrance: 'memorial' };
+export const toUiScreen = (state) => FLOW_TO_UI[state] ?? state;
+
+const titleCase = (s) => String(s).toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+const THREAT_FROM_UNIT = { aaa: 'AAA', flak: 'AAA', manpads: 'MANPADS', sam: 'SAM', radar: 'Radar' };
+
+/**
+ * Shape gameplay's mission meta (src/missions/system.js meta()) for the menus,
+ * reading the full definition (src/missions/data.js, via the missions system)
+ * for the briefing map: start point, group positions, threats. Read-only.
+ */
+export function fromRealMission(m, def) {
+  const markers = [];
+  const threats = new Set();
+  const groups = def?.groups ? Object.values(def.groups) : [];
+  for (const g of groups) {
+    if (g.kind === 'base' && g.near) {
+      const units = g.units ?? [];
+      for (const u of units) if (THREAT_FROM_UNIT[u.type]) threats.add(THREAT_FROM_UNIT[u.type]);
+      const air = units.some((u) => u.type === 'sam');
+      const guns = units.some((u) => u.type === 'aaa' || u.type === 'flak');
+      if (g.isTarget || units.some((u) => u.isTarget)) markers.push({ kind: 'objective', label: titleCase(g.name ?? 'Objective'), x: g.near.x, z: g.near.z });
+      else if (air) markers.push({ kind: 'sam', label: 'SAM', x: g.near.x, z: g.near.z, radius: 6000 });
+      else if (guns) markers.push({ kind: 'aaa', label: 'AAA', x: g.near.x, z: g.near.z, radius: 2500 });
+      else if (units.some((u) => u.type === 'post')) markers.push({ kind: 'objective', label: 'Recon post', x: g.near.x, z: g.near.z });
+    } else if (g.kind === 'convoy' && g.from) {
+      markers.push({ kind: 'objective', label: 'Convoy', x: g.from.x, z: g.from.z });
+    } else if (g.kind === 'fighters' && g.at) {
+      const lead = Array.isArray(g.aces) && g.aces.length;
+      threats.add(lead ? 'Flight lead' : 'Fighters');
+      markers.push({ kind: lead ? 'ace' : 'fighter', label: lead ? 'Flight lead' : 'Fighters', x: g.at.x, z: g.at.z });
+    }
+  }
+  if (def?.start) markers.push({ kind: 'start', label: 'Ingress', x: def.start.x, z: def.start.z });
+  const objs = markers.filter((k) => k.kind === 'objective');
+  const focus = objs.length ? objs : markers;
+  const cx = focus.length ? focus.reduce((a, k) => a + k.x, 0) / focus.length : undefined;
+  const cz = focus.length ? focus.reduce((a, k) => a + k.z, 0) / focus.length : undefined;
+  const best = m.best ?? null;
+  return {
+    ...m,
+    description: m.summary ?? '',
+    briefingText: Array.isArray(m.briefing) ? m.briefing : m.briefing ? [String(m.briefing)] : [],
+    location: { name: typeof m.location === 'string' ? m.location : m.location?.name ?? '', x: cx, z: cz },
+    markers,
+    threats: [...threats],
+    specials: Array.isArray(m.specials) ? m.specials : [],
+    unlocked: m.unlocked !== false,
+    lockedForReal: m.unlocked === false,
+    // src/missions/scoring.js recordResult: {completed, bestScore, bestRank, bestTime, attempts}
+    bestRank: best?.bestRank ?? best?.rank ?? null,
+    bestScore: best?.bestScore || best?.score || null,
+    completed: best?.completed ?? false,
+  };
 }
 
 function normaliseLocation(loc) {

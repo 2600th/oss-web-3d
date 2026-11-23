@@ -251,7 +251,7 @@ export class Nav {
       fire('right', () => this.adjust(1), true);
       fire('a', () => (this.current() ? this.activate() : this.move(1)), false);
       fire('b', () => this.back(), false);
-      fire('start', () => this.back(), false);
+      fire('start', () => (this.padStartOwned?.() ? null : this.back()), false);
     } else {
       for (const k of ['up', 'down', 'left', 'right', 'a', 'b']) this._pad.held[k] = state[k];
       fire('start', () => this.onStart?.(), false);

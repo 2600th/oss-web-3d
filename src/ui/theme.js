@@ -80,13 +80,22 @@ export function resolveTheme(settings = {}) {
 /** Colour for a target marker given its role. */
 export function targetColor(theme, t) {
   if (t.team === 'friendly' || t.team === 'blue' || t.team === 'player') return theme.friendly;
+  // recon posts and other neutral subjects: yours to photograph, not shoot
+  if (t.team === 'neutral') return theme.ink;
   if (t.isAce) return theme.ace;
   if (t.isTarget) return theme.priority;
-  if (isGroundKind(t.kind)) return theme.ground;
+  if (isGround(t)) return theme.ground;
   return theme.hostile;
 }
 
-const AIR_KINDS = new Set(['air', 'aircraft', 'fighter', 'bomber', 'helo', 'helicopter', 'jet', 'transport']);
+/** Ground or air: gameplay's `class` when present, else inferred from `kind`. */
+export function isGround(t) {
+  if (t.class === 'ground') return true;
+  if (t.class === 'air') return false;
+  return isGroundKind(t.kind);
+}
+
+const AIR_KINDS = new Set(['air', 'aircraft', 'fighter', 'ace', 'bomber', 'helo', 'helicopter', 'jet', 'transport']);
 
 export function isGroundKind(kind) {
   if (!kind) return false;

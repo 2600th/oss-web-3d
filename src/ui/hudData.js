@@ -55,10 +55,16 @@ export function normalizeHud(raw = {}, flight = null, out = {}) {
   out.hasScore = typeof raw.score === 'number';
   out.time = num(raw.time, null);
   out.timeLimit = num(raw.timeLimit, null);
+  // gameplay also reports `timeRemaining`; prefer it for the countdown
+  if (out.timeLimit === null && typeof raw.timeRemaining === 'number' && out.time !== null) out.timeLimit = out.time + raw.timeRemaining;
   out.weapon = raw.weapon ?? null;
+  out.weapons = raw.weapons ?? null; // {msl, sp} loadout summary
   out.gun = raw.gun ?? null;
   out.flares = raw.flares ?? null;
   out.lock = raw.lock ?? null;
+  out.lockWarning = raw.lockWarning === true; // a hostile radar is locking us
+  out.recon = raw.recon ?? null;
+  out.target = raw.target ?? null;
   out.targets = Array.isArray(raw.targets) ? raw.targets : EMPTY;
   out.threats = Array.isArray(raw.threats) ? raw.threats : EMPTY;
   out.warning = raw.warning ?? deriveWarning(out, flight);

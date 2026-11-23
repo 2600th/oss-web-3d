@@ -161,10 +161,13 @@ export function buildDebrief(ui) {
       root.classList.toggle('is-fail', !ok);
       h.textContent = ok ? 'Mission complete' : 'Sortie ended';
       line.textContent = ok
-        ? `${m?.name ?? 'Sortie'} · objectives secured`
-        : r.reason === 'time'
-          ? 'Mission incomplete: the window closed. Regroup and fly again.'
-          : 'Mission incomplete. Regroup and fly again.';
+        ? `${r.name ?? m?.name ?? 'Sortie'} · objectives secured`
+        : r.reasonText
+          ? // a lost pilot gets the plain sentence, no call to action after it
+            r.reason === 'crashed' || r.reason === 'shot_down' ? r.reasonText : `${r.reasonText} Regroup and fly again.`
+          : r.reason === 'time'
+            ? 'Mission incomplete: the window closed. Regroup and fly again.'
+            : 'Mission incomplete. Regroup and fly again.';
       stamp.hidden = !ok || !r.rank;
       stampLetter.textContent = r.rank ?? '';
       stamp.setAttribute('aria-label', r.rank ? `Rank ${r.rank}` : '');
@@ -188,10 +191,17 @@ export function buildMemorial(ui) {
   const root = el('section', 'scr scr-memorial');
   root.setAttribute('aria-label', 'In remembrance');
   const card = el('div', 'memorial', root);
-  el('p', '', card, 'Inspired by the courage and sacrifice of the Indian Armed Forces during the Kargil War.');
-  el('p', '', card,
-    'With special respect to the Indian Air Force personnel who flew Operation Safed Sagar in support of soldiers fighting on the ground.');
-  el('p', 'memorial-last', card, 'In remembrance of all those who made the supreme sacrifice in service of India.');
+  const body = el('div', 'memorial-body', card);
+  const DEDICATION = [
+    'Inspired by the courage and sacrifice of the Indian Armed Forces during the Kargil War.',
+    'With special respect to the Indian Air Force personnel who flew Operation Safed Sagar in support of soldiers fighting on the ground.',
+    'In remembrance of all those who made the supreme sacrifice in service of India.',
+  ];
+  const fill = (lines) => {
+    body.textContent = '';
+    lines.forEach((t, i) => el('p', i === lines.length - 1 ? 'memorial-last' : '', body, t));
+  };
+  fill(DEDICATION);
   const jai = el('p', 'jaihind', card, 'Jai Hind. ');
   jai.append(flag());
   const cont = el('button', 'btn btn-quiet memorial-continue', card, 'Continue');
@@ -200,7 +210,11 @@ export function buildMemorial(ui) {
   return {
     id: 'memorial',
     root,
-    onShow() {
+    onShow(arg) {
+      // After a sortie gameplay sends its own words (src/missions/cast.js
+      // REMEMBRANCE); otherwise the standing dedication. Never a score here.
+      const lines = arg?.remembrance?.lines;
+      fill(Array.isArray(lines) && lines.length ? lines : DEDICATION);
       ui.settings.set('memorialSeen', true);
       return cont;
     },

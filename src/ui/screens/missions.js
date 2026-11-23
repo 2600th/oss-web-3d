@@ -133,7 +133,14 @@ export function buildBriefing(ui) {
   const h = el('h2', 'brief-title', text);
   h.id = 'brief-h';
   const loc = el('p', 'brief-loc', text);
-  const desc = el('p', 'brief-desc', text);
+  const desc = el('div', 'brief-desc', text);
+  // Special weapon for the second pylon (gameplay: flow.setSpecial).
+  const spH = el('h3', 'brief-sub', text, 'Special weapon');
+  const spRow = el('div', 'brief-specials', text);
+  spRow.setAttribute('role', 'radiogroup');
+  spRow.setAttribute('aria-label', 'Special weapon');
+  spRow.dataset.navRow = '';
+  const spNote = el('p', 'brief-sp-note', text);
   const objH = el('h3', 'brief-sub', text, 'Objectives');
   const objList = el('ul', 'brief-objs', text);
   el('h3', 'brief-sub', text, 'Threats');
@@ -159,12 +166,41 @@ export function buildBriefing(ui) {
       mission = ui.flow.mission(arg?.id ?? ui.briefingId) ?? ui.flow.missions[0];
       if (!mission) return;
       h.textContent = mission.name;
-      loc.textContent = formatPlace(mission.location);
-      desc.textContent = mission.description ?? '';
+      const limit = Number.isFinite(mission.timeLimit) ? `  ·  ${Math.round(mission.timeLimit / 60)} min window` : '';
+      loc.textContent = formatPlace(mission.location) + limit;
+      desc.textContent = '';
+      const paras = mission.briefingText?.length ? mission.briefingText : [mission.description ?? ''];
+      for (const p of paras) el('p', '', desc, p);
+      // specials
+      const specials = mission.specials ?? [];
+      spH.hidden = spRow.hidden = spNote.hidden = !specials.length;
+      spRow.textContent = '';
+      const current = () => ui.flow.special ?? arg?.special ?? mission.special;
+      const paint = () => {
+        const cur = current();
+        for (const b of spRow.children) b.setAttribute('aria-checked', String(b.dataset.id === cur));
+        const s = specials.find((x) => x.id === cur);
+        spNote.textContent = s ? `${s.description ?? ''}${Number.isFinite(s.ammo) ? `  ·  ${s.ammo} rounds` : ''}` : '';
+      };
+      for (const s of specials) {
+        const b = el('button', 'chip', spRow, s.name ?? s.short ?? s.id);
+        b.type = 'button';
+        b.setAttribute('role', 'radio');
+        b.dataset.id = s.id;
+        b.dataset.nav = '';
+        b.addEventListener('click', () => {
+          ui.flow.setSpecial(s.id);
+          paint();
+        });
+      }
+      paint();
+      // objectives: one line per kind ("Strongpoint ×3"), not a repeated list
       const objs = (mission.markers ?? []).filter((m) => m.kind === 'objective');
       objH.hidden = objList.hidden = !objs.length;
       objList.textContent = '';
-      for (const o of objs) el('li', '', objList, o.label);
+      const counts = new Map();
+      for (const o of objs) counts.set(o.label, (counts.get(o.label) ?? 0) + 1);
+      for (const [label, n] of counts) el('li', '', objList, n > 1 ? `${label} ×${n}` : label);
       thrList.textContent = '';
       for (const t of mission.threats) {
         el('dt', '', thrList, t);

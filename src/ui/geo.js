@@ -26,8 +26,10 @@ export const PLACES = [
   { name: 'Drass', lon: 75.76, lat: 34.43, kind: 'town' },
   { name: 'Kargil', lon: 76.13, lat: 34.56, kind: 'town' },
   { name: 'Batalik', lon: 76.36, lat: 34.62, kind: 'town' },
-  { name: 'Tololing', lon: 75.81, lat: 34.42, kind: 'peak' },
-  { name: 'Tiger Hill', lon: 75.73, lat: 34.47, kind: 'peak' },
+  // the two summits use the DEM picks the missions are built on
+  // (src/missions/data.js TOLOLING / TIGER), so map labels and objectives agree
+  { name: 'Tololing', lon: 75.7396, lat: 34.4955, kind: 'peak' },
+  { name: 'Tiger Hill', lon: 75.6654, lat: 34.4832, kind: 'peak' },
   { name: 'Mushkoh', lon: 75.66, lat: 34.39, kind: 'valley' },
   { name: 'Indus', lon: 76.3, lat: 34.7, kind: 'river' },
   { name: 'Suru', lon: 76.06, lat: 34.36, kind: 'river' },

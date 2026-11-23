@@ -1,4 +1,4 @@
-import { DEFAULT_BINDINGS } from '../ui/bindings.js';
+import { DEFAULT_BINDINGS, UI_TO_INPUT } from '../ui/bindings.js';
 
 /**
  * Touch flying and fighting.
@@ -32,10 +32,11 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 export function touchAction(input, action, down) {
   if (!input) return;
   if (typeof input.setAction === 'function') {
-    input.setAction(action, down);
+    // held state; Input queues the press edge itself on the down transition
+    input.setAction(UI_TO_INPUT[action] ?? action, down);
     return;
   }
-  const b = (input.bindings ?? DEFAULT_BINDINGS).find((x) => x.action === action) ?? DEFAULT_BINDINGS.find((x) => x.action === action);
+  const b = DEFAULT_BINDINGS.find((x) => x.action === action);
   const code = b?.code;
   if (!code) return;
   if (down) {
@@ -53,6 +54,8 @@ const BUTTONS = [
   { id: 'flares', label: 'FLR', aria: 'Release flares' },
   { id: 'weapon', label: 'WPN', aria: 'Switch weapon' },
   { id: 'target', label: 'TGT', aria: 'Next target' },
+  // recon sorties only (shown while game.hud.recon exists): hold to look down the optic
+  { id: 'optic', label: 'EYE', hold: true, aria: 'Recon optic, hold' },
 ];
 
 export class TouchControls {
@@ -101,6 +104,7 @@ export class TouchControls {
       btn.setAttribute('aria-label', b.aria);
       btn.dataset.action = b.id;
       if (b.hold) btn.dataset.hold = '1';
+      if (b.id === 'optic') btn.hidden = true;
       this.buttons[b.id] = btn;
     }
     this.top = mk('div', 'tz-top', layer);
@@ -218,9 +222,11 @@ export class TouchControls {
       this.stickZone.style.setProperty('--ny', `${dy}px`);
       const sens = this.settings?.sensitivity ?? 1;
       const shape = (v) => Math.sign(v) * Math.pow(Math.abs(v), 1.35); // fine control near centre
-      let pitch = clamp(shape(dy / R) * sens, -1, 1);
+      // Input's convention: +1 = nose down. Drag down = pull back = nose up.
+      // Invert is Input's own `invertPitch` (set from settings by the UI), so
+      // it is applied once, for keys, pad and touch alike.
+      const pitch = clamp(-shape(dy / R) * sens, -1, 1);
       const roll = clamp(shape(dx / R) * sens, -1, 1);
-      if (this.settings?.invertY) pitch = -pitch;
       this.input?.setTouchAxes?.(pitch, roll);
     }, opt);
     const endStick = (e) => {
@@ -314,6 +320,9 @@ export class TouchControls {
     this.buttons.missile.classList.toggle('cooling', !!w && w.ready === false);
     const lock = hud.lock?.state;
     this.buttons.missile.classList.toggle('locked', lock === 'locked');
+    const recon = !!hud.recon;
+    if (this.buttons.optic.hidden === recon) this.buttons.optic.hidden = !recon;
+    this.buttons.optic.classList.toggle('down', !!hud.recon?.active);
     if (this.mode === 'expert' && this._throttleId === null && Number.isFinite(hud.throttle)) {
       this.throttleFill.style.transform = `scaleY(${clamp(hud.throttle, 0, 1)})`;
     }

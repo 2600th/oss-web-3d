@@ -3,7 +3,8 @@ import { Settings, isTouchDevice } from '../core/Settings.js';
 import { TouchControls } from '../core/TouchControls.js';
 import { Hud } from './Hud.js';
 import { Nav, el } from './dom.js';
-import { FlowAdapter } from './flow.js';
+import { FlowAdapter, toUiScreen } from './flow.js';
+import { isGround } from './theme.js';
 import { getRelief } from './relief.js';
 import { keyFor } from './bindings.js';
 import { buildTitle, buildPause, buildDebrief, buildMemorial, buildCredits, buildLoading } from './screens/screens.js';
@@ -61,7 +62,11 @@ export class UI {
     // activation is a real click, which audio already hears.
     this.nav.onSound = (name) => game.events.emit('ui:sound', { name });
     if (this.touch) this.nav.modality = 'touch';
+    // Gameplay's flow owns the pause key and pad Menu button (Input action
+    // `pause`); handling them here as well would pause and resume in one press.
+    this.nav.padStartOwned = () => !!this.flow.real && (this.screen === 'pause' || this.screen === 'sortie');
     this.nav.onStart = () => {
+      if (this.flow.real) return false;
       if (this.screen === 'sortie') {
         this.flow.pause();
         return true;
@@ -114,7 +119,10 @@ export class UI {
     if ('requestIdleCallback' in window) requestIdleCallback(bake, { timeout: 800 });
     else setTimeout(bake, 50);
     this.hud.keyHint.flares = keyFor(this.game.input, 'flares') || 'G';
-    if (this.game.input) this.game.input.enabled = false;
+    // With gameplay's flow, it gates input itself (input.capture); the UI owns
+    // menu navigation, so the flow's keyboard fallback goes off.
+    if (this.flow.real) this.game.flow.fallbackKeys = false;
+    else if (this.game.input) this.game.input.enabled = false;
     const mode = this.params.get('hudmock');
     if (import.meta.env.DEV && mode !== null) {
       const { HudMock } = await import('./mock.js');
@@ -134,6 +142,13 @@ export class UI {
     }
     if (jump) {
       this._devJump(jump);
+      return;
+    }
+    // Gameplay's flow may already be past the title (?mission=m1): follow it.
+    const fs = this.flow.real?.state;
+    if (fs && fs !== 'boot' && fs !== 'title') {
+      if (fs === 'debrief' && this.flow.result) this.lastResult = resultFromFlow(this.flow.result, null);
+      this.show(toUiScreen(fs), { mission: this.flow.real.mission });
       return;
     }
     this.show(this.settings.memorialSeen ? 'title' : 'memorial');
@@ -194,6 +209,9 @@ export class UI {
   /** Navigate to a menu screen (pushes history for Back). */
   go(id, arg) {
     if (this.screen && this.screen !== id) this.history.push(this.screen);
+    // Title, sorties and briefing are gameplay flow states: ask the flow, and
+    // its ui:screen answer shows the screen (handler below).
+    if (this._flowGo(id, arg)) return;
     this.show(id, arg);
     this.game.events.emit('ui:screen', { screen: id, source: 'ui' });
   }
@@ -201,11 +219,26 @@ export class UI {
   back() {
     const prev = this.history.pop();
     if (prev && prev !== 'boot' && prev !== 'loading') {
+      if (this._flowGo(prev, prev === 'briefing' ? { id: this.briefingId } : undefined)) return;
       this.show(prev);
       this.game.events.emit('ui:screen', { screen: prev, source: 'ui' });
     } else if (this.screen !== 'title') {
+      if (this._flowGo('title')) return;
       this.show('title');
     }
+  }
+
+  /** Route a flow-owned screen through game.flow; false if the UI should show it. */
+  _flowGo(id, arg) {
+    const f = this.flow;
+    if (!f.real) return false;
+    const want = { title: 'title', missionSelect: 'select', briefing: 'briefing' }[id];
+    if (!want) return false;
+    if (f.state === want && want !== 'briefing') return false; // already there (e.g. back from settings)
+    if (id === 'title') return f.toTitle();
+    if (id === 'missionSelect') return f.openSelect();
+    const mid = arg?.id ?? this.briefingId;
+    return mid ? f.openBriefing(mid) : false;
   }
 
   show(id, arg) {
@@ -255,6 +288,9 @@ export class UI {
   }
 
   afterDebrief() {
+    // Gameplay's flow decides when remembrance is shown (it comes before the
+    // debrief, on a loss or a mission that asks for it); just move on.
+    if (this.flow.real) return this.flow.quitToMenu();
     const r = this.lastResult;
     if (r?.success !== false && !this._memorialShownThisSession) {
       this._memorialShownThisSession = true;
@@ -266,6 +302,7 @@ export class UI {
   }
 
   afterMemorial() {
+    if (this.flow.real?.state === 'remembrance') return void this.flow.confirm(); // -> debrief
     if (this.history.length) this.back();
     else this.show('title');
   }
@@ -282,17 +319,46 @@ export class UI {
 
     ev.on('ui:screen', (p) => {
       if (!p || p.source === 'ui') return;
-      const id = p.screen;
+      if (!this._booted) return; // _bootDone() picks up the flow's state
+      const id = toUiScreen(p.screen);
       if (id === 'sortie') {
-        if (this.screen === 'loading' || this.screen === 'briefing' || this.screen === 'debrief') this.hud.clearTransient();
+        if (this.screen !== 'pause' && this.screen !== 'settings') this.hud.clearTransient();
         this.show('sortie');
-      } else if (this.screens[id]) this.show(id, p);
+        return;
+      }
+      if (!this.screens[id]) return;
+      // Flow-driven menu steps get a deterministic Back stack.
+      if (id === 'title') this.history = [];
+      else if (id === 'missionSelect') this.history = ['title'];
+      else if (id === 'briefing') {
+        this.history = ['title', 'missionSelect'];
+        this.briefingId = p.mission?.id ?? this.briefingId;
+      } else if (id === 'debrief' && p.result) {
+        const best = this.lastResult?.best ?? this.flow.mission(p.result.missionId)?.bestScore;
+        this.lastResult = resultFromFlow(p.result, this.lastResult);
+        this.lastResult.best = best;
+      }
+      this.show(id, p);
+    });
+    // Input's own mode toggle (M) keeps the setting in step.
+    ev.on('controls:mode', (p) => {
+      if (p?.mode && p.mode !== this.settings.controlMode) this.settings.set('controlMode', p.mode);
     });
     ev.on('loading:progress', (p) => {
       this.screens.loading.setProgress(p.progress ?? 0, p.label);
       globalThis.__ssBoot?.set('mission', p.progress ?? 0, p.label);
     });
     const onEnd = (success) => (p = {}) => {
+      if (this.flow.real) {
+        // Gameplay persists records and follows with ui:screen remembrance
+        // or debrief after its outro; just keep the result and mark the moment.
+        this.lastResult = resultFromFlow(p.result ?? {}, null, success);
+        this.lastResult.best = this.flow.mission(p.result?.missionId)?.bestScore ?? undefined;
+        const name = p.mission?.name ?? p.result?.name ?? '';
+        if (success) this.hud.showBanner('MISSION COMPLETE', name, 4);
+        else this.hud.showBanner('SORTIE ENDED', p.result?.reason === 'time' ? 'The window has closed' : name, 3.5);
+        return;
+      }
       const raw = p.result ?? p;
       const m = p.mission ?? this.flow.currentMission;
       const res = {
@@ -327,12 +393,16 @@ export class UI {
     ev.on('mission:failed', onEnd(false));
     ev.on('mission:start', (p) => {
       this.hud.clearTransient();
+      this._missionStartAt = performance.now();
       const m = p?.mission;
-      if (m) this.hud.showBanner(m.name?.toUpperCase?.() ?? 'SORTIE', m.location?.name ?? '', 4);
+      const where = typeof m?.location === 'string' ? m.location : m?.location?.name ?? '';
+      if (m) this.hud.showBanner(m.name?.toUpperCase?.() ?? 'SORTIE', where, 4);
     });
     ev.on('mission:phase', (p) => {
       const ph = p?.phase;
-      const text = typeof ph === 'string' ? ph : ph?.text ?? ph?.name ?? '';
+      // the first phase arrives with mission:start; its banner already shows
+      if (performance.now() - (this._missionStartAt ?? 0) < 1500) return;
+      const text = typeof ph === 'string' ? ph : ph?.objective ?? ph?.text ?? ph?.name ?? '';
       if (text) this.hud.showBanner('NEW ORDERS', text, 4.5);
       if (text) this._say(`New orders: ${text}`);
     });
@@ -344,8 +414,8 @@ export class UI {
       if (!isPlayer(p.killer)) return;
       const t = p.target ?? {};
       const pts = Number.isFinite(p.score) ? `+${p.score}` : '';
-      if (t.isAce) this.hud.callout('ace', 'LEAD DOWN', pts, 3);
-      else if (t.kind && !/^(air|aircraft|fighter|bomber|helo|helicopter|jet|transport)$/i.test(t.kind)) this.hud.callout('ground', 'NEUTRALISED', pts);
+      if (t.isAce || t.fighter?.ace || t.kind === 'ace') this.hud.callout('ace', 'LEAD DOWN', pts, 3);
+      else if (isGround(t)) this.hud.callout('ground', 'NEUTRALISED', pts);
       else this.hud.callout('kill', 'SPLASH', pts);
     });
     ev.on('target:hit', (p) => {
@@ -384,7 +454,7 @@ export class UI {
 
   _applyAllSettings() {
     for (const k of [
-      'hudColor', 'reducedMotion', 'subtitleSize', 'controlMode', 'cameraFov', 'cameraShake', 'killCam', 'missileCam',
+      'hudColor', 'reducedMotion', 'subtitleSize', 'controlMode', 'invertY', 'cameraFov', 'cameraShake', 'killCam', 'missileCam',
       'brightness', 'motionBlur', 'lensFlare', 'filmGrain', 'masterVolume', 'musicVolume', 'sfxVolume', 'radioVolume',
     ]) this._onSetting(k, this.settings[k], true);
   }
@@ -448,6 +518,10 @@ export class UI {
         break;
       case 'controlMode':
         this.touchControls?.setMode(value);
+        if (g.input?.setMode && g.input.mode !== value) g.input.setMode(value);
+        break;
+      case 'invertY':
+        if (g.input && 'invertPitch' in g.input) g.input.invertPitch = !!value;
         break;
       case 'cameraFov':
         if (g.cameraRig) g.cameraRig.baseFov = 62 + value;
@@ -547,6 +621,27 @@ export class UI {
       this.show(id);
     } else this.show('title');
   }
+}
+
+/**
+ * Debrief view of gameplay's result (src/missions/system.js _onEnd):
+ * {completed, score, rank, kills, accuracy, time, reason, reasonText, newBest, name}.
+ */
+function resultFromFlow(r, prev, success) {
+  if (!r) return prev;
+  return {
+    success: r.completed ?? success ?? prev?.success ?? false,
+    name: r.name,
+    score: r.score ?? 0,
+    rank: r.rank ?? null,
+    kills: r.kills,
+    accuracy: r.accuracy,
+    time: r.time,
+    reason: r.reason,
+    reasonText: r.reasonText ?? null,
+    best: prev?.best,
+    isNewBest: r.newBest === true,
+  };
 }
 
 const _v = new THREE.Vector3();
