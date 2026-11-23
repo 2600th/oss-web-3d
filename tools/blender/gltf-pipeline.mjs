@@ -32,12 +32,21 @@ export function countTriangles(doc) {
   return tris;
 }
 
-/** Compress a document in place. `maxTexture` caps texture size (px). */
-export async function optimize(doc, { maxTexture = 1024, quality = 86, weldFirst = true } = {}) {
+/**
+ * Compress a document in place. `maxTexture` caps texture size (px).
+ * `normalTexture` / `ormTexture` cap the normal and occlusion-roughness-metal
+ * maps separately (default: `maxTexture`); normal maps get `normalQuality`,
+ * because WebP blocking shows in specular highlights long before it shows in
+ * base colour.
+ */
+export async function optimize(doc, { maxTexture = 1024, normalTexture = maxTexture, ormTexture = maxTexture, quality = 86, normalQuality = 90, weldFirst = true } = {}) {
   const steps = [dedup(), prune({ keepAttributes: false, keepLeaves: true, keepExtras: true })];
   if (weldFirst) steps.push(weld());
+  const webp = (slots, size, q) => textureCompress({ encoder: sharp, targetFormat: 'webp', slots, resize: [size, size], resizeFilter: 'lanczos3', quality: q });
   steps.push(
-    textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [maxTexture, maxTexture], resizeFilter: 'lanczos3', quality }),
+    webp(/^(?!normalTexture|metallicRoughnessTexture|occlusionTexture)/, maxTexture, quality),
+    webp(/^normalTexture$/, normalTexture, normalQuality),
+    webp(/^(metallicRoughnessTexture|occlusionTexture)$/, ormTexture, quality),
     reorder({ encoder: MeshoptEncoder, target: 'performance' }),
     quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12, quantizeColor: 8 }),
   );

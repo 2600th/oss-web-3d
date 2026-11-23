@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   texture, uv, float, int, vec3, vec4, clamp, luminance, mix, normalView, positionViewDirection, dot, pow, oneMinus,
-  positionLocal, normalLocal, mx_noise_float, bumpMap, smoothstep, lights,
+  positionLocal, normalLocal, mx_noise_float, bumpMap, normalMap, vec2, smoothstep, lights,
 } from 'three/tsl';
 import { premultipliedGlassClass, setupGlass, setupLensGlass, bindGlassEnv } from './glass.js'; // [glass]
 
@@ -244,7 +244,16 @@ export function upgradeGroundMaterials(root, { tier = 'high', env = null } = {})
           grain = lum.div(detail.meanLum).sub(1).mul(mix(float(1), float(0.45), metal));
           height = height.add(grain.mul(2.2));
         }
-        m.normalNode = bumpMap(height, float(burned ? 0.06 : 0.035));
+        // [models polish 2] the unit atlases now carry a baked tangent-space
+        // normal map (rounded edges, tread, cloth, stone). Setting normalNode
+        // alone would discard it, so the procedural grain perturbs the mapped
+        // normal instead of the geometric one, at reduced strength.
+        if (m.normalMap) {
+          const mapped = normalMap(texture(m.normalMap, uv(m.normalMap.channel ?? 0)), vec2(m.normalScale.x, m.normalScale.y));
+          m.normalNode = bumpMap(height, float(burned ? 0.04 : 0.022), mapped);
+        } else {
+          m.normalNode = bumpMap(height, float(burned ? 0.06 : 0.035));
+        }
         // faint dust/fade breakup over a few metres, darker low down
         const breakup = mx_noise_float(p.mul(0.45).add(vec3(11, 2, 5))).mul(0.5).add(0.5);
         const low01 = smoothstep(0.0, 1.2, p.y);

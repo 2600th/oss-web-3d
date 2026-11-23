@@ -1,7 +1,7 @@
 /**
  * Optimise a raw Blender-exported GLB for the game (webp, quantize, meshopt).
  *
- *   node tools/blender/optimize-glb.mjs <in.glb> <out.glb> [--tex 1024] [--extras '{"license":"MIT"}']
+ *   node tools/blender/optimize-glb.mjs <in.glb> <out.glb> [--tex 1024] [--ntex 1024] [--otex 1024] [--extras '{"license":"MIT"}']
  *
  * Prints `<out> <triangles> <bytes>` so build scripts can collect stats.
  */
@@ -19,6 +19,8 @@ const extras = JSON.parse(opt('--extras', '{}'));
 const asset = doc.getRoot().getAsset();
 asset.extras = { ...(asset.extras || {}), ...extras };
 asset.generator = 'Safed Sagar tools/blender (Blender 5.2 + glTF-Transform)';
-await optimize(doc, { maxTexture: Number(opt('--tex', 1024)) });
+const tex = Number(opt('--tex', 1024));
+const ntex = Number(opt('--ntex', tex));
+await optimize(doc, { maxTexture: tex, normalTexture: ntex, ormTexture: Number(opt('--otex', tex)) });
 await io.write(dst, doc);
 console.log(`OPT ${dst} ${countTriangles(doc)} ${statSync(dst).size}`);
