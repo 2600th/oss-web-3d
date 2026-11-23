@@ -23,7 +23,14 @@ const _up = new THREE.Vector3();
 const _side = new THREE.Vector3();
 
 /** Vector spring (component-wise springStep); state = { x: Vector3, v: Vector3, init }. */
+const finite3 = (v) => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+
 export function springVec(state, target, freq, zeta, dt) {
+  // A non-finite target (a target that vanished mid-frame, a zero-length
+  // direction) must not poison the spring: once x or v holds a NaN it never
+  // recovers and every later frame hands the renderer a NaN camera.
+  if (!finite3(target)) return state.init ? state.x : target;
+  if (state.init && !(finite3(state.x) && finite3(state.v))) state.init = false;
   if (!state.init) { state.x.copy(target); state.v.set(0, 0, 0); state.init = true; return state.x; }
   const sx = { x: state.x.x, v: state.v.x }, sy = { x: state.x.y, v: state.v.y }, sz = { x: state.x.z, v: state.v.z };
   springStep(sx, target.x, freq, zeta, dt);
@@ -54,7 +61,7 @@ function fitFov(dirA, dirB, minFov, maxFov, aspect = 16 / 9) {
 export function lockView(rig, dt, flight) {
   const cam = rig.camera;
   const T = rig.lockTarget?.position;
-  if (!T) return null;
+  if (!T || !finite3(T)) return null;
   rig._chaseState(dt, flight);
   const s = rig._lock ??= { off: newSpring(), aim: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), fov: 50, fresh: true };
   if (rig._lockFresh) { s.off.init = false; s.fresh = true; rig._lockFresh = false; }
