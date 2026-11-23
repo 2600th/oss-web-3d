@@ -524,3 +524,83 @@ when unavoidable; say so in your report.
   - AI: the hostile fighter GLB is preloaded 4 s after the first `flow:state`,
     not during boot.
   - Analytics are not injected on localhost / 127.0.0.1.
+
+### Time of day and night (additive unless marked)
+
+Owner paths: `src/world/timeofday/**`, `src/world/atmosphere/night/**`,
+`src/timeofday/system.js`, `tools/sky/**`, `public/assets/sky/**`.
+Evidence: `docs/v2/evidence/timeofday/`.
+
+- **API on `game.env`** (installed by `src/world/timeofday/TimeOfDay.js`):
+  - `env.setTimeOfDay(hours, { date, transition, weather })`. `hours` is a float
+    0..24 of local time (IST, UTC+5:30), or `'HH:MM'`, or a preset name.
+    `date` is `{ year, month, day }` (default 1999-06-21; it stays until changed,
+    including across missions). `transition` is seconds of smooth blend (takes
+    the short way round midnight). A change of under 10 game minutes with no
+    other option is a clock tick: no cloud-history reset, so callers may tick it
+    every few seconds.
+  - `env.timeScale`: game minutes per real second (0 = frozen). Setting it
+    leaves manual-sun mode.
+  - `env.timePresets`: `dawn` 05:15, `morning` 08:00, `noon` 12:27, `afternoon`
+    15:45, `golden` 18:45, `dusk` 19:54, `night` (01:00, 1999-06-14, moonless),
+    `moonlit-night` (23:00, 1999-06-28, full moon). `env.setPreset(name)` accepts
+    these too; the weather presets are unchanged.
+  - Read-only: `env.solarDirection` (true sun, may be below the horizon),
+    `env.moonDirection`, `env.moonPhase { fraction, waxing, age }`,
+    `env.keyLight` (`'sun' | 'moon'`), `env.night` (0..1), `env.exposureHint`
+    (`{ ev, minEV, maxEV, speedDown, night, grade }`).
+  - `env.setSun(azimuth, elevation)` still works and switches to manual sun
+    (the clock stops driving it) until the next `setTimeOfDay` / `timeScale`.
+- **Changed meaning (read this if you light things):** `env.sun` and
+  `env.sunDirection` are the *key light*: the sun by day, the moon once the sun
+  is about 3.4 degrees below the horizon (cross-faded over 4.5 degrees). The
+  direction never goes below 0.6 degrees of elevation. The atmosphere is always
+  lit from `env.solarDirection`. Anything that draws a sun disc, glare or flare
+  must gate on `env.keyLight === 'sun'`.
+- **Ephemeris** (`src/world/timeofday/astro.js`, pure, node-tested): low-precision
+  sun and moon series from the Astronomical Almanac / Meeus, topocentric moon,
+  site 34.5 N 76.09 E. No refraction. Kargil 1999-06-21: sunrise 05:13, solar
+  noon 12:27, sunset 19:41.
+- **Night sky** (`src/world/atmosphere/night/`): 8874-star catalogue to V 6.5
+  (one instanced additive draw; 2200 on low, 5000 on medium), procedural Milky
+  Way and airglow added to the sky dome's colour node, moon disc with phase and
+  earthshine. Photometry is compressed, not physical: moonlight and airglow are
+  far brighter relative to the sun than in reality so that exposure only has to
+  rise by one to two stops at night. `?nonight` removes the sky layer.
+- **Exposure and grade:** the `timeofday` system writes
+  `post.options.exposure.{baseEV,minEV,maxEV,speedDown}` and scales
+  `post.uniforms.{lookSat,shadowTint,highlightTint,vignette}` from their boot
+  values each frame, from `env.exposureHint`. It never touches
+  `exposureCompensation`. It also writes `post.uniforms.sunRefLum`.
+  **Runtime patch:** it wraps `post.setFrameState` to zero `sunIntensity` while
+  the key light is the moon (no sun glare from the moon). Post owner: please
+  read `env.keyLight` there and the wrapper can go.
+- **Twilight:** below 1.5 degrees of sun elevation `atmosphere.u.sunIrradiance`
+  is multiplied by `twilightGain(elevation)` (up to 60x) so civil twilight
+  stays a lit sky; the unscaled value is `env.timeOfDay.sunIrradiance`.
+- **System `timeofday`** (`src/timeofday/system.js`, order 12):
+  `lights` (LightSprites: `add`, `remove`, `removeGroup`),
+  `attachNavLights(object3d, opts)`, `attachHeadlights(object3d, opts)`,
+  `detachLights(object3d)`,
+  `cloudFlash(position, { color, intensity, range, duration })`.
+  Nav lights are attached to the player and on `aircraft:spawn`; headlights go
+  on the object of the new optional event `vehicle:spawn { entity }` and on
+  gameplay's truck `headlights` lamp groups; about 200 village lights sit in
+  the valleys (Kargil, Drass, Batalik and others). Explosions flash the clouds
+  (two flash slots on low, four otherwise). The cockpit panel emissive is
+  dimmed at night.
+- **New event:** `timeofday:phase { phase, hours, night, keyLight }` when the
+  phase changes (`day`, `twilight`, `night`).
+- **URL flags:** `?tod=HH:MM | <preset> | cycle[:minutesPerSecond]`,
+  `?from=HH:MM` (cycle start), `?date=YYYY-MM-DD`, `?nonight`. `?preset=` also
+  accepts the time presets.
+- **Edit outside the owner paths:** `src/world/Environment.js` only, each block
+  tagged `[timeofday]`: constructs `env.timeOfDay`, `setSun` records the solar
+  direction, `invalidate(environment = true)` gained an argument (false = relight
+  without rebuilding the PMREM), `setPreset` accepts time presets and presets
+  without a `sun`, `_updateLights` passes sun and ambient through
+  `timeOfDay.shade()`, `update()` advances the clock.
+- **Requests to other owners:** VFX emissives are absolute and day-calibrated,
+  so they read hot at night; scaling them by `env.exposureHint` would let night
+  exposure go higher. The cloud shadow map shows horizontal bands with the sun
+  under about 2 degrees.
