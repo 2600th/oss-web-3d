@@ -14,6 +14,19 @@ import { bindingsFor } from '../bindings.js';
 const pct = (v) => `${Math.round(v * 100)}%`;
 
 export const SECTIONS = [
+  // gameplay area: difficulty (game.flow follows the `difficulty` key through
+  // settings:change; the table is src/game/difficulty.js).
+  {
+    id: 'gameplay',
+    title: 'Gameplay',
+    rows: [
+      {
+        key: 'difficulty', label: 'Difficulty', type: 'choice',
+        options: [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']],
+        note: 'Scales hostile damage, accuracy and aggression. Easy scores x0.85, Hard x1.2; rank thresholds do not change.',
+      },
+    ],
+  },
   {
     id: 'graphics',
     title: 'Graphics',

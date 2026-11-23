@@ -49,20 +49,23 @@ const MIG_SOCKETS = {
   wingtipR: [3.516, -0.05, 1.6],
   gun: [0, -0.6, -2.5],
 };
-const MIG_ATTR = 'CC BY 4.0 - derivative of "MiG-21 Bison Indian (War Thunder)" by KojfDiscord (Sketchfab); see public/THIRD_PARTY_NOTICES.txt';
+// Moving surfaces cut by tools/blender/build_mig_surfaces.py (rotation.x on the hinge line).
+const MIG_SURFACES = ['stab_L', 'stab_R', 'aileron_L', 'aileron_R', 'flap_L', 'flap_R'];
+const MIG_SURFACE_NOTE = 'stab_L/R, aileron_L/R, flap_L/R turn on rotation.x, + = trailing edge down.';
+const MIG_ATTR ='CC BY 4.0 - derivative of "MiG-21 Bison Indian (War Thunder)" by KojfDiscord (Sketchfab); see public/THIRD_PARTY_NOTICES.txt';
 catalog.mig21 = {
   url: 'models/mig21.glb',
   lods: [await glbStats('models/mig21.glb')],
   scale: 1,
-  normalize: { length: 15.76, sourceForward: '+Z' },
   sockets: Object.keys(MIG_SOCKETS),
   socketPositions: MIG_SOCKETS,
+  pivots: MIG_SURFACES,
   kind: 'aircraft',
   license: MIG_ATTR,
   notes:
-    'Player airframe (IAF markings). Source nose is +Z; loadModel applies the same normalisation as Aircraft.js ' +
-    '(centre, 15.76 m, nose -Z). Contains a full cockpit interior; named meshes: Object_9 = cockpit tub/panel, ' +
-    'Object_8 = seat, Object_30 = canopy glass.',
+    'Player airframe (IAF markings). Baked to conventions (metres, nose -Z, origin at bbox centre; root node `mig21` ' +
+    'has extras.baked). Control surfaces on pivot nodes: ' + MIG_SURFACE_NOTE + ' Contains a full cockpit interior; ' +
+    'named meshes: cockpit_interior, cockpit_seat, canopy_glass, airframe. Built by tools/blender/build_mig_surfaces.py.',
 };
 catalog.mig21_hostile = {
   url: 'models/mig21_hostile.glb',
@@ -73,11 +76,12 @@ catalog.mig21_hostile = {
   scale: 1,
   sockets: Object.keys(MIG_SOCKETS).filter((s) => s !== 'eye' && s !== 'hud'),
   socketPositions: MIG_SOCKETS,
+  pivots: MIG_SURFACES,
   kind: 'aircraft',
   license: MIG_ATTR,
   notes:
-    'Enemy MiG-21: same airframe, fictional two-tone grey, no national markings. Baked to conventions (metres, nose -Z, ' +
-    'origin at bbox centre) - load with loadModel, NOT with Aircraft.js (which would flip it). LOD1 (<= 25k tris, no small ' +
+    'Enemy MiG-21: same airframe, fictional dark two-tone grey, no national markings. Baked to conventions (metres, nose -Z, ' +
+    'origin at bbox centre). Both LODs have the control-surface pivots (' + MIG_SURFACE_NOTE + ') LOD1 (<= 25k tris, no small ' +
     'detail, 512 px) for distant enemies; it has small decimation notches around the intake lip.',
 };
 catalog.mig21_cockpit = {

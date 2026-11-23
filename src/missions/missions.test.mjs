@@ -103,8 +103,8 @@ test('conditions: remaining, arrived, captured, flags, any/not, and nothing-spaw
 
 // ---- campaign data ----------------------------------------------------------
 
-test('campaign: four missions and free flight, all references resolve', () => {
-  assert.deepEqual(MISSIONS.map((m) => m.id), ['m1', 'm2', 'm3', 'm4', 'free']);
+test('campaign: six missions and free flight, all references resolve', () => {
+  assert.deepEqual(MISSIONS.map((m) => m.id), ['m1', 'm2', 'night', 'm3', 'storm', 'm4', 'free']);
   const collect = (c, out) => {
     if (!c || typeof c !== 'object') return out;
     for (const k of ['destroyed', 'remaining', 'arrived']) if (c[k]) out.add(c[k]);
@@ -164,7 +164,7 @@ test('score: bonuses only on completion, time bonus falls from par to the limit'
   const failed = computeScore({ ...base, completed: false, time: 200 });
   assert.equal(failed.total, 5000);
   const fast = computeScore({ ...base, completed: true, time: 250 });
-  assert.deepEqual(fast.breakdown, { targets: 4000, bonuses: 1000, time: 3000, accuracy: 750, survival: 1200 });
+  assert.deepEqual(fast.breakdown, { targets: 4000, bonuses: 1000, time: 3000, accuracy: 750, survival: 1200, difficulty: 0 });
   assert.equal(computeScore({ ...base, completed: true, time: 600 }).breakdown.time, 1500);
   assert.equal(computeScore({ ...base, completed: true, time: 900 }).breakdown.time, 0);
   assert.equal(computeScore({ ...base, completed: true, time: 250, health: 1, damageTaken: 0 }).breakdown.survival, 2000);

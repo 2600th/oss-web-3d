@@ -142,6 +142,8 @@ export class AssistController {
     this._pathRate = 0;
     this._previousPath = 0;
     this._hasPath = false;
+    /** Latched: the turn demand is hard enough to fly a dive as a slice. */
+    this._slice = false;
   }
 
   update(dt, intent, flight, options) {
@@ -327,10 +329,18 @@ export class AssistController {
     // bank is capped: level-turn bank for gentle turns (the dive is then flown
     // as a bunt), opening up to ~115 degrees once the turn is a real one.
     const absH = Math.abs(aH);
-    const bankCap = Math.max(
-      Math.atan2(absH, GRAVITY),
-      2.0 * smoothstep(1.2 * GRAVITY, 3.2 * GRAVITY, absH),
-    );
+    // Slice or bunt is one decision with a memory, not a blend. A blended cap
+    // has a bank angle at which the pull the turn wants and the push the
+    // descent wants cancel exactly: measured, half stick left + stick forward
+    // from a 30 degree climb parked the jet at 61 degrees of bank with a
+    // centred elevator, climbing straight ahead for as long as the stick was
+    // held. So a real turn (latched, with hysteresis) rolls past ninety and
+    // pulls; anything gentler levels the wings and bunts, and the heading
+    // waits the moment it takes the nose to come down.
+    if (absH > 2.6 * GRAVITY) this._slice = true;
+    else if (absH < 1.6 * GRAVITY) this._slice = false;
+    const descend = smoothstep(-GRAVITY, 0, aV); // 0 = a real push is demanded
+    const bankCap = this._slice ? 2.0 : Math.atan2(absH, GRAVITY) * descend;
     const natural = Math.atan2(aH, aV);
     const targetBank = clamp(natural, -bankCap, bankCap);
     let bankError = bank - targetBank;
@@ -342,7 +352,10 @@ export class AssistController {
       profile.rollLimit,
     );
 
-    const lift = aH * Math.sin(bank) + aV * Math.cos(bank);
+    // Bunting, the turn's share of the lift is dropped rather than summed:
+    // "the vertical demand is kept, the turn gives way".
+    const turnLift = aH * Math.sin(bank);
+    const lift = aV * Math.cos(bank) + (this._slice ? turnLift : Math.max(0, turnLift) * descend + Math.min(0, turnLift));
     const pitchRate = (lift - GRAVITY * Math.cos(bank) * cosPath) / speed;
     const pitchAuthority = Math.max(finite(flight?.pitchAuthority, 1.05), 1e-3);
     control.pitch = clampSigned((-pitchRate / pitchAuthority) * profile.verticalResponse);
@@ -357,6 +370,7 @@ export class AssistController {
     this._pathRate = 0;
     this._previousPath = 0;
     this._hasPath = false;
+    this._slice = false;
   }
 }
 

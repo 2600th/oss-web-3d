@@ -1,29 +1,35 @@
 import { inject } from '@vercel/analytics';
-import { Renderer } from './engine/Renderer.js';
 import { PostFX } from './engine/PostFX.js';
+import { installPerf } from './engine/Perf.js';
 import { Input } from './core/Input.js';
+import { createRenderer, showStatus, handleDeviceLoss } from './core/BootLifecycle.js';
 import { loadDEM } from './world/terrain/heightfield.js';
 import { Game } from './game/Game.js';
 
-function bootFailure(message) {
-  const el = document.getElementById('boot-status');
-  if (!el) return;
-  el.querySelector('[data-boot-message]').textContent = message;
-  el.hidden = false;
-  el.style.display = 'grid';
-}
+// The analytics script only exists on the Vercel deployment; on a local
+// `vite preview` it is a 404 plus a console log on every load.
+if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) inject();
 
-inject();
+// Boot stage timings (ms since navigation start), shown by ?perfhud and in
+// window.__perf.boot; tools/perf/README.md uses them for the load-time table.
+const boot = (window.__boot = {});
+const mark = (k) => { boot[k] = Math.round(performance.now()); };
 
 async function start() {
-  const canvas = document.getElementById('viewport');
   const params = new URLSearchParams(location.search);
-  const r = new Renderer(canvas, { forceWebGL: params.has('webgl') });
-  await Promise.all([r.init(), loadDEM()]);
+  mark('module');
+  // Backend: WebGPU if an adapter exists, else WebGL2; overlay only if neither
+  // works (src/core/BootLifecycle.js). The DEM download runs in parallel.
+  const dem = loadDEM();
+  const { r } = await createRenderer(document.getElementById('viewport'), params);
+  mark('renderer');
+  await dem;
+  mark('dem');
 
   const input = new Input();
   const post = new PostFX(r);
   const game = new Game(r, input, post);
+  mark('world');
   // Systems self-register: every src/<area>/system.js exporting
   // `createSystem(game)` (and optionally `order`, lower first) is loaded here,
   // so feature areas never need to edit this file or Game.js to plug in.
@@ -33,15 +39,24 @@ async function start() {
     const system = await m.createSystem(game);
     if (system) await game.addSystem(system);
   }
+  mark('systems');
   await game.init();
+  mark('init');
+
+  // GPU pass timing, adaptive resolution, ?perfhud (src/engine/Perf.js).
+  const perf = await installPerf({ r, game, params });
+  perf.boot = boot;
 
   let last = performance.now();
-  r.renderer.setAnimationLoop((now) => {
+  const loop = (now) => {
+    if (boot.firstFrame === undefined) mark('firstFrame');
     const dt = Math.max(0, (now - last) / 1000);
     last = now;
-    game.update(dt);
-    post.render();
-  });
+    perf.frame(dt, () => game.update(dt), () => post.render());
+  };
+  perf.loop = loop; // tools/perf/bench.js pauses it for its queue-flush timing
+  r.renderer.setAnimationLoop(loop);
+  handleDeviceLoss(r, () => r.renderer.setAnimationLoop(null));
 
   if (import.meta.env.DEV) {
     window.__game = game;
@@ -52,5 +67,5 @@ async function start() {
 
 start().catch((e) => {
   console.error(e);
-  bootFailure('The experience could not start: ' + (e?.message ?? e));
+  showStatus('The experience could not start: ' + (e?.message ?? e));
 });

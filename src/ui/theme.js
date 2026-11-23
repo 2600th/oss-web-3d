@@ -17,10 +17,10 @@
  */
 
 export const INKS = {
-  glacier: { ink: '#d6f6ff', dim: 'rgba(214,246,255,0.62)', faint: 'rgba(214,246,255,0.28)' },
-  phosphor: { ink: '#b6ffcf', dim: 'rgba(182,255,207,0.62)', faint: 'rgba(182,255,207,0.28)' },
-  amber: { ink: '#ffd9a0', dim: 'rgba(255,217,160,0.62)', faint: 'rgba(255,217,160,0.28)' },
-  white: { ink: '#ffffff', dim: 'rgba(255,255,255,0.64)', faint: 'rgba(255,255,255,0.3)' },
+  glacier: { ink: '#d6f6ff', dim: 'rgba(214,246,255,0.74)', faint: 'rgba(214,246,255,0.4)' },
+  phosphor: { ink: '#b6ffcf', dim: 'rgba(182,255,207,0.74)', faint: 'rgba(182,255,207,0.4)' },
+  amber: { ink: '#ffd9a0', dim: 'rgba(255,217,160,0.74)', faint: 'rgba(255,217,160,0.4)' },
+  white: { ink: '#ffffff', dim: 'rgba(255,255,255,0.76)', faint: 'rgba(255,255,255,0.42)' },
 };
 
 export const PALETTES = {
@@ -63,10 +63,12 @@ export const PALETTES = {
   },
 };
 
-export const HALO = 'rgba(2,8,12,0.72)';
-export const HALO_SOFT = 'rgba(2,8,12,0.42)';
+// Halos were 0.72 / 0.42 / 0.6: raised so dim labels and hairlines hold over
+// sunlit snow (the ink alone washes out) without going heavy over dark rock.
+export const HALO = 'rgba(2,8,12,0.8)';
+export const HALO_SOFT = 'rgba(2,8,12,0.5)';
 /** Glyph halo: lighter than the stroke halo so small text keeps its counters. */
-export const HALO_TEXT = 'rgba(2,8,12,0.6)';
+export const HALO_TEXT = 'rgba(2,8,12,0.68)';
 
 export function resolveTheme(settings = {}) {
   const ink = INKS[settings.hudColor] ?? INKS.glacier;

@@ -3,6 +3,12 @@
 // World coordinates: metres, +X east, +Z south, origin at the DEM centre.
 // Headings are compass degrees (0 = north, 90 = east).
 //
+// `conditions: {time (hours), weather (conditions.js WEATHER key), advance?
+// (hours per minute of sortie)}` sets the light and the weather, and they
+// matter: darkness and murk shorten what guns and shoulder-launched missiles
+// can see, a solid cloud layer hides aircraft from infra-red seekers (both
+// ways), storms shake the aircraft, and hostile pilots run for cloud.
+//
 // Sites (from the DEM): Drass valley floor ~(-30000, 8000) 3090 m; Tololing
 // ridge ~(-32150, 500) 4780 m; Tiger Hill ~(-38950, 1860) 4530 m; Kargil
 // ~(3300, -6300) 2690 m; Batalik ridge ~(25080, -20110) 4170 m above the Indus
@@ -25,9 +31,13 @@ export const MISSIONS = [
       'Standard missiles will lock ground targets. Rockets and bombs hit the stone harder.',
     ],
     start: { x: -15500, z: 9300, alt: 5300, heading: 268, speed: 250 },
+    // Dawn: the sun comes up the valley behind you and into the gunners' eyes.
+    conditions: { time: 5.67, weather: 'scattered' },
     specials: ['rkt', 'bomb', 'hobs'], special: 'rkt',
-    timeLimit: 900, parTime: 360, rank: { S: 10200, A: 8800, B: 7200, C: 5500 },
+    timeLimit: 900, parTime: 360, rank: { S: 10800, A: 9200, B: 7500, C: 5500 },
     maxAttackers: 2,
+    // First sortie: contextual control prompts (missions/onboarding.js).
+    onboarding: true,
     groups: {
       crest: { kind: 'base', kit: 'raven', near: TOLOLING, search: 700, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
         units: [{ type: 'sangar', count: 3, tags: ['m1_primary'], isTarget: true }, { type: 'supply', count: 1, tags: ['m1_primary'], isTarget: true },
@@ -35,7 +45,7 @@ export const MISSIONS = [
       east: { kind: 'base', kit: 'slate', near: { x: -30300, z: 2500 }, search: 900, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
         units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'aaa', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }, { type: 'manpads', count: 1, isTarget: false }] },
       west: { kind: 'base', kit: 'cinder', near: { x: -34200, z: 1900 }, search: 900, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
-        units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'flak', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }] },
+        units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'aaa', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }] },
       convoy: { kind: 'convoy', from: { x: -30000, z: 8000 }, heading: 280, length: 9500, count: 5, speed: 15, tags: ['m1_convoy'], isTarget: true },
       bandits: { kind: 'fighters', type: 'bandit', count: 2, at: { x: -41000, z: -12000, alt: 6300 }, heading: 140, tags: ['m1_air'], isTarget: true, aware: true },
     },
@@ -103,8 +113,9 @@ export const MISSIONS = [
       'The dogfight missile locks well off the nose. Use it when they get close.',
     ],
     start: { x: 6500, z: -8300, alt: 5000, heading: 58, speed: 260 },
+    conditions: { time: 12.5, weather: 'cumulus' },
     specials: ['hobs', 'rkt', 'lraam'], special: 'hobs',
-    timeLimit: 840, parTime: 360, rank: { S: 11400, A: 9800, B: 8000, C: 6000 },
+    timeLimit: 840, parTime: 360, rank: { S: 12300, A: 10500, B: 8500, C: 6000 },
     maxAttackers: 2,
     groups: {
       crest: { kind: 'base', kit: 'hollow', near: BATALIK, search: 800, snap: 'ridge', name: 'STRONGPOINT', tags: ['m2_cas'], isTarget: true, kitHealth: 170,
@@ -151,27 +162,95 @@ export const MISSIONS = [
     ],
   },
 
+  // --------------------------------------------------------------- night --
+  {
+    id: 'night', order: 3, name: 'Black Road', location: 'Drass valley road, night',
+    summary: 'Supply columns are moving on the valley road under cover of darkness. Find their headlights and stop them.',
+    briefing: [
+      'Hostile supply columns run the valley road west of Drass after dark. Two are moving tonight.',
+      'There is a quarter moon and no cloud. The trucks drive on dipped headlights: look for the string of lights on the valley floor. In the dark your seeker has to be closer to the road before it will hold a vehicle.',
+      'Gunners cannot see you well at night, so their fire starts late and wide. Do not give them a second pass on the same line.',
+      'If five trucks reach the pass the ammunition is through, and the night is wasted. Guns and rockets are enough for trucks.',
+    ],
+    start: { x: -15500, z: 9300, alt: 5200, heading: 268, speed: 250 },
+    conditions: { time: 22.67, weather: 'clear' },
+    specials: ['rkt', 'hobs', 'bomb'], special: 'rkt',
+    timeLimit: 720, parTime: 330, rank: { S: 11200, A: 9600, B: 7800, C: 5500 },
+    maxAttackers: 2,
+    groups: {
+      col1: { kind: 'convoy', from: { x: -28500, z: 8100 }, heading: 280, length: 9000, count: 5, speed: 14, tags: ['night_trucks', 'night_col1'], isTarget: true },
+      col2: { kind: 'convoy', from: { x: -33000, z: 7700 }, heading: 280, length: 8500, count: 6, speed: 16, tags: ['night_trucks', 'night_col2'], isTarget: true },
+      picket1: { kind: 'base', near: { x: -31500, z: 8000 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'tent', count: 2 }] },
+      picket2: { kind: 'base', near: { x: -36500, z: 7400 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'flak', count: 1 }] },
+      nightcap: { kind: 'fighters', type: 'veteran', count: 3, at: { x: -44000, z: -6000, alt: 6400 }, heading: 135, tags: ['night_air'], isTarget: true, aware: true },
+    },
+    phases: [
+      {
+        id: 'first', name: 'First column', objective: { text: 'Find the headlights on the valley road and stop the column', track: { destroyed: 'night_col1', total: 5 }, marker: { x: -30500, z: 8000 } },
+        enter: [
+          { music: { state: 'cruise', level: 0.35 } },
+          { spawn: 'col1' }, { spawn: 'picket1' },
+          { radio: ['control', 'Vajra One, Shikhar. Dark night, clear air. First column is on the road west of Drass, moving west.', 1] },
+          { radio: ['fac', 'Anvil Six. We can hear engines on the valley floor. Lights on the road, Vajra — a string of them.', 1] },
+        ],
+        triggers: [
+          { when: { destroyed: 'night_col1', count: 1 }, do: [{ music: { state: 'combat', level: 0.6 } }, { radio: ['fac', 'That lit the valley up! The rest are still rolling.', 1] }] },
+          { when: { destroyed: 'night_col1' }, do: [{ bonus: { label: 'First column stopped', score: 1200 } }] },
+        ],
+        failWhen: { arrived: 'night_trucks', count: 5 }, failReason: 'escaped',
+        done: { any: [{ destroyed: 'night_col1' }, { arrived: 'night_col1' }] },
+      },
+      {
+        id: 'second', name: 'Second column', objective: { text: 'Stop the second column before the pass', track: { destroyed: 'night_col2', total: 6 }, marker: { x: -35000, z: 7600 } },
+        enter: [
+          { music: { state: 'combat', level: 0.7 } },
+          { spawn: 'col2' }, { spawn: 'picket2' },
+          { radio: ['control', 'Shikhar: second column, further west, six vehicles and moving faster. Guns are covering the road ahead of them.', 2] },
+        ],
+        triggers: [
+          { when: { destroyed: 'night_col2' }, do: [{ bonus: { label: 'Second column stopped', score: 1200 } }] },
+          { when: { time: 45 }, do: [{ spawn: 'nightcap' }, { music: { state: 'danger', level: 0.85 } }, { radio: ['control', 'Vajra One, three contacts from the north-west, no lights, descending. Night fighters.', 2] }] },
+        ],
+        failWhen: { arrived: 'night_trucks', count: 5 }, failReason: 'escaped',
+        done: { all: [{ any: [{ destroyed: 'night_col2' }, { arrived: 'night_col2' }] }, { time: 46 }] },
+      },
+      {
+        id: 'cap', name: 'Night fighters', objective: { text: 'Shoot down the night fighters', track: { destroyed: 'night_air' } },
+        enter: [{ radio: ['wing', 'Two is blind up here, lead. Watch for their burners.', 1] }],
+        done: { destroyed: 'night_air' },
+        exit: [
+          { radio: ['control', 'Shikhar: road is dark and the sky is empty. Good night\'s work, Vajra One. Recover.', 1] },
+          { music: { state: 'victory', level: 0.5 } },
+        ],
+      },
+    ],
+  },
+
   // ------------------------------------------------------------------ M3 --
   {
-    id: 'm3', order: 3, name: 'Long Lens', location: 'Ridges between Drass and Kargil',
+    id: 'm3', order: 4, name: 'Long Lens', location: 'Ridges between Drass and Kargil',
     summary: 'Photograph four observation posts with the nose optic while the air defences are awake.',
     briefing: [
       'Before the next push we need photographs of four observation posts. Not craters — photographs.',
       'Hold V to open the nose optic. Frame a post inside five kilometres with a clear line of sight and hold it steady; the camera fires itself.',
       'Radar-guided missiles cover the approaches. They cannot see you below the ridgeline, and flares will not fool them. Kill the radar and the launchers go blind.',
       'Fighters will scramble once they understand what you are doing. Bring the film home.',
+      'Weather is closing in: solid cloud from 6100 metres. Heat-seeking missiles lose you in it, and you lose the posts.',
     ],
     start: { x: -21000, z: 8600, alt: 4700, heading: 78, speed: 250 },
+    // Late light under a lowering overcast: the layer at 6100 m hides you from
+    // heat-seekers and hides the posts from you. The pictures are taken below it.
+    conditions: { time: 17.6, weather: 'overcast' },
     specials: ['hobs', 'bomb', 'lraam'], special: 'hobs',
-    timeLimit: 900, parTime: 420, rank: { S: 14000, A: 12000, B: 9500, C: 7000 },
+    timeLimit: 900, parTime: 420, rank: { S: 16800, A: 14500, B: 11500, C: 8000 },
     maxAttackers: 2, recon: { total: 4, photoScore: 1800 },
     groups: {
       post1: { kind: 'base', near: { x: -12500, z: 2500 }, search: 2200, snap: 'ridge', tags: ['m3_site'], units: [{ type: 'post', tags: ['m3_post'], isTarget: true }, { type: 'manpads', count: 1 }, { type: 'tent', count: 2 }] },
       post2: { kind: 'base', near: { x: -5500, z: -3500 }, search: 2200, snap: 'ridge', tags: ['m3_site'], units: [{ type: 'post', tags: ['m3_post'], isTarget: true }, { type: 'aaa', count: 2 }, { type: 'tent', count: 2 }] },
       post3: { kind: 'base', near: { x: 1500, z: 2500 }, search: 2200, snap: 'ridge', tags: ['m3_site'], units: [{ type: 'post', tags: ['m3_post'], isTarget: true }, { type: 'manpads', count: 2 }, { type: 'sangar', count: 1 }] },
       post4: { kind: 'base', near: { x: 8500, z: -4500 }, search: 2200, snap: 'ridge', tags: ['m3_site'], units: [{ type: 'post', tags: ['m3_post'], isTarget: true }, { type: 'aaa', count: 1 }, { type: 'flak', count: 1 }, { type: 'tent', count: 2 }] },
-      sam1: { kind: 'base', near: { x: -8500, z: 500 }, search: 1800, snap: 'flat', tags: ['m3_sam'], units: [{ type: 'radar', count: 1 }, { type: 'sam', count: 2 }] },
-      sam2: { kind: 'base', near: { x: 5500, z: -1000 }, search: 1800, snap: 'flat', tags: ['m3_sam'], units: [{ type: 'radar', count: 1 }, { type: 'sam', count: 2 }] },
+      sam1: { kind: 'base', near: { x: -8500, z: 500 }, search: 1800, snap: 'flat', tags: ['m3_sam'], units: [{ type: 'radar', count: 1 }, { type: 'sam', count: 1 }] },
+      sam2: { kind: 'base', near: { x: 5500, z: -1000 }, search: 1800, snap: 'flat', tags: ['m3_sam'], units: [{ type: 'radar', count: 1 }, { type: 'sam', count: 1 }] },
       scramble: { kind: 'fighters', type: 'veteran', count: 2, at: { x: 2000, z: -26000, alt: 6200 }, heading: 190, tags: ['m3_air'], aware: true },
       pursuit: { kind: 'fighters', type: 'bandit', count: 2, at: { x: 14000, z: -22000, alt: 6000 }, heading: 240, tags: ['m3_air'], aware: true },
     },
@@ -202,7 +281,68 @@ export const MISSIONS = [
         done: { zone: { x: -21000, z: 8600, r: 4500 } },
         exit: [
           { bonus: { label: 'Film delivered', score: 2500 } },
-          { radio: ['tower', 'Home Plate has you in sight, Vajra One. The darkroom is waiting. Welcome back.', 1] },
+          { radio: ['tower', 'Kesar Tower has you in sight, Vajra One. The darkroom is waiting. Welcome back.', 1] },
+          { music: { state: 'victory', level: 0.5 } },
+        ],
+      },
+    ],
+  },
+
+  // --------------------------------------------------------------- storm --
+  {
+    id: 'storm', order: 5, name: 'Thunderhead', location: 'Above Kargil, in weather',
+    summary: 'A hostile fighter sweep is coming in under cover of a storm. Hold the sky over Kargil.',
+    briefing: [
+      'A storm cell is sitting over the Suru valley, and hostile fighters are using it: three groups, coming to sweep the sky ahead of their own strike.',
+      'Solid cloud from 5700 to 7400 metres. An aircraft inside it cannot be held by a heat-seeker, and they know it. Neither can you.',
+      'The radar missile does not care about cloud. Take it, and shoot before the merge.',
+      'Expect rough air: the gun will be hard work. Fly the aircraft first.',
+    ],
+    start: { x: -6000, z: 2500, alt: 5300, heading: 40, speed: 270 },
+    conditions: { time: 16.2, weather: 'storm' },
+    specials: ['lraam', 'hobs'], special: 'lraam',
+    timeLimit: 780, parTime: 330, rank: { S: 13200, A: 11500, B: 9000, C: 6500 },
+    maxAttackers: 2,
+    groups: {
+      raid1: { kind: 'fighters', type: 'bandit', count: 3, at: { x: 12000, z: -30000, alt: 6500 }, heading: 205, tags: ['storm_air'], isTarget: true, aware: true },
+      raid2: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 30000, z: -22000, alt: 6600 }, heading: 240, tags: ['storm_air'], isTarget: true, aware: true },
+      raid3: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 2000, z: -36000, alt: 6800 }, heading: 185, speed: 290, tags: ['storm_air'], isTarget: true, aware: true },
+    },
+    phases: [
+      {
+        id: 'first', name: 'First group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
+        enter: [
+          { music: { state: 'danger', level: 0.7 } },
+          { spawn: 'raid1' },
+          { radio: ['control', 'Vajra One, Shikhar. Weather is poor and getting worse. First group, three bandits, north-east, in the cloud layer.', 2] },
+          { radio: ['wing', 'Two is in the soup behind you. I will call what I can see, which is nothing.', 1] },
+        ],
+        triggers: [
+          { when: { time: 30 }, do: [{ radio: ['control', 'Shikhar: they are holding in cloud. Heat-seekers will not hold them there. Radar shot, or wait for them to come down.', 1] }] },
+        ],
+        done: { destroyed: 'storm_air', count: 3 },
+      },
+      {
+        id: 'second', name: 'Second group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
+        enter: [
+          { spawn: 'raid2' },
+          { radio: ['control', 'Second group, four more, from the east. These are better. They will try to drag you up into the weather.', 2] },
+        ],
+        done: { destroyed: 'storm_air', count: 7 },
+      },
+      {
+        id: 'third', name: 'Last group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
+        enter: [
+          { music: { state: 'danger', level: 0.95 } },
+          { maxAttackers: 3 },
+          { spawn: 'raid3' },
+          { radio: ['control', 'Shikhar: last group, four, north, fast. That is everything they have in this weather. Hold them.', 2] },
+        ],
+        done: { destroyed: 'storm_air', count: 11 },
+        exit: [
+          { bonus: { label: 'Sky held', score: 1500 } },
+          { radio: ['control', 'Shikhar: scope is clear. Their strike has turned back. Get out of that weather, Vajra One.', 2] },
+          { radio: ['tower', 'Kesar Tower. Field is wet but open. Bring it down carefully.', 1] },
           { music: { state: 'victory', level: 0.5 } },
         ],
       },
@@ -211,17 +351,20 @@ export const MISSIONS = [
 
   // ------------------------------------------------------------------ M4 --
   {
-    id: 'm4', order: 4, name: "Tiger's Teeth", location: 'Tiger Hill',
+    id: 'm4', order: 6, name: "Tiger's Teeth", location: 'Tiger Hill',
     summary: 'Break the summit positions on Tiger Hill — and meet the ace flight sent to stop you.',
     briefing: [
-      'Tiger Hill commands everything west of Drass. Tonight the infantry climb it. This afternoon you open the door.',
+      'Tiger Hill commands everything west of Drass. Tonight the infantry climb it. In the last of the light you open the door.',
       'Bunkers on the summit, sangars on the eastern spur, a radar-guided missile site in the valley beneath. Bombs for the bunkers.',
       'Intelligence believes the hostile ace flight, callsign Irbis, has moved into the sector. Four aircraft. They do not fly like the others.',
       'If Irbis comes, you will be outnumbered. Fight your fight, not theirs.',
     ],
     start: { x: -21500, z: 9400, alt: 5500, heading: 282, speed: 260 },
+    // Dusk into night: the clock runs twelve minutes to the minute, so the
+    // strike starts in the last light and the ace fight ends in the dark.
+    conditions: { time: 18.9, weather: 'scattered', advance: 0.2 },
     specials: ['bomb', 'rkt', 'hobs'], special: 'bomb',
-    timeLimit: 960, parTime: 480, rank: { S: 19000, A: 16500, B: 13500, C: 10000 },
+    timeLimit: 960, parTime: 480, rank: { S: 20500, A: 17500, B: 14000, C: 10000 },
     maxAttackers: 2,
     groups: {
       summit: { kind: 'base', kit: 'marble', near: TIGER, search: 600, snap: 'ridge', name: 'SUMMIT BUNKER', tags: ['m4_primary'], isTarget: true, kitHealth: 260,
@@ -249,7 +392,7 @@ export const MISSIONS = [
         done: { flag: 'irbis' },
       },
       {
-        id: 'irbis', name: 'Irbis', objective: { text: 'Survive Irbis flight — shoot down all four', track: { destroyed: 'm4_aces' } },
+        id: 'irbis', name: 'Irbis', objective: { text: 'Survive Irbis flight — shoot down all four', track: { destroyed: 'm4_aces', total: 4 } },
         enter: [
           { music: { state: 'ace', level: 1 } },
           { maxAttackers: 2 },
@@ -259,7 +402,7 @@ export const MISSIONS = [
         ],
         triggers: [
           { when: { any: [{ destroyed: 'm4_aces', count: 1 }, { time: 75 }] }, do: [{ spawn: 'irbisB' }, { radio: ['control', 'Two more, north-east, coming down on you. That will be their leader.', 2] }] },
-          { when: { destroyed: 'm4_aces', count: 3 }, do: [{ radio: ['wing', 'One left, lead! It is just him now!', 1] }] },
+          { when: { destroyed: 'm4_aces', count: 3 }, do: [{ radio: ['wing', 'One left, lead! Stay on it.', 1] }] },
         ],
         done: { all: [{ destroyed: 'm4_aces', count: 4 }, { time: 76 }] },
         exit: [{ bonus: { label: 'Irbis flight defeated', score: 3000 } }, { radio: ['control', 'Shikhar... scope is clean. All four. Vajra One, I do not have the words.', 2] }],
@@ -270,7 +413,7 @@ export const MISSIONS = [
         done: { destroyed: 'm4_primary' },
         exit: [
           { radio: ['fac', 'Summit is burning. We go up tonight. Thank you, Vajra — from all of us down here.', 2] },
-          { radio: ['tower', 'Home Plate to Vajra One. Come home. The tea is hot.', 1] },
+          { radio: ['tower', 'Kesar Tower to Vajra One. Come home. The tea is hot.', 1] },
           { music: { state: 'victory', level: 0.6 } },
         ],
       },
@@ -280,13 +423,16 @@ export const MISSIONS = [
 
   // ---------------------------------------------------------------- free --
   {
-    id: 'free', order: 5, free: true, name: 'Free Flight', location: 'Drass valley',
+    id: 'free', order: 7, free: true, name: 'Free Flight', location: 'Drass valley',
     summary: 'No orders, no clock. A practice range in the valley and two drones that will not shoot back.',
     briefing: [
       'The sector is yours. Unarmed drones orbit above the valley; trucks and tents are laid out on the range near the river.',
       'Nothing here shoots back. Learn the aircraft: corner speed, the airbrake turn, the gun lead.',
+      'Choose the hour and the weather above: fly it at dawn, at night, or through a storm.',
     ],
     start: { x: -15500, z: 9300, alt: 5200, heading: 268, speed: 250 },
+    // The player picks both in the briefing (flow.setConditions).
+    conditions: { time: 9.5, weather: 'scattered', choose: true },
     specials: ['hobs', 'lraam', 'rkt', 'bomb'], special: 'hobs',
     timeLimit: 0, parTime: 0, rank: null,
     groups: {
@@ -302,7 +448,7 @@ export const MISSIONS = [
         enter: [
           { music: { state: 'cruise', level: 0.3 } }, { hostile: false },
           { spawn: 'range' }, { spawn: 'drones' },
-          { radio: ['tower', 'Vajra One, Home Plate. The valley is yours. Range is hot, drones are up. Enjoy the view.', 0] },
+          { radio: ['tower', 'Vajra One, Kesar Tower. The valley is yours. Range is hot, drones are up. Enjoy the view.', 0] },
         ],
         done: { flag: 'never' },
       },

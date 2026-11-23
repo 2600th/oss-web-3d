@@ -111,10 +111,13 @@ export function computeLayout({ w, h, safe = {}, hudScale = 1, touch = false }) 
     layout.health = { x: L + radarR * 2 + 16 * s, y: T + 52 * s };
     layout.weapons = { x: R, y: T + TOUCH_TOP_H + 12 };
     layout.weaponsTop = true;
-    // Subtitles sit between the thumb clusters, banners low between the
+    // Subtitles sit between the thumb clusters, banners low under the
     // tapes: at 390 px tall the top slot is the MISSILE plate's.
     layout.radio = { x: cx, y: B - 64 * s, maxW: Math.min(fieldW * 0.46, 360) };
-    layout.bannerY = cy + tapeH / 2 - 52 * s;
+    // Under the tapes' bottom ends, over the low rungs the airframe already
+    // hides; the HUD cuts a ladder window for it so no rung strikes through
+    // the text (it moves up if a long radio line needs the space below).
+    layout.bannerY = cy + tapeH / 2 + 6 * s;
     // arrows stay out of the bottom thumb corners
     const aTop = T + 20;
     const aBot = B - 120 * s;
