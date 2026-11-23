@@ -494,7 +494,10 @@ export class Clouds {
       // Step length: fine for the first couple of kilometres (near-field detail
       // needs samples closer together than its features), the tier's base step
       // in the middle distance, then growing with distance.
-      const stepAt = (tt) => max(min(u.stepMin, max(u.stepNear, tt.mul(0.03))), tt.mul(u.stepGrow));
+      // The first tens of metres step in metres, so that what is 15 m from the
+      // camera (your own aircraft in chase view) is fogged by the cloud
+      // between you and it rather than popping clear of it.
+      const stepAt = (tt) => max(min(u.stepMin, max(min(u.stepNear, tt.mul(0.3).add(3)), tt.mul(0.03))), tt.mul(u.stepGrow));
       const t = t0.add(blue.mul(stepAt(t0))).toVar();
       const T = float(1).toVar();
       const S = vec3(0).toVar();
@@ -965,7 +968,10 @@ export class Clouds {
       }).catch(() => { this._probePending = false; });
     }
     const k = 1 - Math.exp(-dt * 6);
-    this.inCloud += ((this._probeDensity ?? 0) - this.inCloud) * k;
+    // leave a cloud faster than you enter it: the exit should be a clean break
+    const target = this._probeDensity ?? 0;
+    this.inCloud += (target - this.inCloud) * (target < this.inCloud ? 1 - Math.exp(-dt * 16) : k);
+    if (this.inCloud < 0.004 && target === 0) this.inCloud = 0;
     this.sunVisibility += ((this._probeShadow ?? 1) - this.sunVisibility) * k;
   }
 
