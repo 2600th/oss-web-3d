@@ -8,6 +8,7 @@ import {
   cascadeSplits, SUN_SHADOW_TIERS, sunShadowConfig, texelWorld, cascadeBias, fallbackRadius,
   FALLBACK_SEPARATION, CLOUD_SHADOW_PATH, cloudShadowSpan, SWEEP_REACH, sweepReach,
 } from './shadowMath.js';
+import { SHADOW_MAX } from '../terrain/shadowConst.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} != ${b}`);
 
@@ -88,13 +89,13 @@ test('cloud shadow span is capped at grazing sun', () => {
   assert.ok(Number.isFinite(cloudShadowSpan(1500, 4500, -0.1, 0).t1));
 });
 
-test('sweep reach: full near the ground, none where the 8-bit sweep saturates', () => {
+test('sweep reach: the R16F sweep reaches as high as it stores (8 km), fading over its last 500 m', () => {
   assert.equal(sweepReach(0), 1);
+  assert.equal(sweepReach(500), 1); // a jet on a low pass: the old 8-bit reach ended at 46 m
   assert.equal(sweepReach(SWEEP_REACH.full), 1);
   assert.equal(sweepReach(SWEEP_REACH.none), 0);
-  assert.equal(sweepReach(500), 0);
   near(sweepReach((SWEEP_REACH.full + SWEEP_REACH.none) / 2), 0.5);
   let prev = 1;
-  for (let a = 30; a <= 50; a += 0.5) { const r = sweepReach(a); assert.ok(r <= prev); prev = r; }
-  assert.ok(SWEEP_REACH.none < 47.75);
+  for (let a = 7000; a <= 8200; a += 25) { const r = sweepReach(a); assert.ok(r <= prev); prev = r; }
+  assert.equal(SWEEP_REACH.none, SHADOW_MAX);
 });
