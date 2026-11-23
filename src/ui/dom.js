@@ -128,12 +128,14 @@ export class Nav {
     i = i < 0 ? (delta > 0 ? 0 : list.length - 1) : (i + delta + list.length) % list.length;
     list[i].focus({ preventScroll: false });
     list[i].scrollIntoView?.({ block: 'nearest' });
+    if (list[i] !== cur) this.onSound?.('hover');
   }
 
   adjust(dir) {
     const cur = this.current();
     if (cur && cur.dataset.adjust !== undefined) {
       cur.dispatchEvent(new CustomEvent('nav-adjust', { detail: dir }));
+      this.onSound?.('hover');
       return true;
     }
     // Horizontal groups (e.g. a row of buttons) move along the row.
@@ -150,7 +152,10 @@ export class Nav {
   }
 
   back() {
-    if (this.onBack) this.onBack();
+    if (this.onBack) {
+      this.onSound?.('back');
+      this.onBack();
+    }
   }
 
   _onKey(e) {

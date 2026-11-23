@@ -15,10 +15,13 @@ export const DEFAULT_BINDINGS = [
   { action: 'brake', label: 'Airbrake', keys: ['Z'], pad: 'LB', group: 'Flight' },
   { action: 'missile', label: 'Fire missile', keys: ['Space'], pad: 'A', code: 'Space', group: 'Combat' },
   { action: 'gun', label: 'Gun (hold)', keys: ['F'], pad: 'RB', code: 'KeyF', group: 'Combat' },
-  { action: 'flares', label: 'Flares', keys: ['C'], pad: 'B', code: 'KeyC', group: 'Combat' },
+  // C / V / B belong to the camera system (src/camera/system.js), so flares sit on G.
+  { action: 'flares', label: 'Flares', keys: ['G'], pad: 'B', code: 'KeyG', group: 'Combat' },
   { action: 'weapon', label: 'Switch weapon', keys: ['R'], pad: 'Y', code: 'KeyR', group: 'Combat' },
   { action: 'target', label: 'Cycle target', keys: ['Tab'], pad: 'X', code: 'Tab', group: 'Combat' },
-  { action: 'camera', label: 'Change camera', keys: ['V'], pad: 'Right stick click', code: 'KeyV', group: 'View' },
+  { action: 'camera', label: 'Change camera', keys: ['C'], pad: 'View', code: 'KeyC', group: 'View' },
+  { action: 'lookTarget', label: 'Look at target (hold)', keys: ['V'], pad: 'Right stick click', code: 'KeyV', group: 'View' },
+  { action: 'missileCam', label: 'Missile camera on / off', keys: ['B'], pad: '', code: 'KeyB', group: 'View' },
   { action: 'pause', label: 'Pause', keys: ['Esc'], pad: 'Menu', code: 'Escape', group: 'View' },
 ];
 

@@ -23,6 +23,13 @@ export const SECTIONS = [
         options: [[null, 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']],
         note: 'Resolution applies now. Terrain detail and shadows apply after a reload.',
       },
+      {
+        key: 'brightness', label: 'Brightness', type: 'range', min: -1, max: 1, step: 0.1,
+        fmt: (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} EV`,
+      },
+      { key: 'motionBlur', label: 'Motion blur', type: 'range', min: 0, max: 1.5, step: 0.1, fmt: pct },
+      { key: 'lensFlare', label: 'Lens flare', type: 'toggle' },
+      { key: 'filmGrain', label: 'Film grain', type: 'toggle' },
     ],
   },
   {
@@ -88,6 +95,8 @@ export const SECTIONS = [
       },
       { key: 'cameraFov', label: 'Field of view', type: 'range', min: -10, max: 15, step: 1, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
       { key: 'cameraShake', label: 'Camera shake', type: 'range', min: 0, max: 1, step: 0.1, fmt: pct },
+      { key: 'killCam', label: 'Kill camera', type: 'toggle', note: 'A short look at each air kill, when nothing is threatening you.' },
+      { key: 'missileCam', label: 'Follow your missiles', type: 'toggle' },
     ],
   },
   {

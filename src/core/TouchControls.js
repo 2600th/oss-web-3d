@@ -324,6 +324,8 @@ function mk(tag, cls, parent) {
   const n = document.createElement(tag);
   if (tag === 'button') n.type = 'button';
   if (cls) n.className = cls;
+  // Flight controls are not menu buttons: no UI click sound (src/audio).
+  if (tag === 'button') n.dataset.sound = 'none';
   parent.appendChild(n);
   return n;
 }

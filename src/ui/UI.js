@@ -57,6 +57,9 @@ export class UI {
     });
 
     this.nav = new Nav();
+    // Focus moves and Back have sounds (src/audio listens for ui:sound);
+    // activation is a real click, which audio already hears.
+    this.nav.onSound = (name) => game.events.emit('ui:sound', { name });
     if (this.touch) this.nav.modality = 'touch';
     this.nav.onStart = () => {
       if (this.screen === 'sortie') {
@@ -110,7 +113,7 @@ export class UI {
     };
     if ('requestIdleCallback' in window) requestIdleCallback(bake, { timeout: 800 });
     else setTimeout(bake, 50);
-    this.hud.keyHint.flares = keyFor(this.game.input, 'flares') || 'C';
+    this.hud.keyHint.flares = keyFor(this.game.input, 'flares') || 'G';
     if (this.game.input) this.game.input.enabled = false;
     const mode = this.params.get('hudmock');
     if (import.meta.env.DEV && mode !== null) {
@@ -216,6 +219,12 @@ export class UI {
     }
     this.screen = id;
     document.documentElement.dataset.screen = id;
+    if (this._cineOn && !MENU_SCREENS.has(id) && id !== 'boot') this.game.cameraRig?.stopCinematic?.();
+    if (id === 'sortie' && prev !== 'pause') {
+      const rig = this.game.cameraRig;
+      const view = this.settings.defaultCamera;
+      if (rig?.setMode && view) rig.setMode(view);
+    }
     const flying = id === 'sortie' || id === 'pause';
     this.hud.setVisible(flying);
     this.hud.canvas.classList.toggle('dim', id === 'pause');
@@ -374,12 +383,46 @@ export class UI {
   // ------------------------------------------------------------- settings --
 
   _applyAllSettings() {
-    for (const k of ['hudColor', 'reducedMotion', 'subtitleSize', 'controlMode', 'cameraFov']) this._onSetting(k, this.settings[k], true);
+    for (const k of [
+      'hudColor', 'reducedMotion', 'subtitleSize', 'controlMode', 'cameraFov', 'cameraShake', 'killCam', 'missileCam',
+      'brightness', 'motionBlur', 'lensFlare', 'filmGrain', 'masterVolume', 'musicVolume', 'sfxVolume', 'radioVolume',
+    ]) this._onSetting(k, this.settings[k], true);
   }
 
   _onSetting(key, value, initial = false) {
     const g = this.game;
+    const post = g.post?.options;
+    const cam = g.cameraRig?.options;
+    // Audio owns its buses and persists them; Settings stays the source of
+    // truth so one menu drives everything. The UI bus follows effects.
+    const audio = g.systems?.audio;
+    const BUS = { masterVolume: 'master', musicVolume: 'music', sfxVolume: 'sfx', radioVolume: 'radio' };
+    if (BUS[key] && audio?.setVolume) {
+      audio.setVolume(BUS[key], value);
+      if (key === 'sfxVolume') audio.setVolume('ui', value);
+    }
     switch (key) {
+      case 'brightness':
+        if (post) post.exposureCompensation = value;
+        break;
+      case 'motionBlur':
+        if (post) post.motionBlur = value;
+        break;
+      case 'lensFlare':
+        if (post) post.flare = !!value;
+        break;
+      case 'filmGrain':
+        if (post) post.grain = !!value;
+        break;
+      case 'cameraShake':
+        if (cam) cam.shake = value;
+        break;
+      case 'killCam':
+        if (cam) cam.killCam = !!value;
+        break;
+      case 'missileCam':
+        if (cam) cam.missileCam = !!value;
+        break;
       case 'tier': {
         if (initial) break;
         const name = value ?? autoTier(g.r);
@@ -393,9 +436,13 @@ export class UI {
       case 'hudOpacity':
         this.hud.applySettings(this.settings);
         break;
-      case 'reducedMotion':
-        document.documentElement.dataset.reducedMotion = String(this.settings.prefersReducedMotion);
+      case 'reducedMotion': {
+        const rm = this.settings.prefersReducedMotion;
+        document.documentElement.dataset.reducedMotion = String(rm);
+        if (post) post.reducedMotion = rm;
+        if (cam) cam.reducedMotion = rm;
         break;
+      }
       case 'subtitleSize':
         document.documentElement.dataset.subtitles = value;
         break;
@@ -422,6 +469,23 @@ export class UI {
     if (!this.flow.real && f.agl < 900 && !f.crashed) {
       // Menu-time terrain clearance for the unattended jet (local flow only).
       f.position.y += (900 - f.agl) * Math.min(1, dt * 0.8);
+    }
+    // The camera owner's 'title' cinematic when it exists (it loops until
+    // stopped); the orbit below is the fallback for builds without it.
+    const rig = g.cameraRig;
+    if (rig?.playCinematic && !this._cineFailed) {
+      if (!this._cineOn) {
+        this._cineOn = true;
+        rig.playCinematic('title').then(
+          () => (this._cineOn = false),
+          (e) => {
+            this._cineOn = false;
+            this._cineFailed = true;
+            console.warn('[ui] title cinematic unavailable, using the ui orbit', e);
+          },
+        );
+      }
+      return;
     }
     const cam = g.camera;
     const a = this._t * 0.05 + 0.9;

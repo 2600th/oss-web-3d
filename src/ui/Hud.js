@@ -64,7 +64,7 @@ export class Hud {
     this.touch = false;
     this.occluders = []; // touch button rects, CSS px (UI refreshes them)
     this.safe ={ top: 0, right: 0, bottom: 0, left: 0 };
-    this.keyHint = { flares: 'C' };
+    this.keyHint = { flares: 'G' };
   }
 
   applySettings(settings) {
@@ -615,7 +615,8 @@ export class Hud {
     const th = this.theme;
     const p = t.position;
     this._project(p.x, p.y, p.z, _q);
-    if (_q.behind) return;
+    // under a thumb button the edge arrow stands in for the reticle
+    if (_q.behind || this._occluded(_q.x, _q.y, 18 * s)) return;
     const x = _q.x;
     const y = _q.y;
     const state = d.lock.state;

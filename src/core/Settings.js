@@ -21,6 +21,10 @@ const LEGACY_KEYS = ['safed-sagar.settings.v2', 'safed-sagar.settings.v1'];
 export const SCHEMA = {
   // graphics
   tier: { def: null, values: [null, 'low', 'medium', 'high', 'ultra'] }, // null = auto
+  brightness: { def: 0, min: -1, max: 1 }, // EV -> post.options.exposureCompensation
+  motionBlur: { def: 1, min: 0, max: 1.5 }, // -> post.options.motionBlur
+  lensFlare: { def: true, bool: true }, // -> post.options.flare
+  filmGrain: { def: true, bool: true }, // -> post.options.grain
   // controls
   controlMode: { def: 'standard', values: ['standard', 'expert'] },
   invertY: { def: false, bool: true },
@@ -43,6 +47,8 @@ export const SCHEMA = {
   cameraShake: { def: 1, min: 0, max: 1 },
   cameraFov: { def: 0, min: -10, max: 15 }, // degrees added to the rig's base FOV
   defaultCamera: { def: 'chase', values: ['chase', 'cockpit', 'hud'] },
+  killCam: { def: true, bool: true }, // -> cameraRig.options.killCam
+  missileCam: { def: false, bool: true }, // -> cameraRig.options.missileCam
   // accessibility
   reducedMotion: { def: 'system', values: ['system', 'on', 'off'] },
   // first-run
