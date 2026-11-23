@@ -4,6 +4,8 @@ import { Atmosphere } from './atmosphere/Atmosphere.js';
 import { Clouds } from './clouds/Clouds.js';
 import { Weather } from './weather/Weather.js';
 import { TimeOfDay } from './timeofday/TimeOfDay.js'; // [timeofday]
+import { installSunShadows } from './shadows/SunShadows.js'; // [shadows]
+import { SHADOW_LAYER } from './terrain/Terrain.js'; // [shadows]
 
 /**
  * Sky, sun, ambient, aerial perspective and volumetric clouds.
@@ -48,6 +50,27 @@ export const PRESETS = {
 
 const GROUND_ALBEDO = [0.26, 0.23, 0.2];
 
+/**
+ * [shadows] `receivedShadowNode` is a function, not a node, so three leaves it
+ * out of a material's program cache key: two node materials that differ only
+ * in that hook share one compiled shader, and whichever compiled first wins
+ * (a unit material could silently lose its cloud / terrain shadow, and a hook
+ * installed after the first compile never took effect). Fold the hook's kind
+ * into the key.
+ */
+const _baseKeys = new WeakMap();
+function keyShadowHook(material, tag) {
+  if (typeof material.customProgramCacheKey !== 'function') return;
+  if (!_baseKeys.has(material)) {
+    const base = material.customProgramCacheKey;
+    _baseKeys.set(material, base);
+    material.customProgramCacheKey = function customProgramCacheKey() {
+      return `${base.call(this)}|shadowHook:${this.userData.shadowHook ?? ''}`;
+    };
+  }
+  material.userData.shadowHook = tag;
+}
+
 export class Environment {
   constructor(r) {
     this.r = r;
@@ -84,14 +107,18 @@ export class Environment {
     this.sky.scale.setScalar(200000);
 
     this.sun = new THREE.DirectionalLight(0xffffff, 4);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.setScalar(tier.shadowMapSize ?? 2048);
-    this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 4000;
-    const s = 60;
-    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s });
-    this.sun.shadow.bias = -0.0005;
-    this.sun.shadow.normalBias = 0.05;
+    // [shadows] Camera-fitted cascades with a sun-sized penumbra replace the one
+    // 120 m box that followed the player (see src/world/shadows/SunShadows.js).
+    // The terrain's shadow is its heightfield sweep, not this map.
+    this.sunShadows = installSunShadows(this.sun, r.camera, {
+      tier, backend: r.backend, layers: 1 | (1 << SHADOW_LAYER),
+    });
+    /**
+     * [shadows] TSL Fn(worldPos) -> 0..1, the terrain's heightfield shadow at a
+     * point near the ground (set by the terrain; null until then). Folded into
+     * `applyCloudShadow` so units and props in a ridge's shadow are not sunlit.
+     */
+    this.terrainShadow = null;
 
     this.ambient = new THREE.HemisphereLight(0x9cc4ff, 0x6b5a48, 0.2);
     /** Strength of the hemisphere fill relative to the physical sky irradiance. */
@@ -190,12 +217,21 @@ export class Environment {
   /**
    * Make a node material receive cloud shadows (terrain, buildings, aircraft).
    * Safe to call again after a material is rebuilt.
+   * [shadows] Also the terrain's heightfield shadow (`terrainShadow`) for
+   * anything near the ground, unless `terrain: false` or the material is the
+   * terrain's own (it shades itself with the same sweep).
    */
-  applyCloudShadow(material) {
-    if (!material || material.userData?.cloudShadowFn === this.cloudShadow) return material;
+  applyCloudShadow(material, { terrain = true } = {}) {
+    if (!material) return material;
+    const ts = terrain && !material.terrainLit ? this.terrainShadow : null;
+    if (material.userData?.cloudShadowFn === this.cloudShadow && (material.userData.terrainShadowFn ?? null) === ts) return material;
     const shadow = this.cloudShadow;
-    material.receivedShadowNode = Fn(([s]) => s.mul(shadow(positionWorld)));
+    material.receivedShadowNode = ts
+      ? Fn(([s]) => s.mul(shadow(positionWorld)).mul(ts(positionWorld)))
+      : Fn(([s]) => s.mul(shadow(positionWorld)));
     material.userData.cloudShadowFn = shadow;
+    material.userData.terrainShadowFn = ts;
+    keyShadowHook(material, ts ? 'cloud+terrain' : 'cloud');
     material.needsUpdate = true;
     return material;
   }
@@ -253,6 +289,7 @@ export class Environment {
   update(dt, camera, focus = camera.position) {
     const atm = this.atmosphere;
     this.timeOfDay?.update(dt, camera); // [timeofday] moves solarDirection / sunDirection
+    this.sunShadows.update(camera, this.keyLight); // [shadows] refit cascades on FOV / aspect changes
     this.sky.position.copy(camera.position);
     this.sun.target.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(this.sunDirection, 2000);
@@ -299,6 +336,7 @@ export class Environment {
 
   dispose() {
     this.atmosphere.dispose();
+    this.sunShadows.dispose(); // [shadows]
     this.clouds?.dispose();
     this.timeOfDay?.dispose();
     this._pmrem.dispose();
