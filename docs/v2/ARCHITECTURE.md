@@ -965,3 +965,12 @@ Hook-ups are in `src/flight/FlightModel.js` and `src/assets/system.js`
     read-only.
 - **Changed:** a dead or unparented vehicle's lamp sprites and beam are
   removed in `lateUpdate` on the frame it dies. Before, this was the 1 s scan.
+
+### Mission balance (Thunderhead, Black Road)
+All additive; nothing existing changed shape. Details in `docs/v2/evidence/polish-balance/README.md`.
+- Mission data: `spotting: { tags, truck: {lit, dark}, fighter: {lit, dark}, keep, hold, lose, scatter: {seconds, speed, spread}, darkLine, picture: {every, first, range} }` (`src/missions/spotting.js`).
+- Runner: action `{resupply: {health?, flares?, msl?, sp?}}`; condition `{zone: {x, z, r, below?}}`.
+- Event `player:resupply {health (0..1), flares, msl, sp}`.
+- Missions write `hidden` / `selectable` / `lockable` on watched trucks and fighters (existing combat flags), change `speed` and `spacing` of an ai `Convoy` while it scatters, and toggle the `visible` flag of a truck's `headlights` group. `HeadlightBeams` follows that flag, so a column that kills its lights loses its beams too.
+- AI: `CLOUD` (brain.js), `ROUGH_AIR` and `gunSettle` (Fighter.js), skill override `dark`.
+- Dev: `game.dev.tuning`, bot option `cloud`.

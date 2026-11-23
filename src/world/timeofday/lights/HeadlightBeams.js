@@ -190,7 +190,10 @@ export class HeadlightBeams {
   /** Light the road in front of `object3d` (nose -Z, lamps at +-halfWidth, height, front). */
   add(object3d, { entity = null, halfWidth = 0.85, height = 1.05, front = -2.7, intensity = 1 } = {}) {
     if (!object3d || this.items.has(object3d)) return this.items.get(object3d) ?? null;
-    const it = { object3d, entity, height, front, halfWidth, intensity };
+    // The vehicle's 'headlights' group, if any: a mission that has the column
+    // kill its lights hides it, and the beam must go dark with the lamps.
+    const lamps = object3d.getObjectByName?.('headlights') ?? null;
+    const it = { object3d, entity, height, front, halfWidth, intensity, lamps };
     this.items.set(object3d, it);
     return it;
   }
@@ -207,7 +210,10 @@ export class HeadlightBeams {
     }
     if (on <= 0.001 || this.items.size === 0) { this.mesh.visible = false; this.drawn = 0; return; }
     const cam = camera.position;
-    const slots = beamSlots(this.items.values(), cam, this.cfg);
+    const lit = (this._lit ??= []);
+    lit.length = 0;
+    for (const it of this.items.values()) if (!it.lamps || it.lamps.visible !== false) lit.push(it);
+    const slots = beamSlots(lit, cam, this.cfg);
     for (let k = 0; k < slots.length; k++) {
       const it = slots[k];
       const m = it.object3d.matrixWorld;

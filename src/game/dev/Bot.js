@@ -40,6 +40,12 @@ export const BOT_DEFAULTS = {
   evade: true,
   /** Use rockets / bombs on hard targets when carried. */
   specials: true,
+  /**
+   * Use a solid cloud layer when an infra-red missile is on the way (what the
+   * Thunderhead briefing tells the pilot to do). Off by default so runs stay
+   * comparable with the earlier records; `dev.run(id, {bot: {cloud: true}})`.
+   */
+  cloud: false,
 };
 
 export class Bot {
@@ -183,6 +189,9 @@ export class Bot {
     const cur = this.current;
     for (const t of combat.world.targets) {
       if (!t.alive || t === combat.player || t.team === 'friendly') continue;
+      // Only what the pilot can see: a contact the HUD does not show (night
+      // spotting, missions/spotting.js) is not there for a human either.
+      if (t.hidden || t.selectable === false) continue;
       const d = t.position.distanceTo(pos);
       let s;
       if (t.class === 'air') {
@@ -229,7 +238,7 @@ export class Bot {
 
     let t = this.current;
     const best = this._chooseTarget(combat, f);
-    const keep = t && t.alive && !t.captured && t.class !== 'air' && t.kind !== 'post' && best?.class !== 'air'
+    const keep = t && t.alive && !t.captured && !t.hidden && t.class !== 'air' && t.kind !== 'post' && best?.class !== 'air'
       && (this.state === 'run' || this.state === 'egress') && t.position.distanceTo(f.position) < 8000;
     if (!keep && t !== best) { t = best; this.state = 'nav'; }
     this.current = t;
@@ -318,6 +327,12 @@ export class Bot {
     // it once it is behind.
     i.turn = b >= 0 ? (b < 90 ? -1 : 1) : (b > -90 ? 1 : -1);
     i.climb = ir ? -0.12 : -0.3; // radar SAM: get down among the ridges
+    // Heat-seeker and a cloud layer within reach: go into it (it loses you there).
+    const layer = this.opts.cloud && ir ? this.game.conditions?.cloud : null;
+    if (layer) {
+      const dy = (layer.base + layer.top) * 0.5 - f.position.y;
+      if (Math.abs(dy) < 1600) i.climb = clamp(dy / 900, -0.6, 0.6);
+    }
     i.throttle = 1;
     i.brake = tti < 1.6 ? 1 : 0; // last-ditch high-G break
     if (!this._breaking) this.stats.breaks++;
