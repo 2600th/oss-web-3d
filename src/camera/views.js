@@ -66,9 +66,9 @@ export function lockView(rig, dt, flight) {
   _up.set(0, 1, 0).applyQuaternion(rig._boomQuat).lerp(WORLD_UP, 0.65).normalize();
   // behind the jet on the target line, raised and a touch to the side; the
   // closer the target, the further back (both stay in frame)
-  const back = 20 + 10 * (1 - smoothstep(300, 2500, dist));
+  const back = 27 + 10 * (1 - smoothstep(300, 2500, dist));
   _side.crossVectors(_a, _up).normalize();
-  _b.copy(_a).multiplyScalar(-back).addScaledVector(_up, 5.2).addScaledVector(_side, 2.2);
+  _b.copy(_a).multiplyScalar(-back).addScaledVector(_up, 6.5).addScaledVector(_side, 3);
   const off = springVec(s.off, _b, 2.6, 0.9, dt);
   cam.position.copy(P).add(off);
   clearGround(cam.position, 5);
@@ -80,7 +80,9 @@ export function lockView(rig, dt, flight) {
   else { s.aim.lerp(aimDir, dampFactor(7, dt)).normalize(); s.up.lerp(_up, dampFactor(4, dt)).normalize(); }
   cam.up.copy(s.up);
   cam.lookAt(_a.copy(cam.position).add(s.aim));
-  const want = fitFov(_c, _d, 30, 70, cam.aspect);
+  // never tighter than the jet's own span (~8 m wingspan + margin) allows
+  const jetFov = THREE.MathUtils.radToDeg(2 * Math.atan(9 / Math.max(5, off.length()))) * 1.6;
+  const want = Math.max(fitFov(_c, _d, 34, 70, cam.aspect), Math.min(70, jetFov));
   s.fov = s.fresh ? want : damp(s.fov, want, 3.5, dt);
   s.fresh = false;
   return s.fov;

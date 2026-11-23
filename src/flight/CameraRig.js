@@ -226,7 +226,7 @@ export class CameraRig {
     // start beside the player->wreck line, low, so the sky frames the burst
     const side = Math.random() < 0.5 ? 1 : -1;
     const a0 = Math.atan2(_v.x, -_v.z) + Math.PI + side * 1.1;
-    const radius = clamp(dist * 0.12, 85, 150);
+    const radius = clamp(dist * 0.25, 150, 260); // a large air burst is ~100 m across
     this._beginOverride({
       view: 'kill', target, center: p, t: 0, dur: 2.5, a0, radius, height: radius * 0.16 + 3, fov: 42,
     }, 0);
@@ -396,7 +396,11 @@ export class CameraRig {
     // -- lens ----------------------------------------------------------------
     if (!this.options.dof) this.dofOut = null;
     this._fov = fov;
-    const filmOffset = shift * cam.filmGauge;
+    // three.js slides the frustum's left edge by near*filmOffset/filmWidth, so a
+    // positive filmOffset moves the subject *left*. Convert "fraction of frame
+    // width, > 0 = subject right of centre" into that unit (fov dependent).
+    const frameW = 2 * cam.aspect * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5);
+    const filmOffset = shift ? -shift * frameW * cam.getFilmWidth() : 0;
     if (cam.fov !== fov || cam.near !== near || cam.filmOffset !== filmOffset) {
       cam.fov = fov;
       cam.near = near;
