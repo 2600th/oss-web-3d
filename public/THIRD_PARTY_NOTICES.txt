@@ -54,12 +54,6 @@ three.js
 Copyright (c) 2010-2026 three.js authors, MIT License.
 https://github.com/mrdoob/three.js
 
-postprocessing
---------------
-
-Copyright (c) 2015-2026 Raoul van Rueschen, Zlib License.
-https://github.com/pmndrs/postprocessing
-
 Techniques implemented from published work
 ------------------------------------------
 
