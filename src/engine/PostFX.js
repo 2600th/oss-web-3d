@@ -66,6 +66,7 @@ export class PostFX {
       bloomCap: u(40), // pre-exposure; set from bloomCapExposed each frame
       mbStrength: u(0),
       mbMaxPx: u(32),
+      speedBlur: u(0), // radial edge streak, uv units at the edge
       near: u(r.camera.near),
       far: u(r.camera.far),
       aspect: u(16 / 9),
@@ -103,7 +104,11 @@ export class PostFX {
     this.droplets = createDropletTexture();
 
     const scenePass = pass(r.scene, r.camera);
-    scenePass.setMRT(mrt({ output, velocity }));
+    const sceneMRT = mrt({ output, velocity });
+    // Blend the velocity target with the material's blending (opaque: none) so
+    // a blended surface can opt out of writing velocity (useTransparentVelocity).
+    sceneMRT.setBlendMode('velocity', new THREE.BlendMode(THREE.MaterialBlending));
+    scenePass.setMRT(sceneMRT);
     this.scenePass = scenePass;
 
     // Camera-only velocity for static geometry whose vertices are placed by a
@@ -135,6 +140,17 @@ export class PostFX {
   useStaticVelocity(material) {
     if (!material || material.mrtNode) return;
     material.mrtNode = mrt({ velocity: this.staticVelocity });
+    material.needsUpdate = true;
+  }
+
+  /**
+   * Blended surfaces (canopy glass, gunsight combiner) must not write velocity:
+   * the MRT velocity target is blended like colour, so writing alpha 0 keeps
+   * the velocity of whatever is behind the glass (the terrain you look through).
+   */
+  useTransparentVelocity(material) {
+    if (!material || material.mrtNode || !material.transparent) return;
+    material.mrtNode = mrt({ velocity: vec4(velocity, 0, 0) });
     material.needsUpdate = true;
   }
 
@@ -171,7 +187,7 @@ export class PostFX {
     if (cfg.mbSamples > 0) {
       mb = convertToTexture(velocityMotionBlur({
         color: aa, velocity: vel, depth, near: u.near, far: u.far,
-        strength: u.mbStrength, maxPx: u.mbMaxPx, samples: cfg.mbSamples,
+        strength: u.mbStrength, maxPx: u.mbMaxPx, samples: cfg.mbSamples, radial: u.speedBlur,
       }));
     }
 
@@ -268,13 +284,13 @@ export class PostFX {
       x = x.add(sunFlare(uv0, u.sunUV, aspect, amount, u.flareRot));
       if (cfg.dirt) {
         const dirt = texture(this.lensDirt, uv0).rgb;
-        const reveal = sunGlow(uv0, u.sunUV, aspect).mul(amount).mul(0.9);
+        const reveal = sunGlow(uv0, u.sunUV, aspect).mul(amount).mul(0.45);
         const fromBloom = bloomTex ? luminance(bloomTex.rgb.mul(u.exposure)).mul(0.6) : float(0);
         x = x.add(dirt.mul(reveal.add(fromBloom)).mul(u.dirt));
       }
     }
     // droplet glints + flash whiteout (HDR, so it rolls off through AgX)
-    x = x.add(vec3(drop.a.mul(u.wet).mul(0.25)));
+    x = x.add(vec3(drop.a.mul(drop.b).mul(u.wet).mul(0.12)));
     x = x.add(vec3(1.0, 0.95, 0.86).mul(u.flash.mul(u.flash).mul(6)));
 
     let ldr = agxLook(x, u.lookSlope, u.lookPower, u.lookSat);
@@ -364,8 +380,12 @@ export class PostFX {
     const speedK = 0.3 + 0.7 * smoothstepJS(80, 320, speed);
     let k = shutter * speedK * o.motionBlur;
     if (o.reducedMotion) k = 0;
-    if (this._cutFrames > 0) { k = 0; this._cutFrames--; }
+    // radial speed streaks: from ~750 km/h, more with the burner lit
+    let radial = smoothstepJS(200, 340, speed) * 0.014 * (this._frame.reheat ? 1.35 : 1) * o.motionBlur;
+    if (o.reducedMotion) radial = 0;
+    if (this._cutFrames > 0) { k = 0; radial = 0; this._cutFrames--; }
     u.mbStrength.value = k;
+    u.speedBlur.value = radial;
     u.mbMaxPx.value = 36 * (this.r.renderer.getPixelRatio?.() ?? 1);
     u.seed.value = (u.seed.value + 1) % 997;
   }

@@ -32,11 +32,17 @@ export const reversedDepthToDistance = (d, near, far) => near.mul(far).div(d.mul
  * camera, so its own velocity is ~0). Without it the jet smears a ghost of
  * itself into the terrain streaks around it.
  */
-export function velocityMotionBlur({ color, velocity, depth, near, far, strength, maxPx, samples }) {
+export function velocityMotionBlur({ color, velocity, depth, near, far, strength, maxPx, samples, radial }) {
   return Fn(() => {
     const uv0 = uv();
     const px = screenSize;
     const v = velocity.sample(uv0).xy.mul(vec2(0.5, -0.5)).mul(strength).toVar();
+    if (radial) {
+      // Stylised speed streaks toward the frame edges (arcade "900 km/h" read):
+      // at altitude nothing is near enough for true camera blur to show speed.
+      const c = uv0.sub(0.5);
+      v.addAssign(c.mul(radial).mul(smoothstep(0.18, 0.62, length(c.mul(vec2(1.6, 1))))));
+    }
     const lenPx = length(v.mul(px)).toVar();
     v.mulAssign(min(1, maxPx.div(max(lenPx, 1e-4))));
     lenPx.assign(min(lenPx, maxPx));
@@ -139,7 +145,7 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
   const r8 = pow(abs(cos(ang.mul(4.0).add(0.6))), 260.0).mul(0.55);
   const fine = pow(abs(cos(ang.mul(23.0).add(1.7))), 30.0).mul(0.25);
   const vary = fract(sin(ang.mul(37.0).floor().mul(12.9898)).mul(43758.5453)).mul(0.6).add(0.4);
-  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-6.5))).mul(1.8).add(fine.mul(exp(dist.mul(-14))).mul(1.5));
+  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-5.2))).mul(2.4).add(fine.mul(exp(dist.mul(-14))).mul(1.5));
   out.addAssign(vec3(1.0, 0.95, 0.88).mul(rays));
 
   // anamorphic streak: thin, horizontal, cool
@@ -174,7 +180,7 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
 export const sunGlow = Fn(([uv0, sunUV, aspect]) => {
   const k = vec2(aspect, 1);
   const dist = length(uv0.sub(sunUV).mul(k));
-  return exp(dist.mul(-3.2));
+  return exp(dist.mul(-4.5));
 }, { uv0: 'vec2', sunUV: 'vec2', aspect: 'float', return: 'float' });
 
 // ---------------------------------------------------------------------------
@@ -237,9 +243,10 @@ export const screenStates = Fn(([c, r, grey, red, damage, lowHealth]) => {
   const l = luminance(out);
   // greyout: colour leaves first, then light, then the periphery closes in
   out.assign(mix(out, vec3(l), clamp(grey.mul(1.4), 0, 0.92)));
-  const tunnelR = mix(1.25, 0.12, grey);
-  const tunnel = smoothstep(tunnelR, tunnelR.sub(0.55), r);
-  out.mulAssign(mix(1, tunnel, smoothstep(0.1, 0.8, grey)).mul(float(1).sub(grey.mul(grey).mul(0.85))));
+  // (arcade: full G-LOC keeps a dim pinhole rather than a black screen)
+  const tunnelR = mix(1.25, 0.3, grey);
+  const tunnel = smoothstep(tunnelR, tunnelR.sub(0.55), r).mul(0.97).add(0.03);
+  out.mulAssign(mix(1, tunnel, smoothstep(0.1, 0.8, grey)).mul(float(1).sub(grey.mul(grey).mul(0.7))));
   // redout
   const redTunnel = smoothstep(mix(1.3, 0.25, red), mix(0.6, -0.2, red), r);
   out.assign(mix(out, vec3(l.mul(1.1).add(0.08), l.mul(0.12), l.mul(0.1)), clamp(red.mul(1.2), 0, 0.9)));

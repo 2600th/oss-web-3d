@@ -21,7 +21,7 @@ export const SCREEN_DEFAULTS = Object.freeze({
   negOnset: -1.6, // -G at which redout stress builds
   negRate: 0.5,
   negRecover: 0.8,
-  damageDecay: 1.6, // 1/s
+  damageDecay: 1.1, // 1/s
   smearDecay: 6.0,
   flashDecay: 5.0,
   wetRise: 2.5,
