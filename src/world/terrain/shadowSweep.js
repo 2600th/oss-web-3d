@@ -1,0 +1,59 @@
+import * as THREE from 'three/webgpu';
+export { SHADOW_MIN, SHADOW_STEP } from './shadowConst.js';
+
+
+/**
+ * Long-range terrain self-shadowing. Owns an R8 texture registered to the DEM
+ * and a worker that refills it whenever the sun has moved (see shadowWorker.js
+ * for the algorithm). Until the first sweep lands the texture reads "lit".
+ */
+export class ShadowSweep {
+  constructor(DEM) {
+    const n = DEM.res;
+    this.res = n;
+    this.texture = new THREE.DataTexture(new Uint8Array(n * n), n, n, THREE.RedFormat, THREE.UnsignedByteType);
+    this.texture.magFilter = this.texture.minFilter = THREE.LinearFilter;
+    this.texture.colorSpace = THREE.NoColorSpace;
+    this.texture.needsUpdate = true;
+    this._dir = new THREE.Vector3(0, 0, 0); // direction of the sweep in flight or shown
+    this._busy = false;
+    this._id = 0;
+    this._last = -1e9;
+    this.sweeps = 0;
+    this.worker = null;
+    if (typeof Worker === 'undefined') return;
+    try {
+      this.worker = new Worker(new URL('./shadowWorker.js', import.meta.url), { type: 'module' });
+      // The worker keeps its own copy: the main thread still needs the heights.
+      const copy = DEM.data.slice();
+      this.worker.postMessage({ type: 'init', heights: copy, res: n, cellX: DEM.cellX, cellZ: DEM.cellZ }, [copy.buffer]);
+      this.worker.onmessage = (e) => {
+        if (e.data.type !== 'done') return;
+        this.texture.image.data.set(e.data.data);
+        this.texture.needsUpdate = true;
+        this._busy = false;
+        this.sweeps++;
+        this.lastMs = performance.now() - this._t0;
+      };
+      this.worker.onerror = (e) => { console.warn('[terrain] shadow worker failed', e.message); this.worker = null; };
+    } catch (e) {
+      console.warn('[terrain] shadow worker unavailable', e);
+    }
+  }
+
+  /** Call every frame with the unit direction toward the sun. */
+  update(sunDir, now = performance.now()) {
+    if (!this.worker || this._busy) return;
+    if (this._dir.dot(sunDir) > 0.999997 || now - this._last < 250) return; // < ~0.14 deg, or too soon
+    this._dir.copy(sunDir);
+    this._last = now;
+    this._busy = true;
+    this._t0 = now;
+    this.worker.postMessage({ type: 'sweep', id: ++this._id, dir: [sunDir.x, sunDir.y, sunDir.z] });
+  }
+
+  dispose() {
+    this.worker?.terminate();
+    this.texture.dispose();
+  }
+}
