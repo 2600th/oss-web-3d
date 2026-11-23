@@ -6,7 +6,7 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     // Agent worktrees and the legacy tree live under the root; never watch them.
-    watch: { ignored: ['**/.claude/**', '**/legacy/**', '**/legacy-tools/**', '**/assets/**'] },
+    watch: { ignored: ['**/.claude/**', '**/legacy/**', '**/legacy-tools/**'] },
   },
   build: {
     target: 'es2022',
