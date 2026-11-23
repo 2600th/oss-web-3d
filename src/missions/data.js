@@ -28,6 +28,8 @@ export const MISSIONS = [
     specials: ['rkt', 'bomb', 'hobs'], special: 'rkt',
     timeLimit: 900, parTime: 360, rank: { S: 10200, A: 8800, B: 7200, C: 5500 },
     maxAttackers: 2,
+    // First sortie: contextual control prompts (missions/onboarding.js).
+    onboarding: true,
     groups: {
       crest: { kind: 'base', kit: 'raven', near: TOLOLING, search: 700, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
         units: [{ type: 'sangar', count: 3, tags: ['m1_primary'], isTarget: true }, { type: 'supply', count: 1, tags: ['m1_primary'], isTarget: true },
@@ -202,7 +204,7 @@ export const MISSIONS = [
         done: { zone: { x: -21000, z: 8600, r: 4500 } },
         exit: [
           { bonus: { label: 'Film delivered', score: 2500 } },
-          { radio: ['tower', 'Home Plate has you in sight, Vajra One. The darkroom is waiting. Welcome back.', 1] },
+          { radio: ['tower', 'Kesar Tower has you in sight, Vajra One. The darkroom is waiting. Welcome back.', 1] },
           { music: { state: 'victory', level: 0.5 } },
         ],
       },
@@ -249,7 +251,7 @@ export const MISSIONS = [
         done: { flag: 'irbis' },
       },
       {
-        id: 'irbis', name: 'Irbis', objective: { text: 'Survive Irbis flight — shoot down all four', track: { destroyed: 'm4_aces' } },
+        id: 'irbis', name: 'Irbis', objective: { text: 'Survive Irbis flight — shoot down all four', track: { destroyed: 'm4_aces', total: 4 } },
         enter: [
           { music: { state: 'ace', level: 1 } },
           { maxAttackers: 2 },
@@ -259,7 +261,7 @@ export const MISSIONS = [
         ],
         triggers: [
           { when: { any: [{ destroyed: 'm4_aces', count: 1 }, { time: 75 }] }, do: [{ spawn: 'irbisB' }, { radio: ['control', 'Two more, north-east, coming down on you. That will be their leader.', 2] }] },
-          { when: { destroyed: 'm4_aces', count: 3 }, do: [{ radio: ['wing', 'One left, lead! It is just him now!', 1] }] },
+          { when: { destroyed: 'm4_aces', count: 3 }, do: [{ radio: ['wing', 'One left, lead! Stay on it.', 1] }] },
         ],
         done: { all: [{ destroyed: 'm4_aces', count: 4 }, { time: 76 }] },
         exit: [{ bonus: { label: 'Irbis flight defeated', score: 3000 } }, { radio: ['control', 'Shikhar... scope is clean. All four. Vajra One, I do not have the words.', 2] }],
@@ -270,7 +272,7 @@ export const MISSIONS = [
         done: { destroyed: 'm4_primary' },
         exit: [
           { radio: ['fac', 'Summit is burning. We go up tonight. Thank you, Vajra — from all of us down here.', 2] },
-          { radio: ['tower', 'Home Plate to Vajra One. Come home. The tea is hot.', 1] },
+          { radio: ['tower', 'Kesar Tower to Vajra One. Come home. The tea is hot.', 1] },
           { music: { state: 'victory', level: 0.6 } },
         ],
       },
@@ -302,7 +304,7 @@ export const MISSIONS = [
         enter: [
           { music: { state: 'cruise', level: 0.3 } }, { hostile: false },
           { spawn: 'range' }, { spawn: 'drones' },
-          { radio: ['tower', 'Vajra One, Home Plate. The valley is yours. Range is hot, drones are up. Enjoy the view.', 0] },
+          { radio: ['tower', 'Vajra One, Kesar Tower. The valley is yours. Range is hot, drones are up. Enjoy the view.', 0] },
         ],
         done: { flag: 'never' },
       },

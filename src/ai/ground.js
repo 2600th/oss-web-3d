@@ -2,16 +2,18 @@
 // radar, fortified positions, supply dumps and road convoys. Data table +
 // small behaviours. No rendering dependencies.
 import { Vector3, Group } from 'three';
-import { terrainHeight, lineOfSight } from '../world/terrain/heightfield.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
+import { clearLine } from '../combat/los.js';
+import { DIFFICULTY } from '../game/difficulty.js';
 import { leadPoint } from '../combat/guidance.js';
 import { WEAPONS } from '../combat/weapons.js';
 import { alongPath, pathLength } from './sites.js';
 
 export const GROUND = {
-  aaa:     { name: 'AA GUN',     health: 55,  armor: 'medium', radius: 7,  score: 150, behaviour: 'aaa', range: 2800 },
-  flak:    { name: 'FLAK',       health: 85,  armor: 'medium', radius: 8,  score: 200, behaviour: 'flak', range: 5400 },
-  manpads: { name: 'SAM TEAM',   health: 28,  armor: 'soft',   radius: 6,  score: 200, behaviour: 'manpads', range: 4300, minRange: 500, lockTime: 2.6, reload: 12, weapon: 'e_manpads' },
-  sam:     { name: 'SAM SITE',   health: 95,  armor: 'medium', radius: 9,  score: 350, behaviour: 'sam', range: 9500, minRange: 1400, lockTime: 3.2, reload: 10, weapon: 'e_sam', radarFloor: 110 },
+  aaa:     { name: 'AA GUN',     health: 55,  armor: 'medium', radius: 7,  score: 150, behaviour: 'aaa', range: 2500 },
+  flak:    { name: 'FLAK',       health: 85,  armor: 'medium', radius: 8,  score: 200, behaviour: 'flak', range: 5000, minRange: 900 },
+  manpads: { name: 'SAM TEAM',   health: 28,  armor: 'soft',   radius: 6,  score: 200, behaviour: 'manpads', range: 3800, minRange: 500, lockTime: 3.0, reload: 16, weapon: 'e_manpads' },
+  sam:     { name: 'SAM SITE',   health: 95,  armor: 'medium', radius: 9,  score: 350, behaviour: 'sam', range: 8500, minRange: 1400, lockTime: 4.2, reload: 15, weapon: 'e_sam', radarFloor: 150 },
   radar:   { name: 'RADAR',      health: 70,  armor: 'medium', radius: 9,  score: 300 },
   bunker:  { name: 'BUNKER',     health: 260, armor: 'hard',   radius: 12, score: 300 },
   sangar:  { name: 'SANGAR',     health: 80,  armor: 'hard',   radius: 8,  score: 150 },
@@ -20,6 +22,39 @@ export const GROUND = {
   truck:   { name: 'TRUCK',      health: 34,  armor: 'soft',   radius: 6,  score: 120, explosion: 'medium' },
   post:    { name: 'OBSERVATION POST', health: 1e9, armor: 'hard', radius: 10, score: 0, invulnerable: true, lockable: false, team: 'neutral' },
 };
+
+/**
+ * Anti-aircraft gunnery (Normal difficulty; see game/difficulty.js for scaling).
+ *
+ * Measured with the flying bot before this table existed: guns led a
+ * constant-velocity target perfectly with a small fixed error, so an attack
+ * run flown straight at a position (which is what a lock-on needs) cost about
+ * 55 points of a 100-point airframe per mission from AAA alone, flak another
+ * 50, and no mission was survivable. Two changes make ground fire a threat
+ * you can read and answer instead of a tax:
+ *   - the crew's lead lags the target (`trackLag`): fire converges on an
+ *     aircraft that flies straight and falls behind one that manoeuvres;
+ *   - each engagement starts wide and is walked on (`aaaRanging` per burst),
+ *     so the first tracers are the warning, not the hit.
+ */
+export const AA = {
+  trackLag: 0.9,          // s, first-order lag on the velocity used for lead
+  aaaError: 0.11,         // rad, half-width of the first burst's aiming error
+  aaaRanging: 0.85,       // error multiplier per following burst ...
+  aaaRangingFloor: 0.6,   // ... down to this fraction
+  aaaBurst: [0.9, 0.6],   // s, base + random
+  aaaPause: [2.0, 1.6],   // s between bursts, base + random
+  flakError: [34, 0.017], // m at the gun + m per metre of range (per axis, half-width)
+  flakRadius: 55,         // m, burst radius (damage falls off linearly to 0)
+  flakDamage: 7.5,
+  flakPause: [1.9, 1.5],  // s between shells, base + random
+  flakSpeed: 820,         // m/s, shell
+};
+
+/** Aiming error half-width (rad) of an AA gun's n-th burst of an engagement. */
+export function aaaBurstError(n, d = DIFFICULTY.normal) {
+  return (AA.aaaError * Math.max(AA.aaaRangingFloor, AA.aaaRanging ** n)) / d.accuracy;
+}
 
 const _aim = new Vector3();
 const _v = new Vector3();
@@ -51,6 +86,11 @@ export class GroundUnit {
     this.firing = false;
     this.locking = false;
     this.pending = []; // flak shells in flight: {t, position}
+    /** The crew's estimate of the target's velocity (lags the real one). */
+    this.track = new Vector3();
+    this.tracking = false;
+    this.idle = 0;
+    this.bursts = 0;
   }
 
   update(dt, ctx) {
@@ -67,10 +107,20 @@ export class GroundUnit {
       if (this.losTimer <= 0) {
         this.losTimer = 0.4;
         _muzzle.copy(e.position); _muzzle.y += 4;
-        this.los = lineOfSight(_muzzle, p.position, 24);
+        this.los = clearLine(_muzzle, p.position);
       }
     }
     const engaged = inRange && this.los;
+    // Tracking: pick the target up, then follow its velocity with a lag.
+    if (engaged) {
+      if (!this.tracking) { this.track.copy(p.velocity); this.tracking = true; }
+      else this.track.lerp(p.velocity, 1 - Math.exp(-dt / AA.trackLag));
+      this.idle = 0;
+    } else {
+      this.idle += dt;
+      // Lost for a few seconds: the next engagement is laid from scratch.
+      if (this.idle > 3) { this.tracking = false; this.bursts = 0; }
+    }
     if (b === 'aaa') this._aaa(dt, ctx, engaged, dist);
     else if (b === 'flak') this._flak(dt, ctx, engaged, dist);
     else this._sam(dt, ctx, engaged, dist);
@@ -88,17 +138,18 @@ export class GroundUnit {
 
   _aaa(dt, ctx, engaged) {
     const w = WEAPONS.e_aaa;
+    const diff = ctx.difficulty ?? DIFFICULTY.normal;
     this.timer -= dt;
     if (this.burst > 0) {
       this.burst -= dt;
-      if (!engaged || this.burst <= 0) { this.burst = 0; this.timer = 1.2 + this.rng() * 1.6; }
+      if (!engaged || this.burst <= 0) { this.burst = 0; this.timer = (AA.aaaPause[0] + this.rng() * AA.aaaPause[1]) / diff.aggression; }
     } else if (engaged && this.timer <= 0) {
-      this.burst = 0.9 + this.rng() * 0.6;
-      // Each burst is laid with its own aiming error: some walk through the
-      // target, most pass close enough to see.
+      this.burst = AA.aaaBurst[0] + this.rng() * AA.aaaBurst[1];
+      // Each burst is laid with its own aiming error: the first of an
+      // engagement is wide, the following ones are walked on.
       const r = this.rng;
       this.bias = this.bias ?? new Vector3();
-      this.bias.set(r() - 0.5, r() - 0.5, r() - 0.5).multiplyScalar(0.07);
+      this.bias.set(r() - 0.5, r() - 0.5, r() - 0.5).multiplyScalar(2 * aaaBurstError(this.bursts++, diff));
     }
     const firing = this.burst > 0 && engaged;
     this._setFiring(firing, ctx);
@@ -108,7 +159,7 @@ export class GroundUnit {
     _muzzle.copy(this.entity.position); _muzzle.y += 2;
     while (this.acc >= 1) {
       this.acc -= 1;
-      leadPoint(_aim, _muzzle, this.entity.velocity, p.position, p.velocity, w.muzzle, 0.35);
+      leadPoint(_aim, _muzzle, this.entity.velocity, p.position, this.track, w.muzzle, 0.35);
       _v.subVectors(_aim, _muzzle).normalize();
       if (this.bias) _v.add(this.bias);
       const r = this.rng;
@@ -123,18 +174,19 @@ export class GroundUnit {
       const s = this.pending[i];
       s.t -= dt;
       if (s.t <= 0) {
-        ctx.world.flak(s.position, 60, 8, this.entity);
+        ctx.world.flak(s.position, AA.flakRadius, AA.flakDamage, this.entity);
         this.pending.splice(i, 1);
       }
     }
     this.timer -= dt;
     if (!engaged || this.timer > 0) return;
-    this.timer = 1.3 + this.rng() * 1.3;
+    const diff = ctx.difficulty ?? DIFFICULTY.normal;
+    this.timer = (AA.flakPause[0] + this.rng() * AA.flakPause[1]) / diff.aggression;
     const p = ctx.player;
-    const tof = dist / 820;
-    const err = 30 + dist * 0.014;
+    const tof = dist / AA.flakSpeed;
+    const err = (AA.flakError[0] + dist * AA.flakError[1]) / diff.accuracy;
     const r = this.rng;
-    const position = new Vector3().copy(p.position).addScaledVector(p.velocity, tof);
+    const position = new Vector3().copy(p.position).addScaledVector(this.track, tof);
     position.x += (r() - 0.5) * 2 * err; position.y += (r() - 0.5) * 2 * err; position.z += (r() - 0.5) * 2 * err;
     this.pending.push({ t: tof, position });
     ctx.events.emit('weapon:flak', { entity: this.entity, position });
@@ -152,11 +204,12 @@ export class GroundUnit {
       if (ctx.playerAgl < d.radarFloor) can = false;
     }
     if (!can) { this.lock = Math.max(0, this.lock - dt * 1.5); return; }
+    const diff = ctx.difficulty ?? DIFFICULTY.normal;
     this.lock += dt;
     this.locking = true;
-    if (this.lock < d.lockTime) return;
+    if (this.lock < d.lockTime / diff.aggression) return;
     this.lock = 0;
-    this.timer = d.reload * (0.85 + this.rng() * 0.3);
+    this.timer = (d.reload * (0.85 + this.rng() * 0.3)) / diff.aggression;
     _muzzle.copy(this.entity.position); _muzzle.y += 4;
     _v.subVectors(p.position, _muzzle).normalize();
     _v.y = Math.max(_v.y, 0.35);
@@ -167,7 +220,7 @@ export class GroundUnit {
     const guide = radarGuided ? (m) => {
       if (!unit.entity.alive || (unit.group?.radar && !unit.group.radar.entity.alive)) return false;
       m._gt = (m._gt ?? 0) + 1;
-      if (m._gt % 15 === 0) m._los = lineOfSight(unit.entity.position, p.position, 20);
+      if (m._gt % 15 === 0) m._los = clearLine(unit.entity.position, p.position);
       return m._los !== false;
     } : null;
     ctx.world.fireMissile({ weapon: d.weapon, owner: this.entity, target: p, position: _muzzle, direction: _v, guide });

@@ -18,7 +18,7 @@ export function install(game) {
 
   dev.setBot = (on) => {
     if (on) {
-      dev.bot = new Bot(game, { god: on === 'god' });
+      dev.bot = new Bot(game, typeof on === 'object' ? on : { god: on === 'god' });
       game.autopilot = dev.bot;
     } else {
       if (game.autopilot === dev.bot) game.autopilot = null;
@@ -71,10 +71,108 @@ export function install(game) {
     game.timeScale = Math.max(game.timeScale, 1);
     const n = Math.round(seconds / dt);
     for (let i = 0; i < n; i++) {
+      // A tab that goes to the background auto-pauses the flow; a headless run
+      // has nobody to press resume.
+      if (game.flow.state === 'pause') game.flow.resume();
       game.update(dt);
       if (game.flow.state !== 'sortie') break;
     }
     return dev.status();
+  };
+
+  // ---- measured bot runs ------------------------------------------------
+  // dev.run('m1') flies one sortie with the bot (real input path, damage on)
+  // and resolves to a record: outcome, time, score, where the damage came
+  // from, what killed the pilot, what the hostile missiles did. dev.batch
+  // repeats it. Results accumulate in dev.runs; dev.table() is the summary.
+  dev.runs = [];
+  dev.progress = null;
+  const tele = { on: false };
+  const kindOf = (src) => (src?.isMissile ? src.weapon?.id : src?.kind) ?? 'unknown';
+  game.events.on('player:hit', ({ damage, source, weapon }) => {
+    if (!tele.on) return;
+    const k = `${kindOf(source)}${weapon === 'e_gun' && source?.class === 'air' ? ' gun' : weapon?.includes('aam') ? ' missile' : ''}`;
+    tele.damage[k] = Math.round(((tele.damage[k] ?? 0) + damage) * 10) / 10;
+    tele.lastHit = k;
+  });
+  game.events.on('missile:launch', ({ missile: m }) => {
+    if (!tele.on || m.target !== game.systems.combat.player) return;
+    const w = m.weapon.id;
+    (tele.inbound[w] ??= { fired: 0, hit: 0, decoyed: 0, missed: 0 }).fired++;
+    m._tele = w;
+  });
+  game.events.on('missile:end', ({ missile: m, reason }) => {
+    if (!tele.on || !m._tele) return;
+    const r = tele.inbound[m._tele];
+    if (reason === 'hit' && !m.decoyed) r.hit++; else if (m.decoyed) r.decoyed++; else r.missed++;
+  });
+  game.events.on('mission:phase', ({ phase }) => { if (tele.on) tele.phases.push(`${phase.id}@${Math.round(game.systems.missions.runner?.time ?? 0)}`); });
+  game.events.on('player:destroyed', ({ cause }) => { if (tele.on) tele.death = `shot down: ${tele.lastHit ?? cause}`; });
+  game.events.on('player:crash', ({ position }) => {
+    if (!tele.on || tele.death) return;
+    tele.death = `crashed (${dev.bot?.state ?? '-'}) at ${Math.round(position.x)},${Math.round(position.z)}`;
+  });
+  const tick = () => new Promise((resolve) => { const c = new MessageChannel(); c.port1.onmessage = () => resolve(); c.port2.postMessage(0); });
+
+  dev.run = async (id, { special, bot = {}, difficulty, maxSeconds = 1500, dt = 1 / 30 } = {}) => {
+    if (difficulty) game.flow.setDifficulty?.(difficulty);
+    dev.setBot(bot);
+    Object.assign(tele, { on: true, damage: {}, inbound: {}, phases: [], death: null, lastHit: null });
+    // The mission's own default loadout unless one is asked for (flow would
+    // otherwise carry the last sortie's choice over).
+    special ??= game.flow.missions.find((m) => m.id === id)?.special;
+    if (!game.flow.startMission(id, { special })) { tele.on = false; return null; }
+    game.autopilot = dev.bot;
+    let spent = 0;
+    const wall = performance.now();
+    while (spent < maxSeconds && game.flow.state === 'sortie') {
+      dev.sim(5, dt);
+      spent += 5;
+      dev.progress = { id, t: Math.round(game.hud.time ?? 0), phase: game.hud.mission?.phase, hp: Math.round((game.hud.health ?? 0) * 100), bot: dev.bot?.state };
+      await tick();
+    }
+    tele.on = false;
+    const r = game.flow.result;
+    const st = game.systems.combat.world.stats;
+    const combat = game.systems.combat;
+    const rec = {
+      id, special: game.flow.special, difficulty: game.flow.difficulty ?? 'normal',
+      outcome: r ? (r.completed ? 'win' : r.reason) : 'timeout', time: Math.round(r?.time ?? spent), score: r?.score ?? 0, rank: r?.rank ?? null,
+      hp: Math.round((r?.health ?? 0) * 100), damage: tele.damage, death: r?.completed ? null : (tele.death ?? r?.reason ?? 'timeout'),
+      inbound: tele.inbound, phases: tele.phases, kills: r?.kills ?? st.kills, accuracy: +(r?.accuracy ?? 0).toFixed(2),
+      ammo: { msl: combat.msl.ammo, sp: combat.sp.ammo, gun: combat.gun.ammo, flares: combat.flares.count },
+      breakdown: r?.breakdown ?? null, bot: { ...dev.bot.stats }, wallSeconds: +((performance.now() - wall) / 1000).toFixed(1),
+    };
+    dev.runs.push(rec);
+    dev.progress = null;
+    return rec;
+  };
+
+  dev.batch = async (id, n = 5, opts = {}) => {
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(await dev.run(id, opts));
+    return out;
+  };
+
+  /** Per-mission summary of dev.runs (optionally filtered). */
+  dev.table = (filter = () => true) => {
+    const by = {};
+    for (const r of dev.runs.filter(filter)) (by[`${r.id}/${r.difficulty}`] ??= []).push(r);
+    const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0);
+    return Object.entries(by).map(([key, rs]) => {
+      const wins = rs.filter((r) => r.outcome === 'win');
+      const deaths = {};
+      for (const r of rs) if (r.death) { const k = r.death.replace(/ at .*/, ''); deaths[k] = (deaths[k] ?? 0) + 1; }
+      const dmg = {};
+      for (const r of rs) for (const [k, v] of Object.entries(r.damage)) dmg[k] = (dmg[k] ?? 0) + v / rs.length;
+      for (const k of Object.keys(dmg)) dmg[k] = Math.round(dmg[k]);
+      const inbound = {};
+      for (const r of rs) for (const [k, v] of Object.entries(r.inbound)) { const o = (inbound[k] ??= { fired: 0, hit: 0, decoyed: 0, missed: 0 }); for (const f of Object.keys(o)) o[f] += v[f]; }
+      return {
+        key, runs: rs.length, wins: wins.length, avgTime: avg(wins.map((r) => r.time)), avgScore: avg(wins.map((r) => r.score)),
+        ranks: wins.map((r) => r.rank).join(''), avgHp: avg(wins.map((r) => r.hp)), deaths, dmgPerRun: dmg, inbound,
+      };
+    });
   };
 
   /**

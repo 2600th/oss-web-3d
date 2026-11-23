@@ -2,11 +2,13 @@
 // weapons, registered with combat as a target. No rendering dependencies; the
 // AI system attaches the model to `entity.object3d`.
 import { Vector3, Group } from 'three';
-import { terrainHeight, maxHeightAlong, lineOfSight } from '../world/terrain/heightfield.js';
+import { terrainHeight, maxHeightAlong } from '../world/terrain/heightfield.js';
+import { clearLine } from '../combat/los.js';
 import { leadPoint } from '../combat/guidance.js';
 import { WEAPONS } from '../combat/weapons.js';
 import { AiFlight, AIRFRAMES } from './aiFlight.js';
 import { SKILLS, newMemory, decide, steer, employ } from './brain.js';
+import { DIFFICULTY, scaleSkill } from '../game/difficulty.js';
 
 const _to = new Vector3();
 const _des = new Vector3();
@@ -26,7 +28,9 @@ export class Fighter {
    */
   constructor(def, rng = Math.random) {
     const type = def.skill ?? 'bandit';
-    this.skill = { ...SKILLS[type], ...(def.skillOverrides ?? {}) };
+    /** The pilot as written; `skill` is this at the current difficulty. */
+    this.baseSkill = { ...SKILLS[type], ...(def.skillOverrides ?? {}) };
+    this.skill = scaleSkill(this.baseSkill, def.difficulty ?? DIFFICULTY.normal);
     this.flight = new AiFlight({ ...AIRFRAMES[def.airframe ?? type], ...(def.airframeOverrides ?? {}) });
     this.mem = newMemory();
     this.mem.missiles = this.skill.missiles;
@@ -38,7 +42,10 @@ export class Fighter {
     this.slot = def.slot ?? { x: 0, y: 0, z: 0 };
     this.route = def.route ?? null;
     this.routeIndex = 0;
-    this.ace = def.ace ?? null;
+    /** Named pilot data (missions/cast.js ACES entry) for radio lines, or null. */
+    this.pilot = def.ace ?? null;
+    /** Set only for the flight lead: the one the HUD marks and calls "LEAD". */
+    this.ace = def.ace?.lead ? def.ace : null;
     this.time = rng() * 10;
     this.gunFiring = false;
     this._gunAcc = 0;
@@ -53,7 +60,7 @@ export class Fighter {
     const f = this.flight;
     this.entity = {
       kind: def.isAce ? 'ace' : 'fighter', class: 'air', armor: 'air', team: 'hostile',
-      name: def.name ?? 'BANDIT', isAce: def.isAce === true, isTarget: def.isTarget === true,
+      name: def.name ?? 'BANDIT', isAce: def.isAce === true, elite: !!def.ace, isTarget: def.isTarget === true,
       position: f.position, velocity: f.velocity, quaternion: f.quaternion,
       alive: true, health: def.health ?? DEFAULT_HEALTH[type], radius: 10,
       score: def.score ?? DEFAULT_SCORE[type], tags: def.tags ?? [], explosion: 'medium',
@@ -64,6 +71,8 @@ export class Fighter {
       },
     };
   }
+
+  setDifficulty(d) { this.skill = scaleSkill(this.baseSkill, d); }
 
   /** Nearest missile tracking this aircraft, or null. */
   _nearestMissile(world) {
@@ -104,7 +113,7 @@ export class Fighter {
     s.leaderAlive = !!this.leader?.entity.alive;
     s.leaderEngaged = !!this.leader && !['patrol', 'formation', 'intercept'].includes(this.leader.mem.mode);
     s.hasRoute = !!this.route;
-    s.los = range < 6000 ? lineOfSight(f.position, t.position, 16) : false;
+    s.los = range < 6000 ? clearLine(f.position, t.position, 110) : false;
     s.token = ctx.tokens.has(this);
     leadPoint(_lead, f.position, f.velocity, t.position, t.velocity, WEAPONS.e_gun.muzzle);
     _v.subVectors(_lead, f.position);

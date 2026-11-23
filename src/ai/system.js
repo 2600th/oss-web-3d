@@ -8,6 +8,7 @@ import { terrainHeight } from '../world/terrain/heightfield.js';
 import { Fighter } from './Fighter.js';
 import { GroundUnit, Convoy } from './ground.js';
 import { findSite, scatterSites, traceValleyRoad, mulberry32 } from './sites.js';
+import { DIFFICULTY } from '../game/difficulty.js';
 import { groundModel, hostileFighterModel, loadBaseKit, preloadModels, wreck } from './models.js';
 
 export const order = 55;
@@ -36,7 +37,7 @@ export class AiSystem {
     /** Missions switch this off for cinematic / briefing states. */
     this.hostile = true;
     this._tokenTimer = 0;
-    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false };
+    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false, difficulty: DIFFICULTY.normal };
 
     game.events.on('target:destroyed', ({ target }) => this._onDestroyed(target));
   }
@@ -47,6 +48,14 @@ export class AiSystem {
     this.ctx.world = this.combat.world;
     preloadModels();
   }
+
+  /** Apply a difficulty table (game/difficulty.js) to everything alive and everything spawned later. */
+  setDifficulty(d) {
+    this.ctx.difficulty = d;
+    for (const f of this.fighters) f.setDifficulty(d);
+  }
+
+  get difficulty() { return this.ctx.difficulty; }
 
   // -------------------------------------------------------------- spawn --
 
@@ -79,10 +88,10 @@ export class AiSystem {
       const f = new Fighter({
         skill: ace ? (ace.skill ?? 'ace') : (def.type ?? 'bandit'),
         name: ace ? ace.callsign : (def.names?.[i] ?? (def.type === 'veteran' ? 'BANDIT (VET)' : 'BANDIT')),
-        isAce: !!ace, ace, health: ace?.health ?? def.health, score: ace?.score ?? def.score,
+        isAce: ace?.lead === true, ace, health: ace?.health ?? def.health, score: ace?.score ?? def.score,
         skillOverrides: ace?.skillOverrides ?? def.skillOverrides, airframeOverrides: ace?.airframeOverrides,
         role: i === 0 ? 'lead' : 'wing', leader, slot, route: i === 0 ? route : null,
-        tags: [...(def.tags ?? [])], isTarget: def.isTarget,
+        tags: [...(def.tags ?? [])], isTarget: def.isTarget, difficulty: this.ctx.difficulty,
       }, this.rng);
       if (i === 0) leader = f;
       const p = base.clone().addScaledVector(fwd, slot.z).addScaledVector(right, slot.x);
@@ -205,8 +214,9 @@ export class AiSystem {
     this.tokens.clear();
     const p = this.ctx.player.position;
     const alive = this.fighters.filter((f) => f.entity.alive && f.mem.aware);
-    alive.sort((a, b) => (a.entity.isAce ? -1e9 : 0) + a.flight.position.distanceToSquared(p) - ((b.entity.isAce ? -1e9 : 0) + b.flight.position.distanceToSquared(p)));
-    for (let i = 0; i < Math.min(this.maxAttackers, alive.length); i++) this.tokens.add(alive[i]);
+    alive.sort((a, b) => (a.pilot ? -1e9 : 0) + a.flight.position.distanceToSquared(p) - ((b.pilot ? -1e9 : 0) + b.flight.position.distanceToSquared(p)));
+    const cap = Math.max(1, this.maxAttackers + this.ctx.difficulty.attackers);
+    for (let i = 0; i < Math.min(cap, alive.length); i++) this.tokens.add(alive[i]);
   }
 
   update(dt, game) {

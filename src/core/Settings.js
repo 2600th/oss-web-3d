@@ -25,6 +25,8 @@ export const SCHEMA = {
   motionBlur: { def: 1, min: 0, max: 1.5 }, // -> post.options.motionBlur
   lensFlare: { def: true, bool: true }, // -> post.options.flare
   filmGrain: { def: true, bool: true }, // -> post.options.grain
+  // gameplay (gameplay area: read by game.flow, see src/game/difficulty.js)
+  difficulty: { def: 'normal', values: ['easy', 'normal', 'hard'] },
   // controls
   controlMode: { def: 'standard', values: ['standard', 'expert'] },
   invertY: { def: false, bool: true },

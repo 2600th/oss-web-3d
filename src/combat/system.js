@@ -2,13 +2,14 @@
 // damage, and the per-frame HUD snapshot (`game.hud`). The simulation itself
 // (missiles, bullets, flares, damage) lives in CombatWorld.
 import * as THREE from 'three/webgpu';
-import { terrainHeight, lineOfSight, raycastTerrain } from '../world/terrain/heightfield.js';
+import { terrainHeight, raycastTerrain } from '../world/terrain/heightfield.js';
+import { clearLine } from './los.js';
 import { burnerReheat } from '../flight/burner.js';
 import { AIRCRAFT } from '../flight/FlightModel.js';
 import { CombatWorld } from './CombatWorld.js';
 import { CombatVisuals } from './visuals.js';
 import { LockTracker, lockGeometry, pickTarget, cycleTarget } from './lock.js';
-import { leadPoint, ballisticImpact } from './guidance.js';
+import { leadPoint, ballisticImpact, rocketImpact } from './guidance.js';
 import { WEAPONS, PLAYER, SPECIALS } from './weapons.js';
 
 export const order = 50;
@@ -159,7 +160,7 @@ export class CombatSystem {
         if (this._losTimer <= 0) {
           this._losTimer = 0.1;
           _v.copy(t.position); _v.y += Math.max(6, t.radius * 0.6);
-          this._los = lineOfSight(f.position, _v, 40);
+          this._los = clearLine(f.position, _v);
         }
         can = this._los;
       }
@@ -337,8 +338,7 @@ export class CombatSystem {
     if (w.type === 'bomb') {
       this._ccipValid = Number.isFinite(ballisticImpact(this.ccip, f.position, f.velocity, terrainHeight, { drag: w.drag }));
     } else if (w.type === 'rocket') {
-      const d = raycastTerrain(f.position.x, f.position.y, f.position.z, f.forward.x, f.forward.y, f.forward.z, 6000, 60);
-      if (Number.isFinite(d)) { this.ccip.copy(f.position).addScaledVector(f.forward, d); this._ccipValid = true; }
+      this._ccipValid = Number.isFinite(rocketImpact(this.ccip, f.position, f.forward, f.airspeed, w, terrainHeight));
     }
   }
 

@@ -14,6 +14,9 @@
 // Enter = continue, Backspace = back, 1-5 = pick a mission, R = cycle the
 // special weapon in the briefing. Set `flow.fallbackKeys = false` to disable.
 import { Autopilot } from './Autopilot.js';
+import { DIFFICULTY_LEVELS, DEFAULT_DIFFICULTY, difficultyFor, difficultyList } from './difficulty.js';
+
+const DIFFICULTY_KEY = 'safedsagar.v2.difficulty';
 
 export const FLOW_STATES = ['boot', 'title', 'select', 'briefing', 'sortie', 'pause', 'remembrance', 'debrief'];
 
@@ -32,8 +35,12 @@ export class Flow {
     /** Title/menu flyby: `{active, subject}` for the camera owner to frame. */
     this.cinematic = { active: false, subject: game.player.group };
     this._last = null;
+    /** 'easy' | 'normal' | 'hard' (see difficulty.js). Change with setDifficulty. */
+    this.difficulty = DEFAULT_DIFFICULTY;
 
     game.events.on('flow:missionEnd', ({ result }) => this._onMissionEnd(result));
+    // The settings screen writes the `difficulty` key; follow it.
+    game.events.on('settings:change', ({ key, value }) => { if (key === 'difficulty') this._applyDifficulty(value); });
     const doc = globalThis.document;
     doc?.addEventListener?.('visibilitychange', () => { if (doc.hidden) this.pause(); });
   }
@@ -45,9 +52,36 @@ export class Flow {
 
   get mission() { return this.missions.find((m) => m.id === this.selected) ?? null; }
 
+  /** Difficulty rows for a menu: `[{id, label, description}]`. */
+  get difficulties() { return difficultyList(); }
+
+  /** Choose a difficulty. Persists (settings key `difficulty`) and applies at once. */
+  setDifficulty(level) {
+    if (!DIFFICULTY_LEVELS.includes(level)) return false;
+    const settings = this.game.settings;
+    if (settings?.set) settings.set('difficulty', level);
+    else { try { globalThis.localStorage?.setItem(DIFFICULTY_KEY, level); } catch { /* unavailable */ } }
+    this._applyDifficulty(level);
+    return true;
+  }
+
+  _applyDifficulty(level) {
+    if (!DIFFICULTY_LEVELS.includes(level)) return;
+    const game = this.game;
+    const changed = level !== this.difficulty;
+    this.difficulty = level;
+    const d = difficultyFor(level);
+    if (game.systems.combat) game.systems.combat.world.difficulty = d;
+    game.systems.ai?.setDifficulty?.(d);
+    if (changed) game.events.emit('flow:difficulty', { difficulty: level, ...d });
+  }
+
   /** Called once by Game after every system is initialised. */
   boot() {
     const q = new URLSearchParams(globalThis.location?.search ?? '');
+    let stored = null;
+    try { stored = globalThis.localStorage?.getItem(DIFFICULTY_KEY) ?? null; } catch { /* unavailable */ }
+    this._applyDifficulty(q.get('difficulty') ?? this.game.settings?.difficulty ?? stored ?? DEFAULT_DIFFICULTY);
     const id = q.get('mission');
     if (id && this.missions.some((m) => m.id === id)) this.startMission(id, { special: q.get('special') ?? undefined });
     else this.toTitle();
@@ -124,6 +158,7 @@ export class Flow {
     this._cinematic(false);
     game.paused = false;
     game.input.resetForLaunch?.();
+    this._applyDifficulty(this.difficulty);
     if (!this.ms.start(id, { special })) return false;
     this.special = this.ms.special;
     this._last = { id, special: this.special };
