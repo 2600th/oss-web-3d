@@ -2,19 +2,23 @@ import * as THREE from 'three/webgpu';
 import {
   pass, mrt, output, velocity, renderOutput, uniform, vec2, vec3, vec4, uv, float, texture,
   convertToTexture, rtt, Fn, Loop, luminance, log2, max, mix, smoothstep, length, dot,
-  positionWorld, int, ivec2, time, select, screenSize,
+  positionWorld, int, ivec2, select, screenSize,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
 import { postConfig } from '../fx/post/config.js';
 import {
-  velocityMotionBlur, sunVisibility, sunFlare, sunGlow, agxLook, splitTone, screenStates,
-  filmGrain, aspectUV,
+  sunVisibility, sunFlare, sunGlow, agxLook, splitTone, screenStates, filmGrain, aspectUV,
+  reversedDepthToDistance, airflowStreaks, shockOffset,
 } from '../fx/post/nodes.js';
+import { createMotionBlur } from '../fx/post/motionBlur.js';
+import { ScreenWater, waterShading } from '../fx/post/screenWater.js';
 import { EXPOSURE_DEFAULTS, targetExposureEV, adaptLog2, evToMultiplier } from '../fx/post/exposure.js';
-import { createLensDirtTexture, createDropletTexture } from '../fx/post/textures.js';
+import { motionBlurParams } from '../fx/post/motionParams.js';
+import { createLensDirtTexture, createFrostTexture } from '../fx/post/textures.js';
 
 const _v = new THREE.Vector3();
 const _m = new THREE.Matrix4();
@@ -23,20 +27,26 @@ const _m = new THREE.Matrix4();
  * Post-processing chain (TSL RenderPipeline), quality-tiered (src/fx/post/config.js).
  *
  *   scene pass (HDR colour + velocity MRT + reversed depth)
- *   -> scene stages (addSceneStage: atmosphere 20, clouds 30, heat haze 60 ...)
+ *   -> scene stages (addSceneStage: atmosphere 20, clouds 30, VFX 55, heat 60 ...)
  *   -> AA: TRAA (medium+) on HDR
- *   -> depth-aware velocity motion blur (medium+)
+ *   -> reconstruction motion blur (medium+; src/fx/post/motionBlur.js):
+ *      tile-max / neighbour-max, jittered depth-aware gather, player shutter,
+ *      speed zoom near the ground
+ *   -> [cinematic only] bokeh depth of field (three DepthOfFieldNode, gated)
  *   -> [meters] auto-exposure (64x36 log-lum -> 1x1, read back, adapted on CPU)
  *               sun occlusion (n x n depth+luminance taps -> 1x1)
- *   -> final pass: droplet refraction, sharpen + chromatic aberration taps,
- *      exposure, bloom, sun flare (ghosts/halo/starburst/streak), lens dirt,
- *      flash, AgX + "Kargil" look, split tone, G/damage screen states,
- *      vignette, sRGB, [FXAA/SMAA on low], film grain
+ *   -> final pass: screen water (lens / canopy drops, runs, fog film; GPU sim
+ *      in src/fx/post/screenWater.js), frost rim, sonic shock ripple,
+ *      sharpen + chromatic aberration, exposure, bloom, airflow streaks,
+ *      sun flare (ghosts/halo/starburst/anamorphic streak), lens dirt, flash,
+ *      AgX + "Kargil" look, split tone, G/damage screen states, vignette,
+ *      sRGB, [FXAA/SMAA on low], film grain
  *
  * Public surface (kept): render(), dispose(), uniforms, scenePass,
  *   addSceneStage(fn, order) — HDR compositing hook, ctx =
  *   { scenePass, depth (reversed-Z texture node), velocity, camera, renderer }.
- * Added: setFrameState(state), notifyCut(), options, debugView, stats.
+ *   setFrameState(state), notifyCut(), options, debugView, stats.
+ * Added: usePlayerVelocity(material), water (ScreenWater).
  */
 export class PostFX {
   constructor(r) {
@@ -55,6 +65,12 @@ export class PostFX {
       reducedMotion: prefersReduced || params.has('reducedMotion'),
       flare: true,
       grain: true,
+      /** screen water (droplets, runs, fog film, frost) */
+      screenWater: true,
+      /** airflow streaks at transonic speed */
+      speedStreaks: true,
+      /** depth of field in cinematic / kill cams (camera system drives the amount) */
+      dof: true,
       exposure: { ...EXPOSURE_DEFAULTS },
     };
 
@@ -62,11 +78,18 @@ export class PostFX {
     this.uniforms = {
       // applied linear exposure (auto-exposure writes it every frame)
       exposure: u(evToMultiplier(EXPOSURE_DEFAULTS.baseEV)),
-      bloomStrength: u(0.06),
+      bloomStrength: u(0.05),
       bloomCap: u(40), // pre-exposure; set from bloomCapExposed each frame
+      // motion blur
       mbStrength: u(0),
       mbMaxPx: u(32),
-      speedBlur: u(0), // radial edge streak, uv units at the edge
+      playerShutter: u(0.12),
+      nearShell: u(0),
+      zoom: u(0),
+      focus: u(new THREE.Vector2(0.5, 0.5)),
+      res: u(new THREE.Vector2(1920, 1080)),
+      frameOffset: u(new THREE.Vector2(0, 0)),
+      speedBlur: u(0), // legacy name, kept: mirrors `zoom`
       near: u(r.camera.near),
       far: u(r.camera.far),
       aspect: u(16 / 9),
@@ -78,7 +101,7 @@ export class PostFX {
       chromatic: u(1),
       sharpen: u(0.25),
       grain: u(1),
-      vignette: u(0.28),
+      vignette: u(0.22),
       lookSlope: u(new THREE.Vector3(1.0, 0.99, 0.965)),
       lookPower: u(new THREE.Vector3(1.12, 1.12, 1.14)),
       lookSat: u(1.18),
@@ -86,11 +109,16 @@ export class PostFX {
       highlightTint: u(new THREE.Vector3(1.035, 1.0, 0.95)),
       toneBalance: u(0.42),
       grey: u(0), red: u(0), damage: u(0), smear: u(0), lowHealth: u(0), flash: u(0), wet: u(0),
+      // water / frost / speed
+      waterOn: u(0), waterMinDist: u(0), frost: u(0),
+      streaks: u(0), streakTime: u(0), shock: u(new THREE.Vector2(0, 0)),
+      // depth of field
+      dofAmount: u(0), dofFocus: u(50), dofFocal: u(30), dofBokeh: u(1.5),
       seed: u(0),
     };
 
     /** Bloom in *exposed* units (the chain rescales by exposure each frame). */
-    this.bloomSettings = { threshold: 1.4, knee: 2.0, cap: 24 };
+    this.bloomSettings = { threshold: 1.25, knee: 1.6, cap: 20 };
     this.stages = [];
     this.stats = { avgLog2: NaN, adaptedLog2: NaN, ev: EXPOSURE_DEFAULTS.baseEV, sunVisibility: 0, sunLum: 0 };
     this.debugView = null;
@@ -101,7 +129,8 @@ export class PostFX {
     this._reading = false;
 
     this.lensDirt = createLensDirtTexture();
-    this.droplets = createDropletTexture();
+    this.frostTex = createFrostTexture();
+    this.water = null; // ScreenWater, created per tier in _build
 
     const scenePass = pass(r.scene, r.camera);
     const sceneMRT = mrt({ output, velocity });
@@ -154,6 +183,18 @@ export class PostFX {
     material.needsUpdate = true;
   }
 
+  /**
+   * Tag an opaque material as the player's airframe: velocity MRT .z = 1. The
+   * motion blur gives tagged pixels the short "player shutter" (the jet rides
+   * with the camera; only its own rotation against the lens should smear,
+   * and only a little). TRAA reads .xy only, so reprojection is unaffected.
+   */
+  usePlayerVelocity(material) {
+    if (!material || material.mrtNode || material.transparent) return;
+    material.mrtNode = mrt({ velocity: vec4(velocity, 1, 1) });
+    material.needsUpdate = true;
+  }
+
   /** Per-frame inputs from the camera/post system (src/camera/system.js). */
   setFrameState(s) { Object.assign(this._frame, s); }
 
@@ -169,10 +210,12 @@ export class PostFX {
     const depth = sp.getTextureNode('depth');
     const vel = sp.getTextureNode('velocity');
     const ctx = { scenePass: sp, depth, velocity: vel, camera, renderer: this.r.renderer };
+    const keepList = []; // render-to-texture bases, in dependency order
 
     let color = sp.getTextureNode('output');
     for (const s of this.stages) color = s.fn(color, ctx);
     const hdr = convertToTexture(color); // no extra pass when there are no stages
+    keepList.push(hdr);
 
     // --- anti-aliasing (HDR, temporal) ------------------------------------
     let aa = hdr;
@@ -184,11 +227,30 @@ export class PostFX {
 
     // --- motion blur --------------------------------------------------------
     let mb = aa;
+    this._mb = null;
     if (cfg.mbSamples > 0) {
-      mb = convertToTexture(velocityMotionBlur({
-        color: aa, velocity: vel, depth, near: u.near, far: u.far,
-        strength: u.mbStrength, maxPx: u.mbMaxPx, samples: cfg.mbSamples, radial: u.speedBlur,
-      }));
+      const m = createMotionBlur({
+        color: aa, velocity: vel, depth, near: u.near, far: u.far, samples: cfg.mbSamples, tile: cfg.mbTile,
+        u: {
+          strength: u.mbStrength, maxPx: u.mbMaxPx, playerShutter: u.playerShutter, nearShell: u.nearShell,
+          zoom: u.zoom, focus: u.focus, res: u.res, frameOffset: u.frameOffset,
+        },
+      });
+      this._mb = m;
+      keepList.push(m.prep, m.tile4, m.tileMax, m.neighbor, m.output);
+      mb = m.output;
+    }
+
+    // --- depth of field (cinematic / kill cam only; passes skipped when off) --
+    this._dof = null;
+    let dofTex = null;
+    if (cfg.dof) {
+      const viewZ = reversedDepthToDistance(depth.sample(uv()).x, u.near, u.far).negate();
+      const d = dof(mb, viewZ, u.dofFocus, u.dofFocal, u.dofBokeh);
+      const run = d.updateBefore.bind(d);
+      d.updateBefore = (frame) => { if (u.dofAmount.value > 0.001) run(frame); };
+      this._dof = d;
+      dofTex = d.getTextureNode();
     }
 
     // --- meters ------------------------------------------------------------
@@ -218,6 +280,7 @@ export class PostFX {
     })(), 1, 1, { type: THREE.FloatType });
     meter2.name = 'ExposureMeterReduce';
     this._meter = meter2;
+    keepList.push(meter2);
 
     const visNode = rtt(sunVisibility({
       color: hdr, depth, sunUV: u.sunUV, aspect: u.aspect, radius: float(0.022),
@@ -227,32 +290,59 @@ export class PostFX {
     this._vis = visNode;
     const vis = visNode.x; // 1x1 target: the node's own uv() samples the only texel
 
+    // --- screen water (GPU sim, updated in render() before the pipeline) ---
+    if (cfg.water) {
+      const [ww, wh] = cfg.water;
+      if (!this.water || this.water.width !== ww) {
+        this.water?.dispose();
+        this.water = new ScreenWater({ width: ww, height: wh });
+      }
+    } else if (this.water) { this.water.dispose(); this.water = null; }
+
     // --- final composite ------------------------------------------------------
     const uv0 = uv();
     const aspect = u.aspect;
-    const drop = texture(this.droplets, aspectUV(uv0, aspect).mul(2.2).add(vec2(0, time.mul(-0.015))));
-    const refr = drop.rg.sub(0.5).mul(drop.b).mul(u.wet).mul(0.02);
-    const suv = uv0.add(refr);
-    const centred = suv.sub(0.5);
     const rNorm = length(uv0.sub(0.5).mul(vec2(aspect, 1))).div(length(vec2(aspect, 1).mul(0.5)));
+    const px = vec2(1).div(screenSize);
 
+    let suv = uv0;
+    let ws = null;
+    let waterMask = float(0);
+    if (this.water) {
+      ws = waterShading(this.water.texture, uv0, this.water.u.texel, aspect);
+      // canopy water sits on the glass: never over the cockpit interior
+      const dist = reversedDepthToDistance(depth.sample(uv0).x, u.near, u.far);
+      waterMask = u.waterOn.mul(smoothstep(u.waterMinDist, u.waterMinDist.mul(1.15).add(0.01), dist));
+      const wuv = suv.add(ws.offset.mul(waterMask));
+      // a drop on the canopy must not refract the cockpit frame into the sky:
+      // if the bent ray lands on the interior, look straight through instead
+      const dBent = reversedDepthToDistance(depth.sample(wuv).x, u.near, u.far);
+      suv = select(dBent.lessThan(u.waterMinDist.mul(1.1)), suv, wuv);
+    }
+    // sonic shock: a single expanding ripple from the flight-path focus
+    suv = suv.add(shockOffset(uv0, u.focus, aspect, u.shock));
+
+    const centred = suv.sub(0.5);
     const c0 = mb.sample(suv);
     let rgb = c0.rgb;
     if (cfg.sharpen > 0) {
-      // contrast-adaptive (clamped) unsharp mask: restores TAA softness without halos
-      const t = vec2(1).div(screenSize);
-      const n = mb.sample(suv.add(vec2(0, t.y))).rgb;
-      const s = mb.sample(suv.sub(vec2(0, t.y))).rgb;
-      const e = mb.sample(suv.add(vec2(t.x, 0))).rgb;
-      const w = mb.sample(suv.sub(vec2(t.x, 0))).rgb;
-      const mn = n.min(s).min(e).min(w).min(rgb);
-      const mx = n.max(s).max(e).max(w).max(rgb);
-      const avg = n.add(s).add(e).add(w).mul(0.25);
-      rgb = rgb.add(rgb.sub(avg).mul(u.sharpen)).clamp(mn, mx);
+      // contrast-adaptive (clamped) unsharp mask on luminance: restores TAA
+      // softness without halos or colour fringes
+      const n = mb.sample(suv.add(vec2(0, px.y))).rgb;
+      const s = mb.sample(suv.sub(vec2(0, px.y))).rgb;
+      const e = mb.sample(suv.add(vec2(px.x, 0))).rgb;
+      const w = mb.sample(suv.sub(vec2(px.x, 0))).rgb;
+      const lc = luminance(rgb);
+      const ln = luminance(n), ls = luminance(s), le = luminance(e), lw = luminance(w);
+      const mn = ln.min(ls).min(le).min(lw).min(lc);
+      const mx = ln.max(ls).max(le).max(lw).max(lc);
+      const sharp = lc.add(lc.sub(ln.add(ls).add(le).add(lw).mul(0.25)).mul(u.sharpen)).clamp(mn, mx);
+      rgb = rgb.mul(sharp.div(max(lc, 1e-5)));
     }
     if (cfg.chromatic > 0) {
-      // lateral CA grows with r^2; spikes with a hit (smear)
-      const amt = u.chromatic.mul(0.0016).add(u.smear.mul(0.012));
+      // lateral CA grows with r^2 (only really visible in the corners);
+      // spikes with a hit (smear)
+      const amt = u.chromatic.mul(0.0011).add(u.smear.mul(0.012));
       const off = centred.mul(dot(centred, centred).mul(4)).mul(amt);
       const cr = mb.sample(suv.sub(off)).r;
       const cb = mb.sample(suv.add(off)).b;
@@ -262,6 +352,29 @@ export class PostFX {
       const s1 = mb.sample(suv.sub(centred.mul(sm))).rgb;
       const s2 = mb.sample(suv.sub(centred.mul(sm.mul(2)))).rgb;
       rgb = mix(rgb, rgb.add(s1).add(s2).div(3), u.smear.clamp(0, 1));
+    }
+    if (dofTex) rgb = mix(rgb, dofTex.sample(suv).rgb, u.dofAmount);
+
+    if (ws) {
+      // out-of-focus scene behind drops and fog (4-tap disc, ~6 px)
+      const rr = px.mul(6);
+      const blurred = mb.sample(suv.add(vec2(rr.x, rr.y))).rgb
+        .add(mb.sample(suv.add(vec2(rr.x.negate(), rr.y.mul(0.4)))).rgb)
+        .add(mb.sample(suv.add(vec2(rr.x.mul(0.4), rr.y.negate()))).rgb)
+        .add(mb.sample(suv.sub(vec2(rr.x.mul(0.8), rr.y.mul(0.9)))).rgb)
+        .mul(0.25);
+      const fog = ws.fog.mul(waterMask);
+      const soft = ws.mask.mul(0.55).add(fog.mul(0.9)).add(ws.trail.mul(0.25)).mul(waterMask).clamp(0, 1);
+      rgb = mix(rgb, blurred, soft);
+      // the film scatters: lifts and greys what is behind it
+      const veil = vec3(luminance(blurred)).mul(vec3(0.97, 1.0, 1.04)).mul(1.12);
+      rgb = mix(rgb, veil, fog.mul(0.45));
+      rgb = rgb.mul(float(1).sub(ws.rim.mul(waterMask)).add(ws.body.mul(waterMask)));
+      // frost rim: rime creeps in from the frame edge (cold cloud, altitude)
+      const fn = texture(this.frostTex, aspectUV(uv0, aspect).mul(1.7)).r;
+      const edge = smoothstep(float(1).sub(u.frost.mul(0.6)), float(1.15).sub(u.frost.mul(0.45)), rNorm.add(fn.sub(0.5).mul(0.3)));
+      const rime = edge.mul(u.frost).mul(mix(0.55, 1.0, fn));
+      rgb = mix(rgb, blurred.mul(vec3(1.02, 1.08, 1.16)).add(vec3(luminance(blurred).mul(0.25))), rime.clamp(0, 0.85));
     }
 
     let x = rgb.mul(u.exposure);
@@ -279,35 +392,51 @@ export class PostFX {
       this._bloom = null;
     }
 
+    // airflow streaks: faint condensation lines whipping past at transonic
+    // speed, lit by the scene behind them (never a fixed white overlay)
+    if (cfg.streaks) {
+      const st = airflowStreaks(uv0, u.focus, aspect, u.streakTime);
+      x = x.add(vec3(luminance(x).mul(0.22).add(0.015)).mul(st).mul(u.streaks));
+    }
+
     if (cfg.flare) {
       const amount = vis.mul(u.sunAmount);
       x = x.add(sunFlare(uv0, u.sunUV, aspect, amount, u.flareRot));
       if (cfg.dirt) {
         const dirt = texture(this.lensDirt, uv0).rgb;
+        // dirt lights only under bright sources: the sun's glow and the
+        // part of the bloom above a floor (a bright sky alone does not)
         const reveal = sunGlow(uv0, u.sunUV, aspect).mul(amount).mul(0.45);
-        const fromBloom = bloomTex ? luminance(bloomTex.rgb.mul(u.exposure)).mul(0.6) : float(0);
+        const fromBloom = bloomTex ? max(luminance(bloomTex.rgb.mul(u.exposure)).sub(0.04), 0).mul(0.7) : float(0);
         x = x.add(dirt.mul(reveal.add(fromBloom)).mul(u.dirt));
       }
     }
-    // droplet glints + flash whiteout (HDR, so it rolls off through AgX)
-    x = x.add(vec3(drop.a.mul(drop.b).mul(u.wet).mul(0.12)));
+    // water glints + flash whiteout (HDR, so it rolls off through AgX)
+    if (ws) x = x.add(vec3(ws.spec.mul(waterMask).mul(luminance(x).mul(0.8).add(0.08))));
     x = x.add(vec3(1.0, 0.95, 0.86).mul(u.flash.mul(u.flash).mul(6)));
 
     let ldr = agxLook(x, u.lookSlope, u.lookPower, u.lookSat);
     ldr = splitTone(ldr, u.shadowTint, u.highlightTint, u.toneBalance);
     ldr = screenStates(ldr, rNorm, u.grey, u.red, u.damage, u.lowHealth);
-    ldr = ldr.mul(mix(1, smoothstep(1.2, 0.3, rNorm), u.vignette));
+    // natural (cos^4-like) lens falloff, mostly in the corners
+    ldr = ldr.mul(float(1).sub(u.vignette.mul(smoothstep(0.45, 1.25, rNorm).pow(1.5))));
 
     // Built first so the base render-to-texture nodes are scheduled (in this
     // order) before anything that samples them: the HDR composite, the meters.
-    const keep = keepAlive(hdr).add(keepAlive(mb)).add(keepAlive(meter2));
+    let keep = float(0);
+    for (const k of keepList) keep = keep.add(keepAlive(k));
+    if (this._dof) keep = keep.add(keepAlive(this._dof));
     let out = renderOutput(vec4(vec3(keep).add(ldr), 1), THREE.NoToneMapping, THREE.SRGBColorSpace);
     if (cfg.aa === 'fxaa') out = fxaa(out);
     else if (cfg.aa === 'smaa') out = smaa(out);
-    if (cfg.grain > 0) out = vec4(filmGrain(out.rgb, u.grain.mul(0.022 * cfg.grain), u.seed), 1);
+    if (cfg.grain > 0) out = vec4(filmGrain(out.rgb, u.grain.mul(0.014 * cfg.grain), u.seed), 1);
 
     // dev views: post.debugView = 'velocity' | 'depth' | 'exposure' | 'flare' | 'bloom'
+    //            | 'mbTiles' | 'player' | 'water'
     if (this.debugView === 'velocity') out = vec4(vel.sample(uv0).xy.mul(40).add(0.5), 0.5, 1);
+    else if (this.debugView === 'player') out = vec4(vel.sample(uv0).z, this._mb ? this._mb.prep.sample(uv0).w : 0, 0, 1);
+    else if (this.debugView === 'mbTiles' && this._mb) out = vec4(this._mb.neighbor.sample(uv0).xy.div(u.mbMaxPx).mul(0.5).add(0.5), 0.5, 1);
+    else if (this.debugView === 'water' && this.water) out = vec4(this.water.texture.sample(uv0).rgb, 1);
     else if (this.debugView === 'depth') out = vec4(vec3(log2(depth.sample(uv0).x.max(1e-9)).div(-30)), 1);
     else if (this.debugView === 'exposure') out = vec4(vec3(meter1.sample(uv0).x.div(meter1.sample(uv0).y.max(1e-4)).add(8).div(16)), 1);
     else if (this.debugView === 'flare') out = vec4(sunFlare(uv0, u.sunUV, aspect, select(vis.greaterThan(0), float(1), float(0.2)), u.flareRot), 1);
@@ -328,6 +457,9 @@ export class PostFX {
     u.near.value = cam.near;
     u.far.value = cam.far;
     u.aspect.value = cam.aspect;
+    const renderer = this.r.renderer;
+    const size = renderer.getDrawingBufferSize?.(_size) ?? _size.set(1920, 1080);
+    u.res.value.set(size.x, size.y);
 
     // static-velocity matrices (unjittered: TRAA jitters inside pipeline.render)
     _m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
@@ -335,8 +467,23 @@ export class PostFX {
     else this._prevVP.value.copy(this._curVP.value);
     this._curVP.value.copy(_m);
 
-    // sun on screen
+    // flight-path focus on screen (speed zoom, streaks, shock): the point the
+    // world streams out of. Falls back to the centre when it is off-screen.
     const f = this._frame;
+    let fx = 0.5, fy = 0.5;
+    if (f.flightDir) {
+      _v.copy(f.flightDir).transformDirection(cam.matrixWorldInverse);
+      if (_v.z < -0.2) {
+        _v.copy(cam.position).addScaledVector(f.flightDir, 1e4).project(cam);
+        fx = Math.min(0.85, Math.max(0.15, _v.x * 0.5 + 0.5));
+        fy = Math.min(0.85, Math.max(0.15, 0.5 - _v.y * 0.5));
+      }
+    }
+    const fu = u.focus.value;
+    fu.x += (fx - fu.x) * 0.25;
+    fu.y += (fy - fu.y) * 0.25;
+
+    // sun on screen
     const sun = f.sunDirection;
     let amount = 0;
     if (sun && this.options.flare) {
@@ -376,20 +523,30 @@ export class PostFX {
   _updateMotion(dt) {
     const u = this.uniforms;
     const o = this.options;
+    const f = this._frame;
     this._dtAvg += (dt - this._dtAvg) * 0.1;
-    const shutter = Math.min(2, Math.max(0.5, (1 / 90) / Math.max(this._dtAvg, 1e-3)));
-    const speed = this._frame.airspeed ?? 0;
-    const speedK = 0.3 + 0.7 * smoothstepJS(80, 320, speed);
-    let k = shutter * speedK * o.motionBlur;
-    if (o.reducedMotion) k = 0;
-    // radial speed streaks: from ~750 km/h, more with the burner lit
-    let radial = smoothstepJS(200, 340, speed) * 0.014 * (this._frame.reheat ? 1.35 : 1) * o.motionBlur;
-    if (o.reducedMotion) radial = 0;
-    if (this._cutFrames > 0) { k = 0; radial = 0; this._cutFrames--; }
-    u.mbStrength.value = k;
-    u.speedBlur.value = radial;
-    u.mbMaxPx.value = 36 * (this.r.renderer.getPixelRatio?.() ?? 1);
+    const cut = this._cutFrames > 0;
+    if (cut) this._cutFrames--;
+    const p = motionBlurParams({
+      dt: this._dtAvg, airspeed: f.airspeed ?? 0, agl: f.agl ?? 1e4, mach: f.mach ?? 0, reheat: !!f.reheat,
+      user: o.motionBlur, reducedMotion: o.reducedMotion, cut, view: f.view ?? 'chase', tile: this.cfg?.mbTile ?? 32,
+      pixelRatio: this.r.renderer.getPixelRatio?.() ?? 1,
+    });
+    u.mbStrength.value = p.strength;
+    u.mbMaxPx.value = p.maxPx;
+    u.zoom.value = p.zoom;
+    u.speedBlur.value = p.zoom;
+    u.playerShutter.value = p.playerShutter;
+    u.nearShell.value = f.nearShell ?? 0;
+    this._frameIdx = ((this._frameIdx ?? 0) + 1) % 8;
+    u.frameOffset.value.set(this._frameIdx * 5.588238, this._frameIdx * 5.588238);
     u.seed.value = (u.seed.value + 1) % 997;
+
+    // airflow streaks + sonic shock ripple
+    u.streaks.value = o.speedStreaks && !o.reducedMotion ? (f.streaks ?? 0) : 0;
+    u.streakTime.value = (u.streakTime.value + dt) % 1000;
+    const sh = f.shock ?? 0; // 0..1 phase of the ripple (camera system)
+    u.shock.value.set(sh, o.reducedMotion ? 0 : (f.shockAmp ?? 0));
   }
 
   _applyScreen() {
@@ -404,6 +561,36 @@ export class PostFX {
     u.lowHealth.value = s.lowHealth ?? 0;
     u.flash.value = (s.flash ?? 0) * (rm ? 0.5 : 1);
     u.wet.value = s.wet ?? 0;
+  }
+
+  _applyLens(dt) {
+    const u = this.uniforms;
+    const f = this._frame;
+    // depth of field: cinematic and kill cams only
+    const d = this.options.dof ? f.dof : null;
+    const target = d?.amount ?? 0;
+    u.dofAmount.value += (target - u.dofAmount.value) * Math.min(1, dt * 5);
+    if (u.dofAmount.value < 0.002 && target === 0) u.dofAmount.value = 0;
+    if (d) {
+      u.dofFocus.value = d.focus ?? u.dofFocus.value;
+      u.dofFocal.value = d.focal ?? Math.max(4, (d.focus ?? 50) * 0.6);
+      u.dofBokeh.value = d.bokeh ?? 1.5;
+    }
+    // screen water
+    const w = this.water;
+    if (w) {
+      const on = this.options.screenWater ? (f.water ?? null) : null;
+      if (f.waterSurface !== this._waterSurface) {
+        if (this._waterSurface && f.waterSurface && f.waterSurface !== 'none') w.clear();
+        this._waterSurface = f.waterSurface;
+      }
+      w.update(this.r.renderer, dt, on && { ...on, aspect: u.aspect.value });
+      u.waterOn.value = on && w.active ? 1 : 0;
+      u.waterMinDist.value = f.waterSurface === 'canopy' ? 2.4 : 0;
+      u.frost.value = on ? (on.frost ?? 0) : 0;
+    } else {
+      u.waterOn.value = 0;
+    }
   }
 
   _readMeters() {
@@ -433,6 +620,7 @@ export class PostFX {
     this._updateExposure(dt);
     this._updateMotion(dt);
     this._applyScreen();
+    this._applyLens(dt);
     this.pipeline.render();
     if (this.options.autoExposure) this._readMeters();
   }
@@ -440,9 +628,12 @@ export class PostFX {
   dispose() {
     this.pipeline.dispose();
     this.lensDirt.dispose();
-    this.droplets.dispose();
+    this.frostTex.dispose();
+    this.water?.dispose();
   }
 }
+
+const _size = new THREE.Vector2();
 
 /** A zero that references a texture node's *base* so its render is scheduled. */
 function keepAlive(node) { return node.x.mul(0); }
