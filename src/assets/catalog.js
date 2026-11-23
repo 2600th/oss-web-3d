@@ -80,7 +80,7 @@ export const CATALOG = {
       {
         url: "models/aaa_gun.glb",
         triangles: 2461,
-        bytes: 394316,
+        bytes: 394276,
         distance: 0
       },
       {
@@ -273,14 +273,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/bunker.glb",
-        triangles: 3513,
-        bytes: 458360,
+        triangles: 3548,
+        bytes: 444436,
         distance: 0
       },
       {
         url: "models/bunker_lod1.glb",
-        triangles: 2101,
-        bytes: 272204,
+        triangles: 2122,
+        bytes: 268756,
         distance: 220
       }
     ],
@@ -301,14 +301,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/bunker_destroyed.glb",
-        triangles: 2479,
-        bytes: 490864,
+        triangles: 2517,
+        bytes: 492332,
         distance: 0
       },
       {
         url: "models/bunker_destroyed_lod1.glb",
-        triangles: 1472,
-        bytes: 272764,
+        triangles: 1495,
+        bytes: 272976,
         distance: 220
       }
     ],
@@ -349,14 +349,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/helicopter.glb",
-        triangles: 2773,
-        bytes: 261700,
+        triangles: 2783,
+        bytes: 264672,
         distance: 0
       },
       {
         url: "models/helicopter_lod1.glb",
-        triangles: 1664,
-        bytes: 123168,
+        triangles: 1671,
+        bytes: 121760,
         distance: 400
       }
     ],
@@ -365,8 +365,8 @@ export const CATALOG = {
     pivots: ["rotor", "tail_rotor"],
     kind: "helicopter",
     bounds: {
-      min: [-8.73, 0, -11.163],
-      max: [10.602, 4.85, 10.625]
+      min: [-8.729, 0.007, -11.162],
+      max: [10.6, 4.85, 10.625]
     },
     license: "MIT",
     notes: "Medium transport helicopter (Mi-8 class, generic). `rotor` spins about +Y, `tail_rotor` about +X."
@@ -397,14 +397,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/manpads_team.glb",
-        triangles: 4030,
-        bytes: 450348,
+        triangles: 4031,
+        bytes: 462836,
         distance: 0
       },
       {
         url: "models/manpads_team_lod1.glb",
-        triangles: 2276,
-        bytes: 235260,
+        triangles: 2277,
+        bytes: 237356,
         distance: 260
       }
     ],
@@ -424,14 +424,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/pilot.glb",
-        triangles: 11735,
-        bytes: 649780,
+        triangles: 13589,
+        bytes: 715996,
         distance: 0
       },
       {
         url: "models/pilot_lod1.glb",
-        triangles: 2499,
-        bytes: 162968,
+        triangles: 2486,
+        bytes: 170640,
         distance: 250
       }
     ],
@@ -440,8 +440,8 @@ export const CATALOG = {
     pivots: ["pilot_head"],
     kind: "pilot",
     bounds: {
-      min: [-0.349, -0.756, -3.942],
-      max: [0.272, 0.385, -2.606]
+      min: [-0.346, -0.756, -3.942],
+      max: [0.294, 0.387, -2.599]
     },
     license: "MIT",
     notes: "Seated jet pilot in aircraft model space: parent to the MiG model with an identity transform (eye at (0, 0.22, -2.95)). pilot_head pivots at the top of the neck (rotation.y = look, +x = nod down); hide pilot_head in the cockpit view. Helmet with visor and oxygen mask, flight suit, anti-g suit, harness, life preserver; no insignia. LOD1 is for hostile jets. Built by tools/blender/build_pilot.py."
@@ -451,14 +451,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/radar.glb",
-        triangles: 3998,
-        bytes: 378292,
+        triangles: 4010,
+        bytes: 393248,
         distance: 0
       },
       {
         url: "models/radar_lod1.glb",
-        triangles: 2144,
-        bytes: 156352,
+        triangles: 2148,
+        bytes: 164536,
         distance: 300
       }
     ],
@@ -479,14 +479,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/radar_destroyed.glb",
-        triangles: 4015,
-        bytes: 260464,
+        triangles: 4044,
+        bytes: 258420,
         distance: 0
       },
       {
         url: "models/radar_destroyed_lod1.glb",
-        triangles: 2203,
-        bytes: 117968,
+        triangles: 2200,
+        bytes: 117096,
         distance: 300
       }
     ],
@@ -495,7 +495,7 @@ export const CATALOG = {
     pivots: ["dish"],
     kind: "radar",
     bounds: {
-      min: [-3.429, -0.149, -4.31],
+      min: [-3.434, -0.149, -4.31],
       max: [2.314, 3.016, 2.3]
     },
     license: "MIT",
@@ -645,14 +645,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/sangar.glb",
-        triangles: 3031,
-        bytes: 469628,
+        triangles: 3065,
+        bytes: 467604,
         distance: 0
       },
       {
         url: "models/sangar_lod1.glb",
-        triangles: 1635,
-        bytes: 263032,
+        triangles: 1654,
+        bytes: 261240,
         distance: 220
       }
     ],
@@ -672,14 +672,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/supply_dump.glb",
-        triangles: 5577,
-        bytes: 549560,
+        triangles: 5696,
+        bytes: 558944,
         distance: 0
       },
       {
         url: "models/supply_dump_lod1.glb",
-        triangles: 2444,
-        bytes: 217576,
+        triangles: 2488,
+        bytes: 224688,
         distance: 220
       }
     ],
@@ -688,8 +688,8 @@ export const CATALOG = {
     pivots: [],
     kind: "camp",
     bounds: {
-      min: [-3.55, -0.015, -2.59],
-      max: [3.55, 2.38, 2.49]
+      min: [-3.554, -0.015, -2.59],
+      max: [3.555, 2.361, 2.49]
     },
     license: "MIT",
     notes: "Supply dump: ammunition crates on dunnage, 200 L drums, jerrycans, a roped tarpaulin stack, under a garnished camouflage net on poles."
@@ -699,14 +699,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/tent.glb",
-        triangles: 622,
-        bytes: 153380,
+        triangles: 684,
+        bytes: 162892,
         distance: 0
       },
       {
         url: "models/tent_lod1.glb",
-        triangles: 371,
-        bytes: 60800,
+        triangles: 409,
+        bytes: 68128,
         distance: 220
       }
     ],
@@ -715,7 +715,7 @@ export const CATALOG = {
     pivots: [],
     kind: "camp",
     bounds: {
-      min: [-1.527, 0, -2.151],
+      min: [-1.527, -0.001, -2.169],
       max: [1.524, 2.16, 2.095]
     },
     license: "MIT",
@@ -726,14 +726,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/truck.glb",
-        triangles: 7744,
-        bytes: 561764,
+        triangles: 10104,
+        bytes: 673944,
         distance: 0
       },
       {
         url: "models/truck_lod1.glb",
-        triangles: 3000,
-        bytes: 216860,
+        triangles: 2997,
+        bytes: 253788,
         distance: 260
       }
     ],
@@ -742,8 +742,8 @@ export const CATALOG = {
     pivots: [],
     kind: "vehicle",
     bounds: {
-      min: [-1.33, 0.009, -3.8],
-      max: [1.33, 2.786, 3.71]
+      min: [-1.33, -0.014, -3.81],
+      max: [1.34, 2.786, 3.71]
     },
     license: "MIT",
     notes: "6x6 military cargo truck (5-tonne class, generic, unmarked), open bed with cargo. One mesh node `body`; socket `exhaust` at the stack.",
@@ -754,14 +754,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/truck_covered.glb",
-        triangles: 6613,
-        bytes: 497224,
+        triangles: 9614,
+        bytes: 596792,
         distance: 0
       },
       {
         url: "models/truck_covered_lod1.glb",
         triangles: 3000,
-        bytes: 199684,
+        bytes: 229152,
         distance: 260
       }
     ],
@@ -770,8 +770,8 @@ export const CATALOG = {
     pivots: [],
     kind: "vehicle",
     bounds: {
-      min: [-1.33, 0.009, -3.8],
-      max: [1.33, 3.035, 3.77]
+      min: [-1.33, -0.016, -3.81],
+      max: [1.33, 3.064, 3.77]
     },
     license: "MIT",
     notes: "6x6 military cargo truck (5-tonne class, generic, unmarked) with canvas tilt. One mesh node `body`; socket `exhaust` at the stack."
@@ -781,14 +781,14 @@ export const CATALOG = {
     lods: [
       {
         url: "models/truck_destroyed.glb",
-        triangles: 5967,
-        bytes: 536440,
+        triangles: 8555,
+        bytes: 611584,
         distance: 0
       },
       {
         url: "models/truck_destroyed_lod1.glb",
-        triangles: 2887,
-        bytes: 258200,
+        triangles: 2998,
+        bytes: 276940,
         distance: 260
       }
     ],
@@ -797,8 +797,8 @@ export const CATALOG = {
     pivots: [],
     kind: "vehicle",
     bounds: {
-      min: [-3.816, -0.132, -3.776],
-      max: [3.975, 2.839, 3.898]
+      min: [-3.816, -0.137, -3.787],
+      max: [3.975, 2.834, 3.898]
     },
     license: "MIT",
     notes: "6x6 military cargo truck (5-tonne class, generic, unmarked), burnt out: tyres gone, bare tilt bows. One mesh node `body`; socket `exhaust` at the stack."

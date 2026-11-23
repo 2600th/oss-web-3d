@@ -564,10 +564,10 @@ def sangar():
         log(p, (x, y, 0), (x, y, 1.72), 0.045)
     log(p, (-1.45, -0.9, 1.70), (1.45, -0.9, 1.70), 0.04)
     roof = [[(-1.5, -1.05, 1.76), (0.0, -1.05, 1.76), (1.5, -1.05, 1.76)], [(-1.5, 0.75, 1.22), (0.0, 0.75, 1.24), (1.5, 0.75, 1.22)]]
-    p.sheet(roof, cgi, thick=0.015, smooth=False)
+    p.sheet(roof, cgi, thick=0.015, smooth=False, rim=True)
     tarp = [[(-1.1, -1.12, 1.80), (-0.2, -1.12, 1.80), (0.75, -1.12, 1.80)], [(-1.15, -0.4, 1.60), (-0.2, -0.45, 1.585), (0.8, -0.4, 1.60)],
             [(-1.2, 0.35, 1.37), (-0.2, 0.30, 1.36), (0.85, 0.36, 1.37)]]
-    p.sheet(tarp, mat('canvas_dark'), thick=0.012)
+    p.sheet(tarp, mat('canvas_dark'), thick=0.02, rim=True)
     r_ = rng(77)
     for k in range(6):
         x, y = r_.uniform(-1.3, 1.3), r_.uniform(-0.9, 0.6)
@@ -614,7 +614,7 @@ def bunker(destroyed=False):
         flap = [[(-1.72, -Lb / 2 - 0.06, H), (-1.15, -Lb / 2 - 0.08, H), (-0.75, -Lb / 2 - 0.06, H)],
                 [(-1.70, -Lb / 2 - 0.10, 0.55), (-1.20, -Lb / 2 - 0.16, 0.55), (-0.95, -Lb / 2 - 0.10, 0.62)],
                 [(-1.68, -Lb / 2 - 0.12, 0.06), (-1.25, -Lb / 2 - 0.20, 0.06), (-1.12, -Lb / 2 - 0.14, 0.20)]]
-        p.sheet(flap, mat('canvas_dark'), thick=0.012)
+        p.sheet(flap, mat('canvas_dark'), thick=0.02, rim=True)
         # roof: logs, a tin layer showing at the eaves, earth mound, rocks, sandbags at the front edge
         for i in range(11):
             y = -Lb / 2 - 0.25 + i * (Lb + 0.5) / 10
@@ -693,7 +693,7 @@ def tent():
             xx = x * (1 - 0.02 * belly) if roof else x
             row.append((xx + r_.uniform(-0.008, 0.008), y, max(0.0, zz + r_.uniform(-0.008, 0.008))))
         grid.append(row)
-    p.sheet(grid, canvas, smooth=True, away=(0.0, None, 0.6))
+    p.sheet(grid, canvas, thick=0.025, smooth=True, rim=True)
     # gable ends: back closed, front with two flaps tied back to show the dark inside
     for j, sgn in ((0, -1), (ny, 1)):
         ring = grid[j]
@@ -706,7 +706,7 @@ def tent():
                 tri = [ring[4], ring[4 + s * 2], ring[4 + s * 3], ring[4 + s * 4], (s * 0.50, y + 0.02, 0.0), (s * 0.42, y + 0.03, 0.9)]
                 p.fan(tri[1:], tri[0], canvas, away=(0.0, y - 1, 0.8), close=False)
                 p.sheet([[(s * 0.42, y + 0.04, 1.45), (s * 0.62, y + 0.10, 1.40)], [(s * 0.44, y + 0.06, 0.75), (s * 0.70, y + 0.14, 0.70)],
-                         [(s * 0.46, y + 0.05, 0.05), (s * 0.66, y + 0.12, 0.03)]], dark, thick=0.012)   # rolled flap
+                         [(s * 0.46, y + 0.05, 0.05), (s * 0.66, y + 0.12, 0.03)]], dark, thick=0.03, rim=True)   # rolled flap
     log(p, (0, L / 2 + 0.06, 0), (0, L / 2 + 0.06, H + 0.16), 0.035)
     log(p, (0, -L / 2 - 0.06, 0), (0, -L / 2 - 0.06, H + 0.16), 0.035)
     A.footprint(p)
@@ -800,7 +800,7 @@ def supply_dump():
             z = 2.34 - sag - scallop + r_.uniform(-0.03, 0.03)
             row.append((x, y, z))
         grid.append(row)
-    p.sheet(grid, net, thick=0.02, smooth=True)
+    p.sheet(grid, net, thick=0.035, smooth=True, rim=True)
     A.footprint(p)
     for (x, y) in poles:   # guys
         rod(p, (x, y, 2.34), (x * 1.22, y * 1.30, 0.03), 0.008, 'canvas_dark', 4)

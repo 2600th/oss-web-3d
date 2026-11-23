@@ -224,6 +224,16 @@ export function upgradeGroundMaterials(root, { tier = 'high', env = null } = {})
     const list = Array.isArray(o.material) ? o.material : [o.material];
     const out = list.map((src) => {
       if (!src || src.isNodeMaterial || !src.isMeshStandardMaterial) return src;
+      // Parts authored as physical materials (KHR_materials_clearcoat: the
+      // pilot's visor) stay physical and take no ground detail.
+      if (src.isMeshPhysicalMaterial && src.clearcoat > 0) {
+        return memo(src, `${key}|coat`, () => {
+          const m = toNodeMaterial(src);
+          m.clearcoat = src.clearcoat;
+          m.clearcoatRoughness = src.clearcoatRoughness;
+          return m;
+        });
+      }
       return memo(src, key, () => {
         const m = toNodeMaterial(src, THREE.MeshStandardNodeMaterial);
         filterTextures(m, tier);

@@ -764,11 +764,13 @@ class Part:
             if fc.normal.dot(c - o) < 0:
                 fc.normal_flip()
 
-    def sheet(self, grid, m, thick=0.0, smooth=True, away=None):
+    def sheet(self, grid, m, thick=0.0, smooth=True, away=None, rim=False):
         """Quad sheet through grid[j][i] 3D points. thick > 0: a second,
-        reversed skin `thick` behind it (two-sided, no rim), so cloth and
-        thin plate read from both sides with back-face culling on. A single
-        skin faces away from the point / axis `away`."""
+        reversed skin `thick` behind it, so cloth and thin plate read from
+        both sides with back-face culling on; `rim` closes the edge between
+        the two skins, so the sheet has a real thickness seen edge-on (hems,
+        net edges, wing lips). A single skin faces away from the point / axis
+        `away`."""
         def f():
             vs = [[self.bm.verts.new(p) for p in row] for row in grid]
             fs = []
@@ -782,8 +784,28 @@ class Part:
                 dup = bmesh.ops.duplicate(self.bm, geom=fs)
                 back = [g for g in dup['geom'] if isinstance(g, bmesh.types.BMFace)]
                 bmesh.ops.reverse_faces(self.bm, faces=back)
-                for v in {v for fc in back for v in fc.verts}:
-                    v.co -= v.normal * thick
+                # the back skin sits `thick` behind the front one (offsets from
+                # the front vertices' normals: the copies' own normals are not
+                # reliable after the flip, and used to put it in front, so the
+                # two skins faced each other)
+                vmap = dup['vert_map']
+                for v in {v for fc in fs for v in fc.verts}:
+                    vmap[v].co = v.co - v.normal * thick
+                if rim:
+                    front = set(fs)
+                    for e in {e for fc in fs for e in fc.edges}:
+                        owners = [fc for fc in e.link_faces if fc in front]
+                        if len(owners) != 1:
+                            continue
+                        a, b = e.verts
+                        # wind against the owning face so the rim faces outward
+                        lv = [l.vert for l in owners[0].loops]
+                        if lv[(lv.index(a) + 1) % len(lv)] is not b:
+                            a, b = b, a
+                        try:
+                            self.bm.faces.new((b, a, vmap[a], vmap[b]))
+                        except (ValueError, KeyError):
+                            pass
         return self._run(f, m, smooth)
 
     def fan(self, ring, centre, m, away, smooth=True, close=True):

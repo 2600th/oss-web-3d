@@ -1060,3 +1060,22 @@ Details and evidence in `docs/v2/evidence/polish-ground/README.md`.
   - `renderPasses` and `update` always restore the renderer state.
   - A failing cloud pass is reported once through `PassGuard` (`src/world/clouds/passGuard.js`, with `brokenRenderables(root)`) and then backs off. Before, it threw every frame.
 - **Terrain:** `Terrain.update` ignores a non-finite camera position and keeps the last layout.
+
+- **Models polish 3 (pilot realism, truck cab, thin shells):**
+  - `pilot.glb` / `pilot_lod1.glb` have a new child node `pilot_visor` under
+    `pilot_head` (so hiding `pilot_head` hides it). It is the only unbaked
+    part: an alpha-blended, clearcoat glass material
+    (`KHR_materials_clearcoat`, `KHR_materials_specular`). `pilot`,
+    `pilot_body`, `pilot_head` and `pilot_eye` are unchanged.
+  - `src/assets/materials.js` `upgradeGroundMaterials`: a GLB material that
+    arrives as a physical material with clearcoat stays a
+    `MeshPhysicalNodeMaterial` (clearcoat copied, no ground detail). All other
+    materials take the same path as before, including `shadowSide =
+    DoubleSide`.
+  - `tools/blender/kit.py` `Part.sheet(thick=...)`: the back skin now sits
+    behind the front skin (it used to sit in front, so the two skins faced
+    each other), and `rim=True` closes the edge so canvas, nets, wings and
+    flaps have a visible thickness edge-on. Every ground unit was rebuilt.
+  - `src/assets/catalog.test.mjs` budgets: `vehicle` 12000 (was 8000),
+    `pilot` 18000 (was 15000), as in the task brief.
+  - Evidence: `docs/v2/evidence/polish-models-3/README.md`.

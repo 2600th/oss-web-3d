@@ -52,27 +52,31 @@ import kit  # noqa: E402
 V = Vector
 
 kit.PALETTE.update({
-    'webbing': ((0.050, 0.052, 0.036), 0.85, 0.0),
+    'webbing': ((0.105, 0.100, 0.070), 0.88, 0.0),
     'helmet': ((0.56, 0.56, 0.52), 0.26, 0.0),
     'helmet_trim': ((0.030, 0.031, 0.030), 0.55, 0.0),
     'liner': ((0.022, 0.022, 0.020), 0.95, 0.0),
     'visor': ((0.012, 0.012, 0.016), 0.04, 0.55),
-    'mask': ((0.050, 0.056, 0.046), 0.55, 0.0),
+    'mask': ((0.040, 0.045, 0.038), 0.72, 0.0),
     'mask_shell': ((0.16, 0.165, 0.155), 0.40, 0.0),
     'hose': ((0.085, 0.092, 0.070), 0.65, 0.0),
     'boot': ((0.020, 0.018, 0.016), 0.55, 0.0),
     'sole': ((0.012, 0.012, 0.012), 0.85, 0.0),
     'kneeboard': ((0.060, 0.062, 0.058), 0.6, 0.0),
     'paper': ((0.62, 0.61, 0.56), 0.85, 0.0),
+    'skin': ((0.44, 0.28, 0.19), 0.55, 0.0),
+    'eye': ((0.02, 0.016, 0.014), 0.3, 0.0),
+    'hardware': ((0.50, 0.50, 0.48), 0.30, 1.0),
 })
 kit.SURF.update({'webbing': 'fabric', 'helmet': 'paint', 'helmet_trim': 'rubber', 'liner': 'plain', 'visor': 'glass',
                  'mask': 'rubber', 'mask_shell': 'plain', 'hose': 'rubber', 'boot': 'plain', 'sole': 'rubber',
-                 'kneeboard': 'plain', 'paper': 'plain'})
+                 'kneeboard': 'plain', 'paper': 'plain', 'skin': 'plain', 'eye': 'plain',
+                 'hardware': 'metal'})
 
 SAGE = (0.118, 0.132, 0.086)       # flight suit
 GSUIT = (0.070, 0.082, 0.052)      # anti-g suit, darker and greener
-LPU = (0.300, 0.150, 0.050)        # life preserver: faded dull orange
-LEATHER = (0.050, 0.038, 0.028)    # gloves
+LPU = (0.150, 0.118, 0.062)        # stowed life preserver: faded khaki cover
+LEATHER = (0.060, 0.042, 0.028)    # gloves
 
 
 def T(p):
@@ -84,7 +88,7 @@ def mat(name):
     return kit.mat(name, dirt=0.0, var=0.06, scale=14.0)
 
 
-def cloth(key, col, rough=0.9, fold=1.0, lace=False, var=0.08, leather=False):
+def cloth(key, col, rough=0.9, fold=1.0, lace=False, var=0.08, leather=False, stitch=False):
     """Cloth with creases that wrap the limb it is on. The lofts write
     aux = (around 0..1, along in metres) and aux2.x = how hard the cloth is
     working there (elbow, knee, waist); the creases are ridged noise sampled
@@ -118,7 +122,31 @@ def cloth(key, col, rough=0.9, fold=1.0, lace=False, var=0.08, leather=False):
         h = N.add(h, N.mul(lacing, 1.3))
         c = N.mix(N.mul(band, 0.55), c, [x * 0.45 for x in col])
         c = N.mix(N.mul(N.mul(band, zig), 0.6), c, (0.11, 0.11, 0.085))
+    if stitch:
+        # flat stowed cover: a seam just inboard of each edge, in dashes, and pressed fold lines across it
+        f = N.math('FRACT', N.mul(u, 2.0))
+        dist = N.math('SUBTRACT', 0.5, N.math('ABSOLUTE', N.math('SUBTRACT', f, 0.5)))   # 0 at the two edges
+        seam = N.mul(N.ramp(dist, 0.050, 0.060, smooth=False), N.ramp(dist, 0.078, 0.068, smooth=False))
+        dash = N.ramp(N.math('ABSOLUTE', N.math('SUBTRACT', N.math('FRACT', N.mul(v, 150.0)), 0.5)), 0.36, 0.26, smooth=False)
+        st = N.mul(seam, dash)
+        cross = N.ramp(N.math('ABSOLUTE', N.math('SUBTRACT', N.math('FRACT', N.mul(v, 9.0)), 0.5)), 0.035, 0.02, smooth=False)
+        h = N.add(N.add(h, N.mul(st, 0.9)), N.mul(N.add(seam, cross), -0.7))
+        c = N.mix(N.mul(N.add(seam, cross), 0.5), c, [x * 0.5 for x in col])
+        c = N.mix(N.mul(st, 0.7), c, [min(1, x * 1.6) for x in col])
     kit.finish(m, N, c, rgh, 0.0, 'fabric', height=h, dist=0.034, soft=0.25, bevel=0.012)
+    return m
+
+
+def helmet_paint(key, col):
+    """Glossy painted shell with handling scuffs and a few chips to dark primer."""
+    m, N = kit.new_material(key)
+    scuff = N.ramp(N.noise(9.0, 5.0, 0.7, distortion=1.2), 0.60, 0.72)
+    fine = N.ramp(N.noise(140.0, 3.0, 0.6), 0.55, 0.75)
+    chip = N.mul(N.ramp(N.noise(55.0, 4.0, 0.6), 0.70, 0.73, smooth=False), N.ramp(N.noise(6.0, 3.0, 0.5), 0.45, 0.6))
+    c = N.mix(N.mul(scuff, 0.45), col, [x * 0.66 for x in col])
+    c = N.mix(N.mul(chip, 0.9), c, (0.035, 0.036, 0.034))
+    rough = N.math('ADD', N.math('ADD', N.mul(N.mul(scuff, fine), 0.38), N.mul(chip, 0.45)), 0.17)
+    kit.finish(m, N, c, rough, 0.0, 'paint', height=N.mul(chip, -1.0), dist=0.004, wear=0.0, soft=0.1)
     return m
 
 
@@ -318,8 +346,8 @@ def make_materials():
     """After kit.Asset() (which resets the file)."""
     MT.update(
         suit=cloth('suit', SAGE), gsuit=cloth('gsuit', GSUIT, rough=0.85, fold=0.6, lace=True),
-        lpu=cloth('lpu', LPU, rough=0.8, fold=0.5), glove=cloth('glove', LEATHER, rough=0.5, fold=0.7, leather=True),
-        web=mat('webbing'), helm=mat('helmet'), trim=mat('helmet_trim'), liner=mat('liner'), visor=mat('visor'),
+        lpu=cloth('lpu', LPU, rough=0.86, fold=0.25, stitch=True), glove=cloth('glove', LEATHER, rough=0.42, fold=0.7, leather=True),
+        web=mat('webbing'), helm=helmet_paint('helmet_paint', kit.PALETTE['helmet'][0]), skin=mat('skin'), eye=mat('eye'), hw=mat('hardware'), trim=mat('helmet_trim'), liner=mat('liner'), visor=mat('visor'),
         mask=mat('mask'), mshell=mat('mask_shell'), hose=mat('hose'), boot=mat('boot'), sole=mat('sole'),
         metal=mat('aluminium'), board=mat('kneeboard'), paper=mat('paper'), dark=mat('black'))
 
@@ -331,11 +359,12 @@ def build_body():
     loft(P, [
         (0, -0.515, -2.835, 0.135, 0.100, 0.5),
         (0, -0.455, -2.815, 0.170, 0.125, 0.9),
-        (0, -0.330, -2.775, 0.158, 0.110, 0.8),
-        (0, -0.180, -2.745, 0.160, 0.112, 0.6),
-        (0, -0.040, -2.725, 0.180, 0.120, 0.5),
-        (0, 0.045, -2.735, 0.165, 0.105, 0.4),
-        (0, 0.095, -2.765, 0.105, 0.080, 0.5),
+        (0, -0.330, -2.775, 0.150, 0.106, 0.9),
+        (0, -0.180, -2.745, 0.160, 0.116, 0.6),
+        (0, -0.050, -2.727, 0.186, 0.128, 0.5),
+        (0, 0.030, -2.730, 0.190, 0.116, 0.4),
+        (0, 0.078, -2.752, 0.150, 0.092, 0.5),
+        (0, 0.104, -2.772, 0.092, 0.074, 0.5),
         (0, 0.125, -2.790, 0.062, 0.058, 0.3),
     ], suit, side=V((1, 0, 0)), seg=24, sub=4)
     # neck (balaclava / collar) up into the helmet
@@ -346,14 +375,19 @@ def build_body():
          seg=14, sub=1, caps=False)
     # arms: shoulder (inside the torso) -> deltoid -> elbow -> wrist
     arms = {
-        'R': [(0.13, 0.045, -2.725, 0.058, 0.058, 0.3), (0.200, 0.015, -2.73, 0.070, 0.068, 0.8), (0.207, -0.12, -2.84, 0.061, 0.059, 0.5),
-              (0.194, -0.252, -2.955, 0.056, 0.054, 1.0), (0.13, -0.256, -3.09, 0.047, 0.045, 0.6), (0.055, -0.246, -3.205, 0.036, 0.034, 0.8)],
-        'L': [(-0.13, 0.045, -2.725, 0.058, 0.058, 0.3), (-0.200, 0.015, -2.73, 0.070, 0.068, 0.8), (-0.234, -0.13, -2.77, 0.061, 0.059, 0.5),
-              (-0.252, -0.262, -2.81, 0.056, 0.054, 1.0), (-0.276, -0.255, -2.95, 0.047, 0.045, 0.6), (-0.292, -0.240, -3.075, 0.036, 0.034, 0.8)],
+        'R': [(0.13, 0.045, -2.725, 0.058, 0.058, 0.3), (0.212, 0.022, -2.732, 0.080, 0.076, 0.9), (0.216, -0.075, -2.795, 0.068, 0.066, 0.4), (0.208, -0.165, -2.875, 0.061, 0.058, 0.6),
+              (0.196, -0.258, -2.958, 0.060, 0.050, 1.0), (0.165, -0.262, -3.03, 0.054, 0.050, 0.5), (0.115, -0.256, -3.115, 0.045, 0.042, 0.6),
+              (0.055, -0.246, -3.205, 0.036, 0.034, 0.9)],
+        'L': [(-0.13, 0.045, -2.725, 0.058, 0.058, 0.3), (-0.212, 0.022, -2.732, 0.080, 0.076, 0.9), (-0.232, -0.08, -2.755, 0.068, 0.066, 0.4), (-0.246, -0.175, -2.785, 0.061, 0.058, 0.6),
+              (-0.256, -0.266, -2.812, 0.060, 0.050, 1.0), (-0.266, -0.262, -2.88, 0.054, 0.050, 0.5), (-0.278, -0.255, -2.975, 0.045, 0.042, 0.6),
+              (-0.292, -0.240, -3.075, 0.036, 0.034, 0.9)],
     }
     for side, pts in arms.items():
         loft(P, pts, suit, side=V((0, 0, 1)), seg=16, sub=4)
         sx = 1 if side == 'R' else -1
+        # raised shoulder seam where the sleeve is set in
+        loft(P, [(sx * 0.168, 0.046, -2.730, 0.082, 0.080, 0.2), (sx * 0.176, 0.044, -2.731, 0.0835, 0.081, 0.2)], suit,
+             side=V((0, 0, 1)), seg=16, sub=1, caps=False)
         # knitted cuff under the gauntlet
         w = pts[-1]
         e = pts[-2]
@@ -461,7 +495,7 @@ def build_harness(P):
     """Straps, buckles and the life preserver, laid on the body by ray casts."""
     dg = bpy.context.evaluated_depsgraph_get()
     sc = bpy.context.scene
-    web, metal = MT['web'], MT['metal']
+    web, metal = MT['web'], MT['hw']
 
     def hit(p, d, back=0.12):
         o, dd = T(p), T(d).normalized()
@@ -471,7 +505,7 @@ def build_harness(P):
             return None
         return (loc.x, loc.z, -loc.y), (nrm.x, nrm.z, -nrm.y)
 
-    def strap(points, dirs, width=0.042, thick=0.007, off=0.006, m=web, back=0.12):
+    def strap(points, dirs, width=0.044, thick=0.010, off=0.008, m=web, back=0.12):
         pts, nrm = [], []
         for p, d in zip(points, dirs):
             h = hit(p, d, back)
@@ -485,10 +519,22 @@ def build_harness(P):
         return pts, nrm
 
     def buckle(p, d, size=(0.052, 0.030, 0.008), up=(0, 1, 0)):
+        """Friction adapter: an open steel frame with a centre bar, standing proud of the webbing."""
         h = hit(p, d)
         if h:
             q, n = h
-            obox(P, size, metal, q, n, up=up, lift=0.012)
+            w, l, t = size
+            bar = 0.007
+            lift = 0.017
+            n_ = V(n).normalized()
+            u_ = V(up)
+            u_ = (u_ - n_ * u_.dot(n_)).normalized()
+            x_ = u_.cross(n_).normalized()
+            c = V(q)
+            for sgn in (-1, 1):
+                obox(P, (w, bar, t), metal, tuple(c + u_ * sgn * (l / 2 - bar / 2)), n, up=up, lift=lift)
+                obox(P, (bar, l, t), metal, tuple(c + x_ * sgn * (w / 2 - bar / 2)), n, up=up, lift=lift)
+            obox(P, (w, bar * 0.8, t * 0.8), metal, tuple(c), n, up=up, lift=lift + 0.002)
 
     FWD, DOWN = (0, 0, 1), (0, -1, 0)
     for sx in (-1, 1):
@@ -531,8 +577,12 @@ def build_harness(P):
     if h:
         q, n = h
         c = V(q) + V(n) * 0.014
-        P.cyl(0.037, 0.022, metal, loc=T(c), rot=(90, 0, 0), seg=16)
-        P.cyl(0.024, 0.030, MT['dark'], loc=T(c), rot=(90, 0, 0), seg=12)
+        P.cyl(0.033, 0.022, MT['metal'], loc=T(c), rot=(90, 0, 0), seg=20)
+        P.cyl(0.024, 0.030, MT['dark'], loc=T(c), rot=(90, 0, 0), seg=14)
+        for a in range(4):   # the four lugs the straps lock into
+            ang = math.radians(45 + 90 * a)
+            obox(P, (0.020, 0.014, 0.010), metal, tuple(c + V((math.cos(ang) * 0.036, math.sin(ang) * 0.036, 0.0))), (0, 0, -1),
+                 up=(math.cos(ang), math.sin(ang), 0))
     # life preserver: a horseshoe bladder round the neck, lobes down the chest
     lobe = []
     for sx in (-1, 1):
@@ -541,15 +591,23 @@ def build_harness(P):
             hh = hit((sx * 0.062, y, -2.95), FWD)
             if hh:
                 q, n = hh
-                col.append((q[0] + n[0] * 0.020, q[1] + n[1] * 0.020, q[2] + n[2] * 0.020))
+                col.append((q[0] + n[0] * 0.013, q[1] + n[1] * 0.013, q[2] + n[2] * 0.013))
         lobe.append(col)
     if all(len(c) >= 4 for c in lobe):
         left, right = lobe
-        path = [(*p, 0.046 if i else 0.036, 0.022 if i else 0.016, 0.5) for i, p in enumerate(left)]
-        path += [(-0.092, 0.118, -2.790, 0.040, 0.024, 0.5), (-0.085, 0.130, -2.730, 0.036, 0.026, 0.5), (-0.045, 0.128, -2.690, 0.034, 0.028, 0.5),
-                 (0.045, 0.128, -2.690, 0.034, 0.028, 0.5), (0.085, 0.130, -2.730, 0.036, 0.026, 0.5), (0.092, 0.118, -2.790, 0.040, 0.024, 0.5)]
-        path += [(*p, 0.046 if i < len(right) - 1 else 0.036, 0.022 if i < len(right) - 1 else 0.016, 0.5) for i, p in enumerate(right[::-1])]
-        loft(P, path, MT['lpu'], side=V((1, 0, 0)), seg=10, sub=3)
+        path = [(*p, 0.050 if i else 0.044, 0.0125, 0.5) for i, p in enumerate(left)]
+        path += [(-0.094, 0.112, -2.792, 0.044, 0.012, 0.5), (-0.088, 0.126, -2.735, 0.040, 0.012, 0.5), (-0.046, 0.126, -2.698, 0.038, 0.012, 0.5),
+                 (0.046, 0.126, -2.698, 0.038, 0.012, 0.5), (0.088, 0.126, -2.735, 0.040, 0.012, 0.5), (0.094, 0.112, -2.792, 0.044, 0.012, 0.5)]
+        path += [(*p, 0.050 if i < len(right) - 1 else 0.044, 0.0125, 0.5) for i, p in enumerate(right[::-1])]
+        loft(P, path, MT['lpu'], side=V((1, 0, 0)), seg=12, sub=3)
+        # the folded bladder makes each chest lobe a flat packed pouch with a closing flap and a beaded pull
+        for col, sx in zip(lobe, (-1, 1)):
+            lo_, hi_ = V(col[0]), V(col[2])
+            mid = (lo_ + hi_) / 2
+            n_ = (0, 0.05, -1)
+            obox(P, (0.088, (hi_ - lo_).length + 0.02, 0.020), MT['lpu'], tuple(mid), n_, up=tuple((hi_ - lo_).normalized()), lift=0.010)
+            obox(P, (0.092, 0.034, 0.006), MT['lpu'], tuple(hi_), n_, up=tuple((hi_ - lo_).normalized()), lift=0.024)
+            P.sphere(0.009, MT['dark'], loc=T(lo_ + V((sx * 0.03, -0.02, -0.03))), seg=8, rings=5)
         # inflation toggles at the bottom of each lobe
         P.detail = 1
         for col in lobe:
@@ -574,8 +632,16 @@ def build_head(connector):
     hc = V(HEAD_C)
     helm, trim = MT['helm'], MT['trim']
     # head form inside the shell (shows only through the open bottom)
-    H.sphere(1.0, MT['liner'], loc=T(hc + V((0, -0.01, 0.0))), scale=(HELMET[0] * 0.9, HELMET[2] * 0.9, HELMET[1] * 0.9),
+    H.sphere(1.0, MT['liner'], loc=T(hc + V((0, -0.01, 0.012))), scale=(HELMET[0] * 0.88, HELMET[2] * 0.84, HELMET[1] * 0.88),
              seg=16, rings=10)
+    # the face behind the visor: brow, cheeks, nose bridge and eyes (seen dimly through the tint)
+    FACE = (HELMET[0] * 0.80, HELMET[1] * 0.86, HELMET[2] * 0.86)
+    shell(H, HEAD_C, FACE, MT['skin'], az=(-80, 80), lo=lambda a: -50, hi=lambda a: 30, naz=16, nel=8)
+    loft(H, [(*epoint(HEAD_C, FACE, 0, 12, 1.0), 0.010, 0.010), (*epoint(HEAD_C, FACE, 0, 0, 1.05), 0.011, 0.012),
+             (*epoint(HEAD_C, FACE, 0, -14, 1.13), 0.016, 0.014)], MT['skin'], seg=8, sub=2)
+    for sx in (-1, 1):
+        H.sphere(1.0, MT['eye'], loc=T(epoint(HEAD_C, FACE, sx * 21, 5, 0.985)), scale=(0.015, 0.008, 0.008), seg=10, rings=6)
+        H.sphere(1.0, MT['skin'], loc=T(epoint(HEAD_C, FACE, sx * 22, 14, 1.0)), scale=(0.024, 0.012, 0.008), seg=10, rings=6)
 
     def sm(x, a, b):
         t = max(0.0, min(1.0, (x - a) / (b - a)))
@@ -583,10 +649,10 @@ def build_head(connector):
 
     def rim(a):   # lower edge of the shell: high over the face, low over the ears, up again at the nape
         a = abs(a)
-        return -52 + 44 * (1 - sm(a, 48, 74)) + 14 * sm(a, 115, 170)
+        return -54 + 46 * (1 - sm(a, 48, 74)) + 2 * sm(a, 120, 170)
     low, _ = shell(H, HEAD_C, HELMET, helm, lo=rim, naz=36, nel=14, thick=0.07)
     # edge beading round the rim
-    tube3(H, [epoint(HEAD_C, HELMET, -180 + 360 * i / 36, rim(-180 + 360 * i / 36), 0.985) for i in range(36)], 0.0065, trim, seg=5, closed=True)
+    tube3(H, [epoint(HEAD_C, HELMET, -180 + 360 * i / 36, rim(-180 + 360 * i / 36), 0.985) for i in range(36)], 0.0085, trim, seg=6, closed=True)
     # ear bulges
     for sx in (-1, 1):
         H.sphere(1.0, helm, loc=T(epoint(HEAD_C, HELMET, sx * 90, -22, 0.97)), scale=(0.022, 0.050, 0.056), seg=12, rings=6)
@@ -596,38 +662,45 @@ def build_head(connector):
           naz=18, nel=5, thick=0.085)
     tube3(H, [epoint(HEAD_C, big, 0, e, 1.02) for e in (8, 22, 36, 50)], 0.006, trim, seg=5)
     H.cyl(0.013, 0.014, trim, loc=T(epoint(HEAD_C, big, 0, 18, 1.06)), rot=(72, 0, 0), seg=10)
-    for sx in (-1, 1):   # visor pivots
-        H.cyl(0.013, 0.012, MT['metal'], loc=T(epoint(HEAD_C, big, sx * 84, 2, 1.0)), rot=(0, 90, 0), seg=8)
+    # rolled lower lip of the housing
+    tube3(H, [epoint(HEAD_C, big, a, 4 + 5 * sm(abs(a), 40, 78), 1.0) for a in range(-78, 79, 12)], 0.0055, helm, seg=5)
+    for sx in (-1, 1):   # visor pivots: a boss with a screw head, and the track the visor arm rides in
+        H.cyl(0.017, 0.010, helm, loc=T(epoint(HEAD_C, big, sx * 84, 2, 0.995)), rot=(0, 90, 0), seg=12)
+        H.cyl(0.008, 0.016, MT['hw'], loc=T(epoint(HEAD_C, big, sx * 84, 2, 1.0)), rot=(0, 90, 0), seg=8)
+        tube3(H, [epoint(HEAD_C, big, sx * 82, e, 1.012) for e in (6, 18, 30, 40)], 0.004, trim, seg=4)
+    # nape pad and the adjuster on the back of the shell
+    obox(H, (0.07, 0.03, 0.012), trim, epoint(HEAD_C, HELMET, 180, -40, 1.0), (0, -0.4, 1), up=(0, 1, 0.4), lift=0.004)
     # visor down: tinted, wraps the face from under the cover to the mask
-    vis = (HELMET[0] + 0.005, HELMET[1] + 0.003, HELMET[2] + 0.009)
-    shell(H, HEAD_C, vis, MT['visor'], az=(-72, 72), lo=lambda a: -34 + 9 * sm(abs(a), 15, 72) + 6 * (1 - sm(abs(a), 0, 14)),
-          hi=lambda a: 10, naz=18, nel=6, thick=0.035)
+    tube3(H, [epoint(HEAD_C, VISOR, a, visor_lo(a), 1.0) for a in range(-72, 73, 8)], 0.0032, trim, seg=4)
     # oxygen mask: rubber face piece, hard shell over its front, valve on the nose of it
-    base = hc + V((0, -0.080, -0.100))
+    base = hc + V((0, -0.084, -0.104))
     axis = V((0, -0.40, -1.0)).normalized()
     upv = V((0, 1, 0))
     upv = (upv - axis * upv.dot(axis)).normalized()
-    loft(H, [(*(base - axis * 0.012), 0.050, 0.057), (*(base + axis * 0.020), 0.052, 0.056), (*(base + axis * 0.048), 0.043, 0.047),
-             (*(base + axis * 0.072), 0.030, 0.033), (*(base + axis * 0.084), 0.022, 0.024)], MT['mask'], side=V((1, 0, 0)), seg=14, sub=2)
-    loft(H, [(*(base + axis * 0.034), 0.0505, 0.0535), (*(base + axis * 0.054), 0.044, 0.047), (*(base + axis * 0.076), 0.031, 0.033),
-             (*(base + axis * 0.088), 0.022, 0.023)], MT['mshell'], side=V((1, 0, 0)), seg=14, sub=2)
-    tip = base + axis * 0.092
+    loft(H, [(*(base - axis * 0.016), 0.043, 0.054), (*(base + axis * 0.010), 0.044, 0.052), (*(base + axis * 0.032), 0.037, 0.043),
+             (*(base + axis * 0.050), 0.027, 0.031), (*(base + axis * 0.060), 0.019, 0.021)], MT['mask'], side=V((1, 0, 0)), seg=14, sub=2)
+    loft(H, [(*(base + axis * 0.020), 0.0415, 0.047), (*(base + axis * 0.036), 0.036, 0.041), (*(base + axis * 0.053), 0.027, 0.030),
+             (*(base + axis * 0.063), 0.018, 0.019)], MT['mshell'], side=V((1, 0, 0)), seg=14, sub=2)
+    # exhalation ports on the cheeks of the shell
+    for sx in (-1, 1):
+        H.cyl(0.009, 0.008, MT['dark'], loc=T(base + axis * 0.040 + V((sx * 0.034, -0.004, 0))), rot=(0, 90 - sx * 20, 0), seg=8)
+    tip = base + axis * 0.066
     Rm = rot_to(axis)
     mk = H.mark()
-    H.lathe([(0.019, 0.0), (0.021, 0.004), (0.021, 0.014), (0.014, 0.017), (0.0, 0.017)], MT['metal'], seg=12)
+    H.lathe([(0.0125, 0.0), (0.014, 0.003), (0.014, 0.009), (0.009, 0.011), (0.0, 0.011)], MT['metal'], seg=12)
     H.transform(Matrix.Translation(T(tip - axis * 0.004)) @ Rm, verts=H.since(mk))
     # hose stub under the mask and the corrugated hose down to the chest connector
-    stub = base + axis * 0.045 - upv * 0.046
+    stub = base + axis * 0.034 - upv * 0.040
     c = V(connector)
-    loft(H, [(*(stub + upv * 0.012), 0.0185, 0.0185), (*(stub - upv * 0.03), 0.0185, 0.0185), (*(V((-0.03, 0.045, -2.99))), 0.0175, 0.0175),
-             (*(V((-0.085, -0.06, -2.975))), 0.0175, 0.0175), (*(c + V((0.0, 0.035, -0.035))), 0.0175, 0.0175), (*c, 0.0165, 0.0165)],
+    loft(H, [(*(stub + upv * 0.012), 0.0165, 0.0165), (*(stub - upv * 0.03), 0.0165, 0.0165), (*(V((-0.03, 0.045, -2.985))), 0.0165, 0.0165),
+             (*(V((-0.085, -0.06, -2.975))), 0.0165, 0.0165), (*(c + V((0.0, 0.035, -0.035))), 0.0165, 0.0165), (*c, 0.0160, 0.0160)],
          MT['hose'], seg=8, sub=5, ribs=(1, 0.0036))
     # mask straps to the receivers on the helmet sides, chin strap under the jaw
     for sx in (-1, 1):
         bay = V(epoint(HEAD_C, HELMET, sx * 70, -32, 1.0))
         obox(H, (0.030, 0.034, 0.012), trim, bay, (sx, 0, -0.35), up=(0, 1, 0), lift=0.004)
         for dy in (0.014, -0.014):
-            ribbon(H, [tuple(base + V((sx * 0.047, dy, 0.0))), tuple((base + V((sx * 0.047, dy, 0.0)) + bay) / 2 + V((sx * 0.012, 0, -0.008))), tuple(bay + V((sx * 0.006, dy * 0.5, -0.004)))],
+            ribbon(H, [tuple(base + V((sx * 0.040, dy, 0.0))), tuple((base + V((sx * 0.040, dy, 0.0)) + bay) / 2 + V((sx * 0.012, 0, -0.008))), tuple(bay + V((sx * 0.006, dy * 0.5, -0.004)))],
                    [(sx, 0.2, -0.4), (sx, 0.1, -0.3), (sx, 0.1, 0)], 0.013, 0.004, MT['mask'])
     ribbon(H, [epoint(HEAD_C, HELMET, -88, -46, 0.98), epoint(HEAD_C, HELMET, -45, -66, 0.92), epoint(HEAD_C, HELMET, 0, -74, 0.90),
                epoint(HEAD_C, HELMET, 45, -66, 0.92), epoint(HEAD_C, HELMET, 88, -46, 0.98)],
@@ -635,6 +708,58 @@ def build_head(connector):
     # comms lead from the left rear of the shell to the shoulder
     tube3(H, [epoint(HEAD_C, HELMET, -140, -40, 1.0), (-0.125, 0.150, -2.735), (-0.150, 0.105, -2.745), (-0.150, 0.06, -2.80)], 0.0045, MT['dark'], seg=4)
     return H
+
+
+VISOR = (HELMET[0] + 0.005, HELMET[1] + 0.003, HELMET[2] + 0.009)
+
+
+def _sm(x, a, b):
+    t = max(0.0, min(1.0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+
+
+def visor_lo(a):
+    return -34 + 9 * _sm(abs(a), 15, 72) + 6 * (1 - _sm(abs(a), 0, 14))
+
+
+def visor_material():
+    """Smoke-tinted visor: not baked. Alpha-blended so the face shows dimly
+    behind it, near-mirror smooth with a clearcoat so it picks up the sky
+    (KHR_materials_clearcoat -> a physical material at runtime)."""
+    m = bpy.data.materials.new('pilot_visor')
+    m.use_nodes = True
+    b = m.node_tree.nodes['Principled BSDF']
+    b.inputs['Base Color'].default_value = (0.012, 0.014, 0.018, 1.0)
+    b.inputs['Roughness'].default_value = 0.08
+    b.inputs['Metallic'].default_value = 0.0
+    b.inputs['Alpha'].default_value = 0.86
+    for name, v in (('Coat Weight', 0.35), ('Coat Roughness', 0.03), ('Coat IOR', 1.5), ('Specular IOR Level', 0.25)):
+        if name in b.inputs:
+            b.inputs[name].default_value = v
+    for attr, v in (('blend_method', 'BLEND'), ('surface_render_method', 'BLENDED')):
+        try:
+            setattr(m, attr, v)
+        except Exception:
+            pass
+    m.use_backface_culling = True
+    return m
+
+
+def build_visor(A):
+    """Child node `pilot_visor` of `pilot_head`: one skin of glass from under the housing to the mask."""
+    Vp = kit.Part()
+    shell(Vp, HEAD_C, VISOR, visor_material(), az=(-72, 72), lo=visor_lo, hi=lambda a: 12, naz=20, nel=7)
+    o = A.mesh('pilot_visor', Vp, pivot=T(NECK_TOP), parent='pilot_head', smooth_angle=85)
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    uv = bm.loops.layers.uv.new('UVMap')
+    for f in bm.faces:
+        for lp in f.loops:
+            lp[uv].uv = (0.5 + lp.vert.co.x * 3.0, 0.5 + lp.vert.co.z * 3.0)
+    bm.to_mesh(o.data)
+    bm.free()
+    return o
 
 
 def main():
@@ -667,7 +792,8 @@ def main():
         return
     baked = A.bake(size=1024, ao_samples=64, ao_mix=0.45, cavity=0.0, wear=0.5)
     baked['noDetail'] = True
-    # budgets: about 15k triangles LOD0 (player, seen from the seat), 2.5k LOD1 (hostile jets)
+    build_visor(A)
+    # budgets: up to 18k triangles LOD0 (player, seen from the seat), 2.5k LOD1 (hostile jets)
     info = A.export(tex=1024, ntex=1024, otex=512, lod1_tex=256, lod1_ntex=256, lod1_tris=2500)
     print('BUILT pilot', [(l['triangles'], l['bytes']) for l in info['lods']])
 
