@@ -18,6 +18,7 @@
  * lateUpdate, after ai has moved convoys and updated line of sight.
  */
 import * as THREE from 'three/webgpu';
+import { smoothstep, positionWorld, normalWorld, mix, vec3, float, texture, triplanarTexture } from 'three/tsl';
 import { terrainHeight } from '../world/terrain/heightfield.js';
 import { configureAssets } from './loadModel.js';
 import { CATALOG } from './catalog.js';
@@ -96,11 +97,27 @@ class AssetsSystem {
 
   _foundationMaterial() {
     if (!this.foundationMat) {
-      const m = new THREE.MeshStandardMaterial({ color: 0x6a5f52, roughness: 1, metalness: 0 });
+      const m = new THREE.MeshStandardMaterial({ color: 0x7a6f62, roughness: 1, metalness: 0 });
       m.name = 'foundation_earth';
       const obj = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), m);
       upgradeGroundMaterials(obj, { tier: this.tier, env: this.game.env });
-      this.foundationMat = obj.material;
+      const fm = obj.material;
+      // The terrain's own gravel texture, triplanar in world space, so the pad and
+      // berm read as the same ground the unit stands on rather than a grey sheet.
+      if (this.tier !== 'low') {
+        const tex = new THREE.TextureLoader().load('./assets/textures/terrain/gravel_col.webp');
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.anisotropy = 4;
+        const tri = triplanarTexture(texture(tex), null, null, float(0.3), positionWorld, normalWorld);
+        fm.colorNode = tri.rgb.mul(vec3(0.95, 0.92, 0.88));
+      }
+      // Snow lies on the berm where it lies on the ground around it (the terrain
+      // whitens upward-facing slopes above ~5000 m); a bare brown mound on a
+      // snowfield read as a hole.
+      const snow = smoothstep(4700, 4950, positionWorld.y).mul(smoothstep(0.35, 0.75, normalWorld.y));
+      fm.colorNode = mix(fm.colorNode ?? vec3(0.48, 0.43, 0.38), vec3(0.78, 0.8, 0.83), snow.mul(0.92));
+      this.foundationMat = fm;
     }
     return this.foundationMat;
   }
