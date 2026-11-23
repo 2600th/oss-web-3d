@@ -4,7 +4,10 @@ import { projectPoint, boxClamp, gunLead } from './projection.js';
 import { worldToRadar, autoRange } from './radar.js';
 import { RadioQueue, Callouts } from './radio.js';
 import { resolveTheme, targetColor, isGround } from './theme.js';
-import { rect, inside, instrumentKeepOut, panelKeepOut, chooseSlot, pickPlateSlot } from './declutter.js';
+import {
+  rect, overlap, inside, instrumentKeepOut, panelKeepOut, pickPlateSlot,
+  labelTier, mustLabel, sortForLabels, foldMarkers, placeLabels, leaderSlots, easeAlpha,
+} from './declutter.js';
 import {
   formatHeading, headingTickLabel, formatSpeed, formatAltitude, toKnots, toFeet,
   formatRange, formatScore, formatClock, formatG, formatAmmo, formatPercent, groupThousands,
@@ -44,6 +47,14 @@ const COAMING = [0, 0.1, -3.6];
 
 const MUZZLE = 1050; // m/s, GSh-23 class
 
+// feel: hit / kill / damage-direction marks (seconds, wall clock)
+const HIT_TICK = 0.22;
+const KILL_MARK = 0.75;
+const DAMAGE_DIR = 1.4;
+
+/** Stable key for a HUD target row: the combat entity when there is one. */
+const keyOf = (t) => t?.entity ?? t;
+
 export class Hud {
   constructor(root, settings) {
     this.settings = settings;
@@ -80,6 +91,13 @@ export class Hud {
     this._radioRect = null;
     this._radioLift = 0; // 0 = usual slot, 1 = portrait top slot (over the objective line)
     this._radioHold = 0;
+    this._labels = new Map(); // target key -> {a, slot, n}: label opacity and last slot
+    // feel (see the event feed below)
+    this._firing = new Map(); // entity -> time until which it counts as firing on us
+    this._hits = new Map(); // entity -> age of the last player hit on it
+    this._kills = []; // {p, age, color, ground}
+    this._dmgDir = []; // {p, age, sev}
+    this.flicker = 0;
   }
 
   applySettings(settings) {
@@ -135,8 +153,14 @@ export class Hud {
     this.banner = { title, text, age: 0, life };
   }
 
-  flashDamage(amount = 0.3) {
-    this.damageFlash = Math.min(1, this.damageFlash + 0.35 + amount);
+  /**
+   * Red edge flash. `sev` is 0..1 (see feel.js damageSeverity): a stray round
+   * is a tint at the frame edge, a missile is a hard flash. Repeated hits
+   * hold the flash up without stacking it into a red-out.
+   */
+  flashDamage(sev = 0.3) {
+    const a = Math.min(1, 0.14 + 0.7 * Math.max(0, sev));
+    this.damageFlash = Math.min(1, Math.max(this.damageFlash, a) + a * 0.15);
   }
 
   onLock(state, target) {
@@ -150,6 +174,51 @@ export class Hud {
     this.threatLevel = level;
   }
 
+  /**
+   * A hostile is shooting at us (gun burst, flak, a missile in the air) for
+   * `seconds` more; Infinity until `ceaseFire`. Its marker and label are
+   * never folded or dropped while this holds.
+   */
+  markFiring(entity, seconds = 2) {
+    if (!entity) return;
+    const until = this.time + seconds;
+    if (!(this._firing.get(entity) > until)) this._firing.set(entity, until);
+  }
+
+  ceaseFire(entity, linger = 1.5) {
+    if (entity && this._firing.has(entity)) this._firing.set(entity, this.time + linger);
+  }
+
+  isFiring(t) {
+    return (this._firing.get(keyOf(t)) ?? -1) > this.time;
+  }
+
+  /** Player struck `target`: a hit tick on its marker. */
+  hitMark(target) {
+    if (target) this._hits.set(keyOf(target), 0);
+  }
+
+  /** Player destroyed something at `position`: a mark that opens and fades there. */
+  killMark(position, target) {
+    if (!position) return;
+    const t = target ?? {};
+    this._kills.push({ p: { x: position.x, y: position.y, z: position.z }, age: 0, color: targetColor(this.theme, t), ground: isGround(t) });
+    if (this._kills.length > 4) this._kills.shift();
+  }
+
+  /**
+   * We were hit from `position` (world; the shooter's live position when
+   * known). `sev` 0..1. Drawn as a wedge on the threat ring pointing at the
+   * source; a heavy hit also makes the HUD flicker for a moment.
+   */
+  damageFrom(position, sev = 0.5) {
+    if (position) {
+      this._dmgDir.push({ p: position, age: 0, sev });
+      if (this._dmgDir.length > 4) this._dmgDir.shift();
+    }
+    if (sev > 0.45 && !this.reducedMotion) this.flicker = Math.max(this.flicker, 0.1 + 0.2 * sev);
+  }
+
   clearTransient() {
     this.radio.clear();
     this.callouts.clear();
@@ -158,6 +227,12 @@ export class Hud {
     this.threatLevel = null;
     this.lockFx = { state: 'none', since: 0, id: null };
     this._tracks.clear();
+    this._labels.clear();
+    this._firing.clear();
+    this._hits.clear();
+    this._kills.length = 0;
+    this._dmgDir.length = 0;
+    this.flicker = 0;
   }
 
   // ----------------------------------------------------------------- frame --
@@ -168,9 +243,28 @@ export class Hud {
     this.radio.update(dt);
     this.callouts.update(dt);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 1.6);
+    this.flicker = Math.max(0, this.flicker - dt);
+    for (const [k, a] of this._hits) {
+      if (a + dt > HIT_TICK) this._hits.delete(k);
+      else this._hits.set(k, a + dt);
+    }
+    for (const k of this._kills) k.age += dt;
+    while (this._kills.length && this._kills[0].age > KILL_MARK) this._kills.shift();
+    for (const k of this._dmgDir) k.age += dt;
+    while (this._dmgDir.length && this._dmgDir[0].age > DAMAGE_DIR) this._dmgDir.shift();
+    for (const [e, until] of this._firing) if (until < this.time || e.alive === false) this._firing.delete(e);
     if (this.banner) {
       this.banner.age += dt;
       if (this.banner.age > this.banner.life) this.banner = null;
+    }
+    // Heavy hit: the HUD glass flickers for a moment (CSS opacity on the
+    // canvas, so nothing in the draw path has to know).
+    if (this.flicker > 0) {
+      this.canvas.style.opacity = Math.random() < 0.55 ? '1' : '0.3';
+      this._flickering = true;
+    } else if (this._flickering) {
+      this.canvas.style.opacity = '';
+      this._flickering = false;
     }
     if (!this.visible || !this.layout) return;
     const d = normalizeHud(game.hud, game.flight, this.data);
@@ -245,6 +339,7 @@ export class Hud {
     this._drawTargets(d, game, L, s);
     this._drawFpm(d, game, L, s);
     this._drawThreatArcs(d, game, L, s);
+    this._drawDamageDir(L, s);
     this._drawHeadingTape(d, L, s);
     this._drawSpeedTape(d, L, s);
     this._drawAltTape(d, L, s);
@@ -519,88 +614,219 @@ export class Hud {
       const dist = t.distance ?? (me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0);
       const color = targetColor(th, t);
       const isLock = !!lockT && (lockT === t || (lockT.id != null && lockT.id === t.id));
+      const firing = this.isFiring(t);
+      const key = keyOf(t);
+      const hitAge = this._hits.get(key);
       this._project(p.x, p.y, p.z, _p, 6);
       // On touch, a marker under a button is as good as off-screen: hand it
       // to the edge arrows, which stay clear of the thumbs.
       const hidden = _p.onScreen && this._occluded(_p.x, _p.y, 18 * s);
-      if (_p.onScreen && !hidden) on.push({ t, dist, color, isLock, x: _p.x, y: _p.y });
-      else off.push({ t, dist, color, x: _p.x, y: _p.y });
+      const o = { t, key, dist, color, isLock, firing, x: _p.x, y: _p.y, hit: hitAge };
+      if (_p.onScreen && !hidden) on.push(o);
+      else off.push(o);
     }
-    // A dug-in position is a dozen entities within a few hundred metres: at
-    // range they would stack into one unreadable knot. Markers closer than
-    // `merge` px fold into the most important one, which carries a "+n".
-    // Order: lock, selected, lead, priority, then nearest.
-    on.sort((a, b) => rankOn(b) - rankOn(a) || a.dist - b.dist);
-    // A marker whose centre lands on a flight instrument (a ridge on the
-    // horizon right under the altitude box) shrinks to a pip and writes no
-    // text; pips fold into one another more eagerly.
-    const keep = this._keep;
+    // Rank: lock, firing on us, selected, lead, priority, then nearest (see
+    // declutter.js). A dug-in position is a dozen entities within a few
+    // hundred metres: markers closer than `merge` px fold into the most
+    // important one, which carries a "+n" -- except the lock, the selected
+    // target and anything shooting at us, which never fold and never host.
     const instr = this._instr;
-    const merge = 30 * s;
-    const shown = [];
     for (const o of on) {
-      o.pip = !o.isLock && !o.t.selected && instr.some((r) => inside(o.x, o.y, r));
-      const mg = o.pip ? merge * 1.6 : merge;
-      const host = o.isLock ? null : shown.find((h) => Math.abs(h.x - o.x) < mg && Math.abs(h.y - o.y) < mg);
-      if (host) host.extra++;
-      else shown.push(Object.assign(o, { extra: 0, m: markerSize(o.dist, s) }));
+      o.selected = !!o.t.selected;
+      o.keep = o.isLock || o.firing || o.selected;
+      // a marker whose centre lands on a flight instrument (a ridge on the
+      // horizon right under the altitude box) shrinks to a pip and writes no text
+      o.pip = !o.keep && instr.some((r) => inside(o.x, o.y, r));
+      o.tier = labelTier({ isLock: o.isLock, firing: o.firing, selected: o.selected, isAce: o.t.isAce, isTarget: o.t.isTarget });
+      o.had = this._labels.has(o.key);
+    }
+    sortForLabels(on);
+    const merge = 30 * s;
+    const shown = foldMarkers(on, merge, (o) => (o.pip ? merge * 1.6 : merge));
+    for (const o of shown) {
+      o.m = markerSize(o.dist, s);
+      // label margin: text keeps outside the firing ring
+      o.lm = o.firing ? o.m * 1.5 + 6 * s : o.m;
     }
     this._placeRadio(L, s, shown);
-    // Labels only where they help: lock, selected, lead and priority targets,
-    // and the two nearest others. Everything else is a bare shape. Each label
-    // takes the first slot clear of the instruments, the other markers and
-    // the labels already placed (rank order, so the lock gets first pick).
-    const obstacles = keep.slice();
+
+    // What labels must keep off: instruments, panels, the radio plate, touch
+    // buttons, the lock reticle (the target box stays readable), every marker.
+    const obstacles = this._keep.slice();
     if (this.radio.current && this.radio.alpha > 0.05 && this._radioRect) obstacles.push(this._radioRect);
     if (this.touch) for (const r of this.occluders ?? []) obstacles.push(rect(r.x, r.y, r.x + r.w, r.y + r.h));
-    const nKeep = obstacles.length;
+    const lockBox = lockT && lockState !== 'none' ? this._lockBox(d, lockT, s) : null;
+    if (lockBox) obstacles.push(lockBox);
     for (const o of shown) {
-      const k = o.pip ? 4 * s : o.m;
+      const k = o.pip ? 4 * s : o.lm;
       const crest = !o.pip && (o.t.isAce || o.t.isTarget) ? 13 * s : 0; // chevron above the shape
       o.box = rect(o.x - k, o.y - k - crest, o.x + k, o.y + k);
       obstacles.push(o.box);
     }
     const bounds = rect(L.bounds.L - 8, L.bounds.T - 8, L.bounds.R + 8, L.bounds.B + 8);
-    let free = 2;
+
+    // Shapes first: every marker is drawn, labelled or not.
     for (const o of shown) {
       if (o.pip) {
         this._drawPip(o, s);
         continue;
       }
-      const keyed = o.isLock || o.t.selected || o.t.isAce || o.t.isTarget;
       // the selected (next-to-lock) target draws heavy, like the lock
-      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock || !!o.t.selected, o.isLock ? lockState : 'none', null, o.m);
-      if (!(keyed || free-- > 0)) {
-        if (o.extra) this._drawExtra(o, s, null);
-        continue;
-      }
-      const cands = this._labelSlots(o, L, s);
-      const own = o.box;
-      const obs = obstacles.filter((r, i) => i < nKeep || r !== own);
-      const pick = chooseSlot(cands.map((c) => c.boxes), obs, bounds);
-      if (pick.cost > 0 && !keyed) {
-        if (o.extra) this._drawExtra(o, s, null);
-        continue;
-      }
-      const slot = cands[pick.i];
-      for (const b of slot.boxes) obstacles.push(b);
-      this._drawMarkerLabels(o, s, slot, o.isLock ? lockState : 'none');
+      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock || o.selected, o.isLock ? lockState : 'none', null, o.m);
+      if (o.firing) this._drawFiringRing(o, s);
     }
-    // Off-screen arrows: priority first, then nearest; capped.
-    off.sort((a, b) => rankOff(b.t) - rankOff(a.t) || a.dist - b.dist);
+
+    // Labels: rank order, rationed. Ordinary labels share a small budget and
+    // drop out when no slot is clear; lock / firing / selected always place.
+    // A label repeating the name of a better-ranked neighbour (five TRUCKs in
+    // a column) shows only its range.
+    const items = [];
+    const labelled = [];
+    for (const o of shown) {
+      if (o.pip) continue;
+      const name = o.t.name ?? '';
+      const near = (h) => h.t.name === name && h.color === o.color && Math.abs(h.x - o.x) < 180 * s && Math.abs(h.y - o.y) < 90 * s;
+      const twins = o.tier <= 1 && !!name ? labelled.filter(near) : [];
+      // ...and says nothing at all when its range reads the same as one of theirs
+      const range = formatRange(o.dist);
+      if (twins.length && !o.keep && !o.extra && twins.some((h) => formatRange(h.dist) === range)) continue;
+      const cands = this._labelSlots(o, L, s, twins.length > 0);
+      const mem = this._labels.get(o.key);
+      items.push({ must: mustLabel(o), cands: cands.map((c) => c.boxes), prev: mem && mem.n === cands.length ? mem.slot : -1, self: o.box });
+      o.cands = cands;
+      labelled.push(o);
+    }
+    const picks = placeLabels(items, obstacles, bounds, { budget: L.touch ? 2 : 3 });
+    const base = this.settings.hudOpacity ?? 1;
+    const seen = new Set();
+    for (let i = 0; i < labelled.length; i++) {
+      const o = labelled[i];
+      const pick = picks[i];
+      if (pick < 0) {
+        if (o.extra) this._drawExtra(o, s, null);
+        continue;
+      }
+      seen.add(o.key);
+      let mem = this._labels.get(o.key);
+      if (!mem) this._labels.set(o.key, (mem = { a: o.had ? 1 : 0, slot: pick, n: o.cands.length }));
+      // off-priority labels sit back a little; a label fades up rather than popping in
+      const target = o.tier >= 1 || o.keep ? 1 : 0.72;
+      mem.a = this.reducedMotion ? target : easeAlpha(mem.a, target, this._dt);
+      mem.slot = pick;
+      mem.n = o.cands.length;
+      this.ctx.globalAlpha = base * mem.a;
+      this._drawMarkerLabels(o, s, o.cands[pick], o.isLock ? lockState : 'none');
+      this.ctx.globalAlpha = base;
+    }
+    for (const k of this._labels.keys()) if (!seen.has(k)) this._labels.delete(k);
+
+    // Hit confirmation on the struck marker (folded markers pass it to their host).
+    for (const o of shown) if (o.hit != null && !o.pip) this._drawHitTick(o, s);
+    this._drawKillMarks(s);
+
+    // Off-screen arrows: firing first, then priority, then nearest; capped.
+    off.sort((a, b) => rankOff(b) - rankOff(a) || a.dist - b.dist);
     const cap = L.touch ? 6 : 9;
     const drawn = [];
     for (let i = 0; i < off.length && drawn.length < cap; i++) this._drawEdgeArrow(off[i], L, s, drawn);
+    // Arrow text once every arrow has its count: "range +n" inward of the
+    // arrow, stepped further in if a better-ranked arrow's text is there,
+    // dropped (the arrow stays) if both places are taken.
+    const ctx = this.ctx;
+    ctx.font = `400 ${10 * s}px ${FONT_SANS}`;
+    const taken = [];
     for (const h of drawn) {
-      if (!h.extra) continue;
-      // count sits on the inward side of the arrow, opposite the range
+      const txt = h.extra ? `${h.range} +${h.extra}` : h.range;
+      const w = ctx.measureText(txt).width / 2 + 2 * s;
       const ca = Math.cos(h.angle);
       const sa = Math.sin(h.angle);
-      this._text(`+${h.extra}`, h.x - ca * 20 * s - sa * 13 * s, h.y - sa * 20 * s + ca * 13 * s, h.color, 10 * s, { weight: 700 });
+      for (const back of [20, 34, 48]) {
+        const tx = h.x - ca * back * s;
+        const ty = h.y - sa * back * s;
+        const r = rect(tx - w, ty - 7 * s, tx + w, ty + 7 * s);
+        if (taken.some((q) => overlap(q, r) > 0)) continue;
+        taken.push(r);
+        this._text(txt, tx, ty, h.color, 10 * s);
+        break;
+      }
     }
     // Lock reticle draws over everything else
     if (lockT && lockState !== 'none') this._drawLock(d, lockT, L, s);
     this._drawGunPipper(d, game, L, s, lockT);
+  }
+
+  /** Screen rect the lock reticle (box, ticks and LOCK / ACQ plate) covers, or null. */
+  _lockBox(d, t, s) {
+    const p = t.position;
+    if (!p) return null;
+    this._project(p.x, p.y, p.z, _q);
+    if (_q.behind) return null;
+    const state = d.lock.state;
+    const prog = Math.min(1, Math.max(0, d.lock.progress ?? 1));
+    const r = (state === 'acquiring' ? 46 - 26 * prog : 24) * s;
+    const box = rect(_q.x - r - 7 * s, _q.y - r - 7 * s, _q.x + r + 7 * s, _q.y + r + 27 * s);
+    box.w = 2;
+    return box;
+  }
+
+  /** A hostile that is shooting at us: a ring in the warning colour that pulses. */
+  _drawFiringRing(o, s) {
+    const ctx = this.ctx;
+    const on = this.blink(3, 0.7);
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, o.m * 1.5 + 4 * s, 0, Math.PI * 2);
+    this._stroke(this.theme.warning, on ? 1.8 : 1.1);
+  }
+
+  /** Hit tick: four short diagonal strokes around a marker the player just struck. */
+  _drawHitTick(o, s) {
+    const age = o.hit;
+    if (!(age >= 0 && age < HIT_TICK)) return;
+    const ctx = this.ctx;
+    const k = 1 - age / HIT_TICK;
+    const pop = this.reducedMotion ? 1 : 1 + 0.35 * k;
+    const r0 = (o.m + 3 * s) * pop;
+    const r1 = r0 + 8 * s;
+    ctx.beginPath();
+    for (const [sx, sy] of CORNERS) {
+      ctx.moveTo(o.x + sx * r0 * 0.707, o.y + sy * r0 * 0.707);
+      ctx.lineTo(o.x + sx * r1 * 0.707, o.y + sy * r1 * 0.707);
+    }
+    ctx.globalAlpha = (this.settings.hudOpacity ?? 1) * Math.min(1, k * 1.6);
+    this._stroke(this.theme.ink, 2.2);
+    ctx.globalAlpha = this.settings.hudOpacity ?? 1;
+  }
+
+  /** Kill confirmation where the target died: an X and a ring that opens and fades. */
+  _drawKillMarks(s) {
+    if (!this._kills.length) return;
+    const ctx = this.ctx;
+    const base = this.settings.hudOpacity ?? 1;
+    for (const k of this._kills) {
+      this._project(k.p.x, k.p.y, k.p.z, _q);
+      if (!_q.onScreen) continue;
+      const u = Math.min(1, k.age / KILL_MARK);
+      const e = easeOut(u);
+      const r = (10 + 26 * (this.reducedMotion ? 0.5 : e)) * s;
+      ctx.globalAlpha = base * (1 - u);
+      ctx.beginPath();
+      if (k.ground) {
+        ctx.moveTo(_q.x, _q.y - r);
+        ctx.lineTo(_q.x + r, _q.y);
+        ctx.lineTo(_q.x, _q.y + r);
+        ctx.lineTo(_q.x - r, _q.y);
+        ctx.closePath();
+      } else ctx.arc(_q.x, _q.y, r, 0, Math.PI * 2);
+      this._stroke(k.color, 2);
+      const x = 9 * s;
+      ctx.beginPath();
+      ctx.moveTo(_q.x - x, _q.y - x);
+      ctx.lineTo(_q.x + x, _q.y + x);
+      ctx.moveTo(_q.x + x, _q.y - x);
+      ctx.lineTo(_q.x - x, _q.y + x);
+      this._stroke(k.color, 2.4);
+    }
+    ctx.globalAlpha = base;
   }
 
   _occluded(x, y, pad) {
@@ -669,14 +895,17 @@ export class Hud {
   /**
    * Candidate label layouts for a marker, best first: name above / range
    * below (the default), then name + range stacked beside the marker on the
-   * side away from the screen centre, then the other side. Each carries the
-   * boxes it would cover so the placer can test it.
+   * side away from the screen centre, then the other side, then the block
+   * out on a short leader line (eight directions, two reaches). Each carries
+   * the boxes it would cover so the placer can test it. `noName` drops the
+   * name (a neighbour of the same kind already says it).
    */
-  _labelSlots(o, L, s) {
+  _labelSlots(o, L, s, noName = false) {
     const ctx = this.ctx;
-    const { t, x, y, m } = o;
+    const { t, x, y } = o;
+    const m = o.lm ?? o.m;
     const nameSize = (t.isAce ? 12 : 11) * s;
-    const name = t.name ? (t.isAce ? t.name.toUpperCase() : t.name) : '';
+    const name = !noName && t.name ? (t.isAce ? t.name.toUpperCase() : t.name) : '';
     ctx.font = `${t.isAce ? 700 : 400} ${nameSize}px ${FONT_SANS}`;
     const nw = name ? ctx.measureText(name).width : 0;
     const range = formatRange(o.dist);
@@ -696,9 +925,9 @@ export class Hud {
     if (xw) stack.boxes.push(rect(x - 16 * s - xw, y + 9 * s, x - 14 * s, y + 21 * s));
     // beside: name over range, TGT dropped (the crest chevron still says it),
     // the "+n" count trailing the range on the same side
+    const w = Math.max(nw, rw + (xw ? xw + 6 * s : 0));
     const side = (dir) => {
       const x0 = x + dir * (m + 6 * s);
-      const w = Math.max(nw, rw + (xw ? xw + 6 * s : 0));
       const c = { mode: dir > 0 ? 'right' : 'left', dir, x0, name, range, rw, boxes: [] };
       const ny = name ? y - 7 * s : y;
       c.nameY = ny;
@@ -711,12 +940,18 @@ export class Hud {
     // the same without the TGT tag, before moving the text off-axis
     if (tw) cands.push({ ...stack, noTag: true, boxes: stack.boxes.filter((_, i) => i !== stack.boxes.length - (xw ? 2 : 1)) });
     cands.push(out, side(-out.dir));
+    // leader line: the block (name over range) pulled clear of a crowd
+    const h = (name ? nameSize * 1.15 : 0) + 13 * s;
+    for (const ls of leaderSlots(x, y, m + (t.isAce || t.isTarget ? 6 * s : 0), w + 2 * pad, h + 2 * pad, [16 * s, 40 * s])) {
+      cands.push({ mode: 'leader', name, range, rw, ...ls, boxes: [ls.box] });
+    }
     return cands;
   }
 
   _drawMarkerLabels(o, s, slot, lockState) {
     const ctx = this.ctx;
-    const { t, x, y, m, color } = o;
+    const { t, x, y, color } = o;
+    const m = o.lm ?? o.m;
     const nameSize = (t.isAce ? 12 : 11) * s;
     const nameOpts = { font: FONT_SANS, weight: t.isAce ? 700 : 400 };
     if (slot.mode === 'stack') {
@@ -730,6 +965,23 @@ export class Hud {
         ctx.arc(x, slot.rangeY + 16 * s, 1.8 * s, 0, Math.PI * 2);
         this._fillHalo(color);
       }
+      return;
+    }
+    if (slot.mode === 'leader') {
+      const b = slot.box;
+      ctx.beginPath();
+      ctx.moveTo(slot.ax, slot.ay);
+      ctx.lineTo(slot.lx, slot.ly);
+      this._stroke(color, 1);
+      const pad = 2 * s;
+      const tx = slot.align === 'left' ? b.x0 + pad : slot.align === 'right' ? b.x1 - pad : (b.x0 + b.x1) / 2;
+      let ty = b.y0 + pad;
+      if (slot.name) {
+        this._text(slot.name, tx, ty, color, nameSize, { ...nameOpts, align: slot.align, baseline: 'top' });
+        ty += nameSize * 1.15;
+      }
+      const rangeTxt = o.extra ? `${slot.range}  +${o.extra}` : slot.range;
+      this._text(rangeTxt, tx, ty, color, 11 * s, { align: slot.align, baseline: 'top' });
       return;
     }
     const align = slot.dir > 0 ? 'left' : 'right';
@@ -790,8 +1042,10 @@ export class Hud {
       host.extra++;
       return;
     }
-    drawn?.push({ x: _e.x, y: _e.y, angle: _e.angle, color: o.color, extra: 0 });
-    const big = o.t.isTarget || o.t.isAce;
+    // a hostile shooting at us points in the warning colour, filled
+    const color = o.firing ? this.theme.warning : o.color;
+    drawn?.push({ x: _e.x, y: _e.y, angle: _e.angle, color, extra: 0, range: formatRange(o.dist) });
+    const big = o.t.isTarget || o.t.isAce || o.firing;
     const a = _e.angle;
     const len = (big ? 15 : 11) * s;
     const wid = (big ? 9 : 7) * s;
@@ -802,11 +1056,9 @@ export class Hud {
     ctx.lineTo(_e.x - sa * wid, _e.y + ca * wid);
     ctx.lineTo(_e.x + sa * wid, _e.y - ca * wid);
     ctx.closePath();
-    if (big) this._fillHalo(o.color);
-    else this._stroke(o.color, 1.6);
-    const tx = _e.x - ca * 20 * s;
-    const ty = _e.y - sa * 20 * s;
-    this._text(formatRange(o.dist), tx, ty, o.color, 10 * s);
+    if (big) this._fillHalo(color);
+    else this._stroke(color, 1.6);
+    // range text is drawn by the caller once every arrow is placed
   }
 
   _drawLock(d, t, L, s) {
@@ -967,6 +1219,42 @@ export class Hud {
       this._stroke(th.warning, 1.6);
       ctx.globalAlpha = this.settings.hudOpacity ?? 1;
     }
+  }
+
+  /**
+   * Where the last hits came from: a solid wedge just inside the threat ring,
+   * pointing at the shooter (its live position) or the hit point, fading out.
+   * The missile arcs are outlined and pulse; these are filled and do not.
+   */
+  _drawDamageDir(L, s) {
+    if (!this._dmgDir.length) return;
+    const ctx = this.ctx;
+    const base = this.settings.hudOpacity ?? 1;
+    const R = Math.min(L.ladderR * 0.92, L.tapeH * 0.55) - 16 * s;
+    const cx = L.cx;
+    const cy = L.cy;
+    for (const h of this._dmgDir) {
+      this._project(h.p.x, h.p.y, h.p.z, _q);
+      // a source straight ahead and on screen still gets a direction: from centre
+      const ang = Math.atan2(_q.y - cy, _q.x - cx);
+      const k = 1 - h.age / DAMAGE_DIR;
+      const w = 0.16 + 0.12 * h.sev;
+      const t = (5 + 6 * h.sev) * s;
+      ctx.globalAlpha = base * Math.min(1, k * 1.5) * (0.55 + 0.45 * h.sev);
+      ctx.fillStyle = this.theme.warning;
+      ctx.strokeStyle = this.theme.halo;
+      ctx.lineWidth = 2;
+      // band on the ring with a short point outward, toward the shooter
+      ctx.beginPath();
+      ctx.arc(cx, cy, R - t / 2, ang - w, ang + w);
+      ctx.arc(cx, cy, R + t / 2, ang + w, ang + w * 0.35, true);
+      ctx.lineTo(cx + Math.cos(ang) * (R + t * 1.7), cy + Math.sin(ang) * (R + t * 1.7));
+      ctx.arc(cx, cy, R + t / 2, ang - w * 0.35, ang - w, true);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+    }
+    ctx.globalAlpha = base;
   }
 
   // ----------------------------------------------------------------- tapes --
@@ -1722,17 +2010,13 @@ export class Hud {
 
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 
-function rankOn(o) {
-  return (o.isLock ? 8 : 0) + (o.t.selected ? 4 : 0) + (o.t.isAce ? 2 : 0) + (o.t.isTarget ? 1 : 0);
-}
-
 /** Marker half-size: grows as the target closes inside 6 km. */
 function markerSize(dist, s) {
   return (11 + Math.max(0, 1 - dist / 6000) * 5) * s;
 }
 
-function rankOff(t) {
-  return (t.isAce ? 2 : 0) + (t.isTarget ? 1 : 0);
+function rankOff(o) {
+  return (o.firing ? 8 : 0) + (o.t.isAce ? 2 : 0) + (o.t.isTarget ? 1 : 0);
 }
 
 function easeOut(t) {

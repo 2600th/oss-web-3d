@@ -33,7 +33,9 @@ for asset_id in todo:
         fn, size = W.BUILDERS[asset_id]
         kit.BURN = False
         A = fn()
-        A.bake(size=size, ao_samples=32)
+        kit.DETAIL = 0.3   # weapons are small: finer edge radius and grain
+        A.bake(size=size, ao_samples=32, cavity=0.1, wear=0.6)
+        kit.DETAIL = 1.0
         info = A.export(tex=size, lod1=False)
     else:
         spec = GROUND[asset_id]
@@ -42,7 +44,9 @@ for asset_id in todo:
         kit.BURN = bool(opts.get('burn'))
         A = fn()
         A.bake(size=size, ao_samples=48)
-        info = A.export(tex=size, lod1_tex=max(128, size // 2), lod1_ratio=opts.get('lod1_ratio', 0.5),
-                        lod1=opts.get('lod1', True))
+        # budgets: about 12k triangles LOD0, 3k LOD1, 700 KB per GLB
+        info = A.export(tex=size, lod1_tex=max(128, size // 2), lod1_tris=opts.get('lod1_tris', 3000),
+                        lod1=opts.get('lod1', True), ntex=opts.get('ntex', size), otex=opts.get('otex', size),
+                        lod1_ntex=max(128, opts.get('ntex', size) // 2))
         kit.BURN = False
     print(f'BUILT {asset_id} in {time.time() - t0:.1f}s', [(l['triangles'], l['bytes']) for l in info['lods']])

@@ -185,9 +185,14 @@ export class CombatWorld {
       amount *= this.difficulty.damage;
       target.health = Math.max(0, target.health - amount);
       this.stats.damageTaken += amount;
+      // `damage` is in hit points (player health is 100). Feedback reads
+      // `fraction` (of full health) and `severity` (0..1, square-root curve:
+      // a stray round ~0.37, a SAM hit ~1) so a graze and a missile do not
+      // feel the same.
+      const fraction = amount / (target.maxHealth || 100);
       this.events.emit('player:hit', {
         damage: amount, health: target.health / target.maxHealth, source, position: (position ?? target.position).clone(),
-        weapon: weapon?.id ?? null,
+        weapon: weapon?.id ?? null, fraction, severity: Math.min(1, Math.sqrt(fraction / 0.25)),
       });
       if (target.health <= 0) {
         target.alive = false;
@@ -204,7 +209,7 @@ export class CombatWorld {
     target.lastHitWeapon = weapon?.id ?? null;
     target.onDamage?.(amount, source);
     if (target.health > 0) {
-      this.events.emit('target:hit', { target, damage: amount });
+      this.events.emit('target:hit', { target, damage: amount, source, weapon: weapon?.id ?? null });
       return false;
     }
     this.kill(target, source);

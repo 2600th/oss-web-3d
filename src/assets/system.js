@@ -23,7 +23,7 @@ import { terrainHeight, detailHeight, demInset, DEM } from '../world/terrain/hei
 import { configureAssets, loadModel } from './loadModel.js';
 import { PilotRig } from './pilot.js';
 import { CATALOG } from './catalog.js';
-import { SurfaceRig, bodyRates, flapDemand } from './controlSurfaces.js';
+import { SurfaceRig, bodyRates, demandsFromRates } from './controlSurfaces.js';
 import { upgradeGroundMaterials, applyCloudShadows, setGroundDetail } from './materials.js';
 import { LAYERS, LAYER } from '../world/terrain/layers.js';
 import { seatUnit, aimAngles, slew, UNIT_RIGS } from './unitRig.js';
@@ -128,14 +128,16 @@ class AssetsSystem {
     const q = f.flight.quaternion;
     if (e.object3d.position.distanceToSquared(cam) < 3000 * 3000) {
       bodyRates(s.prev, q, dt, _rates);
-      const cfg = f.flight.cfg ?? {};
-      s.demands.pitch = THREE.MathUtils.clamp(_rates.x / (cfg.turnRate ?? 0.4), -1, 1);
-      s.demands.roll = THREE.MathUtils.clamp(-_rates.z / (cfg.roll ?? 3.5), -1, 1);
-      s.demands.flap = flapDemand(f.flight.speed ?? 250);
+      // [aircraft fx] stabs/ailerons/flaps plus rudder (yaw rate) and airbrakes (hard deceleration)
+      const speed = f.flight.speed ?? 250;
+      const accel = dt > 0 && s.speed !== undefined ? (speed - s.speed) / dt : 0;
+      s.accel = (s.accel ?? 0) + (accel - (s.accel ?? 0)) * Math.min(1, dt * 4);
+      demandsFromRates(_rates, speed, s.accel, f.flight.cfg ?? {}, s.demands);
       s.rig.update(Math.min(dt, 0.1), s.demands);
       this.stats.fighters++;
     }
     s.prev.copy(q);
+    s.speed = f.flight.speed ?? 250;
   }
 
   // ---------------------------------------------------------- ground units --

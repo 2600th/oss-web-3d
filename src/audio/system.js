@@ -5,7 +5,7 @@ import { PlayerJet } from './PlayerJet.js';
 import { Warnings } from './Warnings.js';
 import { Radio } from './Radio.js';
 import { MusicDirector } from './MusicDirector.js';
-import { closestApproach } from './physics.js';
+import { closestApproach, missileUrgency } from './physics.js';
 
 /**
  * Audio system (order 80): owns the Web Audio graph and reacts to the
@@ -53,6 +53,7 @@ export function createSystem(game) {
   let cameraEvents = false; // once the camera owner emits camera:mode, stop polling the rig
   let screen = null;
   let lastHitUi = 0;
+  let concussion = 0; // 0..1: a heavy hit dulls the world for a moment
   const exhaust = { x: 0, y: 0, z: 0 };
 
   const sys = {
@@ -124,8 +125,9 @@ export function createSystem(game) {
       // environment: cloud muffle + canopy
       const inCloud = Math.min(1, Math.max(0, sys.debug.inCloud ?? g.env?.inCloud ?? 0));
       const cockpit = jet.blend;
-      const cutoff = 20000 * (1 - 0.65 * cockpit) * (1 - 0.8 * inCloud) + 600;
-      engine.setWorldMuffle(Math.min(20000, cutoff), 1 - 0.35 * cockpit - 0.3 * inCloud);
+      concussion = Math.max(0, concussion - dt * 1.4);
+      const cutoff = (20000 * (1 - 0.65 * cockpit) * (1 - 0.8 * inCloud) + 600) * (1 - 0.88 * concussion);
+      engine.setWorldMuffle(Math.min(20000, Math.max(350, cutoff)), (1 - 0.35 * cockpit - 0.3 * inCloud) * (1 - 0.4 * concussion));
       if (cloud) cloud.setGain(inCloud * Math.min(1, (f?.airspeed ?? 0) / 150) * (0.7 - 0.35 * cockpit), 0.2);
       if (ambience) {
         const inMenu = screen && screen !== 'game' && screen !== 'hud' && screen !== 'flight';
@@ -137,12 +139,18 @@ export function createSystem(game) {
       const hud = g.hud ?? {};
       const ls = hud.lock?.state ?? lockState;
       warnings.set('acquire', ls === 'acquiring');
+      // the seeker growl climbs as the lock builds
+      if (ls === 'acquiring') warnings.setLevel('acquire', hud.lock?.progress ?? 0);
       warnings.set('locked', ls === 'locked');
       const now = performance.now() / 1000;
       const hudThreat = Array.isArray(hud.threats) && hud.threats.length > 0;
       const tLevel = threat.level && now - threat.at < 4 ? threat.level : (hudThreat ? 'alert' : null);
       warnings.set('missile', tLevel === 'alert' || hud.warning === 'missile');
+      // and the missile alert beeps faster as the missile closes
+      if (warnings.isOn('missile')) warnings.setLevel('missile', missileUrgency(hud.threats));
       warnings.set('rwr', tLevel === 'warning');
+      // a hostile radar holds a lock on us, nothing launched yet
+      warnings.set('lockon', hud.lockWarning === true && !hudThreat && !tLevel && !f?.crashed);
       let pull = hud.warning === 'pullup' || hud.warning === 'terrain';
       if (hud.warning === undefined && f && !f.crashed) {
         // fallback ground-proximity: < 5 s to impact on the current sink rate
@@ -258,9 +266,14 @@ export function createSystem(game) {
     warnings.clear();
     gunLoop?.stop(0.05); gunLoop = null;
   });
-  on('player:hit', ({ damage = 0.1, health }) => {
-    voices.play('hit_airframe', { bus: 'cockpit', gain: Math.min(1, 0.45 + damage * 2) });
-    music.heat(0.25);
+  on('player:hit', ({ damage = 10, health, severity, fraction }) => {
+    // `damage` is hit points (of 100): scale by severity, 0..1, so a stray
+    // round is a tick on the skin and a missile is a slam that dulls the world
+    const sev = Number.isFinite(severity) ? severity
+      : Math.min(1, Math.sqrt((Number.isFinite(fraction) ? fraction : damage / 100) / 0.25));
+    voices.play('hit_airframe', { bus: 'cockpit', gain: 0.35 + 0.65 * sev });
+    if (sev > 0.55) concussion = Math.max(concussion, (sev - 0.4) / 0.6);
+    music.heat(0.1 + 0.2 * sev);
     if (typeof health === 'number' && health < 0.25) warnings.set('damage', true);
   });
   on('player:destroyed', ({ position }) => {

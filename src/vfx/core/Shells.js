@@ -142,8 +142,8 @@ export class Shells {
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(0.6));
       const axial = float(1).sub(abs(dot(normalize(vAxis), normalize(u.camPos.sub(vWorld)))).pow(2).mul(0.8));
       const a = saturate(vQ.x.mul(shell).mul(along).mul(axial).mul(smoothstep(0.2, 0.7, n.mul(0.65).add(n2.mul(0.35)))).mul(0.8)).mul(depthFade).mul(u.fade).mul(sh.cloudVis());
-      const ndl = dot(nrm, u.sunDir).mul(0.35).add(0.65);
-      const col = u.sunColor.mul(0.5).mul(ndl).add(u.skyColor.mul(0.34));
+      // condensation: lit as water (Shared.vapourLight), not 0.5 x the raw sun irradiance
+      const col = sh.vapourLight(dot(nrm, u.sunDir), dot(normalize(vWorld.sub(u.camPos)), u.sunDir), float(1));
       return vec4(col.mul(a), a);
     })();
     return m;

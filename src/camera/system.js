@@ -3,7 +3,7 @@ import { loadModel } from '../assets/loadModel.js';
 import { ScreenState } from '../fx/ScreenState.js';
 import { waterDrivers, rainFrom } from '../fx/waterModel.js';
 import {
-  explosionTrauma, flightRumble, inDanger, clamp, smoothstep, speedOfSound, machCrossing,
+  explosionTrauma, flightRumble, inDanger, clamp, smoothstep, speedOfSound, machCrossing, hitSeverity,
 } from './cameraMath.js';
 
 export const order = 85;
@@ -67,9 +67,13 @@ export function createSystem(game) {
     rig.addTrauma(explosionTrauma(d, size));
     screen.explosion(d, size);
   });
-  on('player:hit', ({ damage = 0.1 } = {}) => {
-    rig.addTrauma(0.35 + Math.min(0.5, damage * 2));
-    screen.hit(damage);
+  on('player:hit', (p = {}) => {
+    // `damage` is hit points; scale the jolt and the screen hit by severity
+    // (0..1) so a stray round nudges and a missile slams.
+    const sev = hitSeverity(p);
+    rig.addTrauma(0.1 + 0.45 * sev);
+    // ScreenState.hit maps x -> 0.35 + 4x: a graze stays at its floor
+    screen.hit(Math.max(0, sev - 0.35) / 4);
   });
   on('weapon:gun', ({ firing, entity } = {}) => {
     if (!entity || isPlayer(entity)) gunRumble = firing ? 1 : 0;
@@ -77,7 +81,10 @@ export function createSystem(game) {
   on('missile:launch', ({ missile } = {}) => {
     if (!missile) return;
     if (isPlayer(missile.owner)) {
-      rig.addTrauma(0.12);
+      // launch kick: a jolt and a short FOV punch (rockets ripple, so less)
+      const rocket = (missile.kind ?? 'aam') === 'rocket';
+      rig.addTrauma(rocket ? 0.06 : 0.14);
+      rig.fovPulse?.(rocket ? -3 : -9);
       if (rig.options.missileCam && (missile.kind ?? 'aam') !== 'rocket' && !dangerNow()) rig.followMissile(missile);
     } else {
       hostileMissiles.add(missile);

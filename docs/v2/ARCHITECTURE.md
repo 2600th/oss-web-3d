@@ -828,3 +828,149 @@ Owner paths: `tools/blender/build_pilot.py`, `tools/blender/assets_ground.py` an
     curvature, detail height and slope shedding.
   - If `material.js` changes its `snowLine` / `snowRaw` formula, update
     `siteSnow` to match.
+
+### Feel polish: label declutter, hit/kill/damage feedback, rumble (additive unless marked)
+
+Owner paths: `src/ui/**`, `src/camera/**`, `src/audio/**`, `src/core/Input.js`
+(rumble only). Small emit changes in `src/combat/**`. Evidence:
+`docs/v2/evidence/polish-feel/`.
+
+- **`player:hit` (additive):** new `fraction` field (damage / max health) and
+  new `severity` field (0..1, `min(1, sqrt(fraction / 0.25))`: a stray round
+  is about 0.37, a hit of a quarter of the jet or more is 1).
+  - `damage` is in **hit points** (the jet has 100). Feedback must scale by
+    `severity`, not by `damage`. Every consumer used to read `damage` as
+    0..1, so every hit landed at full strength.
+  - `cameraMath.hitSeverity(payload)` returns the same value, with a fallback
+    for payloads that only carry `damage`.
+- **`target:hit` (additive):** new `source` field (the attacker entity) and
+  new `weapon` field (weapon id). The ui ticks the marker on every player hit.
+  It shows `STRUCK` only when `weapon !== 'gun'`.
+- **`vfx:shake` on `player:hit` (changed):** combat now sends
+  `0.05 + 0.3 x severity`. It was `0.25 + damage / 40`.
+- **Camera (changed values):**
+  - `player:hit` trauma is `0.1 + 0.45 x severity` (was `0.35 + min(0.5,
+    damage x 2)`).
+  - `screen.hit` gets `max(0, severity - 0.35) / 4`.
+  - A player missile launch adds `fovPulse(-9)` and trauma 0.14. For rockets
+    these are -3 and 0.06.
+- **HUD API (new):**
+  - `hud.markFiring(entity, seconds)`, `hud.ceaseFire(entity, linger)` and
+    `hud.isFiring(t)`. While a hostile is firing on the player, its marker is
+    never folded into another marker and never hidden, its label is never
+    dropped, it gets a warning ring, and its edge arrow is filled red. The ui
+    sets this from:
+    - `weapon:gun` from a hostile entity;
+    - a hostile `missile:launch` aimed at the player, until `missile:end`;
+    - `weapon:flak` and `ai:samLaunch`.
+  - `hud.hitMark(target)`, `hud.killMark(position, target)`,
+    `hud.damageFrom(position, severity)` (direction wedge, plus a HUD flicker
+    on heavy hits).
+  - `hud.flashDamage(sev)` now takes a severity (0..1).
+- **Label placement (changed):** see `src/ui/declutter.js` (`labelTier`,
+  `mustLabel`, `sortForLabels`, `foldMarkers`, `leaderSlots`, `placeLabels`,
+  `easeAlpha`).
+  - Lock, firing and selected labels always place.
+  - Other labels share a budget of 3 (2 on touch) and drop out when no slot
+    is clear.
+  - Labels can sit on leader lines.
+  - The lock reticle is a keep-out for all other text.
+  - The lock, the selected target and shooters never fold markers into
+    themselves.
+- **Audio:**
+  - `warnings.setLevel(name, 0..1)` with `riseParams(name, x)`. The `acquire`
+    growl sweeps with `hud.lock.progress`. The `missile` alert sweeps with
+    `missileUrgency(hud.threats)` (new export of `src/audio/physics.js`; time
+    to impact 5 s gives 0, 1 s gives 1).
+  - New tone `lockon`: on while `hud.lockWarning` holds and nothing has
+    launched.
+  - A `player:hit` with severity above 0.55 dulls the world mix for about
+    0.7 s.
+  - `hit_airframe` gain is `0.35 + 0.65 x severity`.
+- **Rumble (new):**
+  - `input.rumble(strong, weak, ms)` plays a Gamepad `vibrationActuator`
+    `dual-rumble` effect and returns false when there is no actuator.
+    `input.stopRumble()` stops it.
+  - The patterns are in `src/ui/rumble.js` (`RUMBLE`, `damageRumble`,
+    `blastRumble`, `Rumbler`) and are driven by the ui from combat events.
+  - Rumble runs only while the ui screen is `sortie`.
+  - It is gated by the existing `settings.vibration` ("Controller
+    vibration", which also covers touch haptics). There is no new setting key.
+- **Callouts (changed):** a `hit` or `miss` callout with the same text as the
+  top line refreshes that line instead of stacking.
+
+- **Models polish 2 (pilot, truck, ground units, weapons; same nodes, pivots and sockets):**
+  - Every non-MiG GLB now ships base colour + tangent-space normal + ORM
+    (WebP, meshopt) and exports tangents. The normal map carries rounded
+    edges (Cycles bevel bake) and surface relief; LOD1 shares the LOD0 UVs.
+  - `src/assets/materials.js` `upgradeGroundMaterials` no longer discards a
+    GLB's normal map: when `material.normalMap` exists the detail bump is
+    layered on it (`bumpMap(height, scale, normalMap(...))`); models without
+    one behave as before.
+  - `pilot.glb` uses a baked material flagged `noDetail` and renders its own
+    normal map. `pilot` > `pilot_body` / `pilot_head` (pivot at the neck top)
+    and socket `pilot_eye` are unchanged.
+  - Truck family is rebuilt in `tools/blender/assets_truck.py`; shared props
+    (wheels, sandbags, stones, crates, drums) live in
+    `tools/blender/ground_parts.py`. Single mesh node `body`, socket
+    `exhaust` as before.
+  - Catalogue bounds are regenerated. Scattered rubble, guy lines and debris
+    are excluded from the bounds (`Asset.footprint`) so `seatUnit` foundations
+    keep the size of the structure.
+  - Pipeline options: `tools/blender/gltf-pipeline.mjs` `optimize()` takes
+    `normalTexture` / `ormTexture` sizes; `optimize-glb.mjs` takes `--ntex` /
+    `--otex`. `tools/blender/montage.mjs` tiles evidence screenshots.
+  - Evidence: `docs/v2/evidence/polish-models-2/README.md`.
+
+### Aircraft FX polish: wingtip vapour, rudder and airbrakes, headlight beams (additive unless marked)
+
+Owner paths: `src/vfx/**`, `src/assets/controlSurfaces*`,
+`src/world/timeofday/lights/**`, `src/timeofday/**`,
+`tools/blender/build_mig_moving.mjs` / `probe_mig_moving.mjs`, `mig21*.glb`.
+Hook-ups are in `src/flight/FlightModel.js` and `src/assets/system.js`
+(tagged `[aircraft fx]`), and the catalogue was regenerated. Evidence:
+`docs/v2/evidence/polish-aircraft-fx/`.
+
+- **MiG pivots (new):** `rudder`, `airbrake_L` and `airbrake_R` are in
+  `mig21`, `mig21_hostile` and `mig21_hostile_lod1`.
+  - Each sits under a fixed `<name>_hinge` frame and turns on `rotation.x`.
+    For the rudder, + is trailing edge right; for the airbrakes, + is open.
+  - The meshes are cut out of `airframe`, so `airframe` lost those faces.
+  - `SURFACE_NODES` lists the three nodes and the catalogue's pivots include
+    them.
+- **Flight model (new fields):** `flight.airbrake` (0..1, commanded) and
+  `flight.yawCommand` (-1..1).
+- **`controlSurfaces.js`:**
+  - New exports: `THROWS.rudder` / `THROWS.airbrake`, `rudderTravel(speed)`,
+    `airbrakeTravel(speed)`, and `demandsFromRates(rates, speed, accel, cfg,
+    out)`. The last one gives hostiles their demands from body rates and
+    acceleration.
+  - `surfaceTargets` takes `yaw`, `airbrake` and `airspeed`.
+- **VFX:**
+  - `Shared.vapourLight(ndl, cosSun, shadow)` and the `horizonColor` uniform
+    are new.
+  - A trail style with `glow < 0` is lit as water (condensation), not as
+    smoke. This is changed for the `vortex`, `sheet` and `contrail` styles.
+  - Thin particles (`thin = 1`) are lit as water as well.
+  - `vapourGates(amount, humidity)` → `{ tip, wing }` is new in `ring.js`.
+- **Headlight beams (new):** `game.systems.timeofday.beams`, a
+  `HeadlightBeams` (`src/world/timeofday/lights/HeadlightBeams.js`).
+  - It is created once `systems.vfx` is ready and drawn in the VFX scene.
+  - Every vehicle that gets headlights gets a beam (`vehicle:spawn`, the truck
+    scan and `attachHeadlights`). `attachHeadlights(obj, opts)` accepts
+    `opts.entity`.
+  - Tuning and per-tier limits are in `beams.js` (`BEAM`, `BEAM_TIERS`,
+    `beamSlots`).
+  - The beam axis follows the road slope through `terrainHeight`, imported
+    read-only.
+- **Changed:** a dead or unparented vehicle's lamp sprites and beam are
+  removed in `lateUpdate` on the frame it dies. Before, this was the 1 s scan.
+
+### Mission balance (Thunderhead, Black Road)
+All additive; nothing existing changed shape. Details in `docs/v2/evidence/polish-balance/README.md`.
+- Mission data: `spotting: { tags, truck: {lit, dark}, fighter: {lit, dark}, keep, hold, lose, scatter: {seconds, speed, spread}, darkLine, picture: {every, first, range} }` (`src/missions/spotting.js`).
+- Runner: action `{resupply: {health?, flares?, msl?, sp?}}`; condition `{zone: {x, z, r, below?}}`.
+- Event `player:resupply {health (0..1), flares, msl, sp}`.
+- Missions write `hidden` / `selectable` / `lockable` on watched trucks and fighters (existing combat flags), change `speed` and `spacing` of an ai `Convoy` while it scatters, and toggle the `visible` flag of a truck's `headlights` group. `HeadlightBeams` follows that flag, so a column that kills its lights loses its beams too.
+- AI: `CLOUD` (brain.js), `ROUGH_AIR` and `gunSettle` (Fighter.js), skill override `dark`.
+- Dev: `game.dev.tuning`, bot option `cloud`.

@@ -289,7 +289,12 @@ export class ParticlePool {
       const detail = dn2.mul(0.5).add(0.75);
       // (the 0.45 on ambient was tuned against the old hemisphere-fill inputs,
       // which were about 0.8 of the physical sky radiance used now)
-      const lit = vColor.rgb.mul(u.sunColor.mul(sunLit).mul(vShadow).mul(detail).add(amb.mul(0.4))).mul(gain);
+      const smokeLit = u.sunColor.mul(sunLit).mul(vShadow).mul(detail).add(amb.mul(0.4));
+      // fully thin types (thin = 1: vapour wisps, cloud and rain mist) are water,
+      // lit like the trails' condensation (Shared.vapourLight)
+      const water = smoothstep(0.95, 1, vThin);
+      const waterLit = sh.vapourLight(sunLit.mul(2).sub(1), L.z.negate(), vShadow).mul(detail);
+      const lit = vColor.rgb.mul(mix(smokeLit, waterLit, water)).mul(gain);
       // fire: hot in the dense core, cooling to soot over life
       const heat = vHeat.mul(tb.a.mul(1.6).add(0.2)).mul(dn.mul(0.8).add(0.6));
       const fire = fireRamp(heat).mul(shaped);

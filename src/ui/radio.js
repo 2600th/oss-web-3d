@@ -75,6 +75,9 @@ export class RadioQueue {
  * Each has a kind, text, optional sub-line, and a lifetime; `items` is newest
  * first and capped so a multi-kill does not wallpaper the screen.
  */
+/** Callout kinds that refresh in place rather than stack. */
+const REFRESH = new Set(['hit', 'miss']);
+
 export class Callouts {
   constructor({ max = 3 } = {}) {
     this.items = [];
@@ -82,6 +85,15 @@ export class Callouts {
   }
 
   push(kind, text, sub = '', life = 2.2) {
+    // A burst of hits or misses refreshes the line on top instead of
+    // stacking copies of it (and pushing the kill confirm down).
+    const top = this.items[0];
+    if (top && REFRESH.has(kind) && top.kind === kind && top.text === text) {
+      top.age = Math.min(top.age, 0.12);
+      top.life = Math.max(top.life, life);
+      top.sub = sub;
+      return;
+    }
     this.items.unshift({ kind, text, sub, life, age: 0 });
     if (this.items.length > this.max) this.items.length = this.max;
   }

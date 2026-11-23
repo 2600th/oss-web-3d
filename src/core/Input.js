@@ -312,6 +312,29 @@ export class Input {
 
   get gamepad() { return this._pad; }
 
+  /**
+   * Controller rumble (Gamepad `vibrationActuator`, 'dual-rumble'). `strong`
+   * is the low-frequency motor, `weak` the high one, both 0..1; `ms` length.
+   * A new effect replaces the one playing. Returns false when the connected
+   * pad (or the browser) has no actuator. Callers gate on the vibration
+   * setting; this only talks to the hardware.
+   */
+  rumble(strong, weak, ms) {
+    const act = (this._pad ?? this._sampleGamepad())?.vibrationActuator;
+    if (!act?.playEffect) return false;
+    const c = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+    try {
+      act.playEffect('dual-rumble', { startDelay: 0, duration: Math.max(1, Math.min(5000, ms | 0)), strongMagnitude: c(strong), weakMagnitude: c(weak) })
+        ?.catch?.(() => {});
+    } catch { return false; }
+    return true;
+  }
+
+  /** Stop any rumble now (pause, menus, the window losing focus). */
+  stopRumble() {
+    try { this._pad?.vibrationActuator?.reset?.()?.catch?.(() => {}); } catch { /* no actuator */ }
+  }
+
   _sampleGamepad() {
     const nav = globalThis.navigator;
     if (!nav?.getGamepads) return null;
