@@ -7,7 +7,7 @@ import {
 import { DETAIL, SURROUND, TILE_SIZE } from './detail.js';
 import { LAYERS, LAYER } from './layers.js';
 import { CURV_RANGE, TILE_SLOPE } from './textures.js';
-import { riverSurface } from '../water/river.js';
+import { riverSurface, riverReflection } from '../water/river.js';
 
 // Terrain surface shading.
 //
@@ -344,6 +344,11 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
       waterGrad.assign(r.grad);
       foam.assign(r.foam);
     });
+    // [water] Wet margin: the metre or two of bank the river keeps splashing and
+    // that it has just left is darker and glossy (ragged with the detail field).
+    const wetBand = smoothstep(2.8, 0.2, edge.add(sA.height.mul(0.8))).mul(float(1).sub(water)).mul(float(1).sub(snowW)).toVar();
+    albedo.mulAssign(mix(float(1), float(0.62), wetBand));
+    rough.assign(mix(rough, float(0.22), wetBand));
 
     // ---------------------------------------------------------- normal
     const dry = float(1).sub(water);
@@ -356,13 +361,15 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     oNormal.assign(nWorld);
     oRough.assign(clamp(rough, 0.05, 1));
     // sky visibility from the horizon scan, the detail field's hollows, layer AO
-    oAO.assign(mix(skyVis.mul(mix(float(0.72), float(1), cavity)).mul(mix(float(1), lao, 0.6)), float(1), water.mul(0.6)));
+    const viewDir = normalize(uniforms.cam.sub(P));
+    // [water] the river's AO input is its horizon specular occlusion; the walls it mirrors are added below
+    const refl = riverReflection({ n: nWorld, viewDir, skyVis, foam });
+    oAO.assign(mix(skyVis.mul(mix(float(0.72), float(1), cavity)).mul(mix(float(1), lao, 0.6)), refl.ao, water));
 
     // ---------------------------------------------------------- emissive extras
     // Snow glitter: sparse facets that flash when they line up with the sun,
     // close to the camera only. Sky reflection stand-in for water while the
     // scene has no environment map (uniforms.skyReflect is 0 once one exists).
-    const viewDir = normalize(uniforms.cam.sub(P));
     const half = normalize(viewDir.add(uniforms.sunDir));
     const rnd = fract(sin(dot(floor(P.mul(34)), vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
     const facet = normalize(nWorld.add(vec3(rnd.sub(0.5), 0, fract(rnd.mul(57.31)).sub(0.5)).mul(0.9)));
@@ -370,7 +377,7 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
       .mul(snowW).mul(smoothstep(260, 30, dist)).mul(uniforms.sunVisible).mul(6);
     const fres = pow(float(1).sub(max(dot(nWorld, viewDir), 0)), 5).mul(0.96).add(0.04);
     const skyRefl = uniforms.skyColor.mul(fres.mul(0.5)).mul(water).mul(float(1).sub(foam)).mul(uniforms.skyReflect);
-    oEmissive.assign(uniforms.sunColor.mul(glitter).add(skyRefl));
+    oEmissive.assign(uniforms.sunColor.mul(glitter).add(skyRefl).add(refl.wall.mul(water))); // [water] wall reflection
 
     // ---------------------------------------------------------- long shadows
     // Heightfield sweep (shadowSweep.js): metres below the shadow boundary.
