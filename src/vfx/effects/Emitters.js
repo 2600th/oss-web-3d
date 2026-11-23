@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { terrainHeight } from '../../world/terrain/heightfield.js';
 import { clamp, saturate } from '../core/ring.js';
 import { rnd, randDir, readPose, makePose, isAlive } from './util.js';
+import { makePath, emitAlong, sizeForRate } from '../core/fxmath.js';
 
 const _d = new THREE.Vector3();
 const _f = new THREE.Vector3();
@@ -66,7 +67,7 @@ export class Emitters {
       const p = item.pose.position, v = item.pose.velocity, { lit, glow, L, G } = this.vfx;
       for (let i = 0; i < 5; i++) {
         randDir(_d);
-        lit.spawn(L.shed, p.x, p.y, p.z, v.x * 0.6 + _d.x * 6, v.y * 0.6 + _d.y * 6, v.z * 0.6 + _d.z * 6, rnd(1.2, 2.4), 0.8 * big, rnd(4, 6.5) * big, 0.9, 0.9, 0.9, 0.5, 2.5);
+        lit.spawn(L.shed, p.x, p.y, p.z, v.x * 0.6 + _d.x * 6, v.y * 0.6 + _d.y * 6, v.z * 0.6 + _d.z * 6, rnd(1.2, 2.4), 0.8 * big, rnd(4, 6.5) * big, 0.9, 0.9, 0.9, 0.5, 0.4);
       }
       glow.spawn(G.flash, p.x, p.y, p.z, v.x, v.y, v.z, 0.1, 3 * big, 6 * big, 1, 0.8, 0.5, 1, 5);
       this.vfx.lights.flash(p, 1, 0.7, 0.4, 2500 * big, 140, 0.25);
@@ -97,17 +98,23 @@ export class Emitters {
       item.trail.push(_t);
       const life = Math.max(dt * 2.5, 0.04);
       glow.spawn(G.glow, tx, ty, tz, vel.x, vel.y, vel.z, life, 1.8 * big, 1.8 * big, 1, 0.88, 0.66, 1, 55);
-      glow.spawn(G.beacon, tx, ty, tz, vel.x, vel.y, vel.z, life, 12 * big, 12 * big, 1, 0.58, 0.24, 1, 2.4);
+      glow.spawn(G.beacon, tx, ty, tz, vel.x, vel.y, vel.z, life, 8 * big, 8 * big, 1, 0.62, 0.3, 1, 1.6);
       glow.spawn(G.motor, tx, ty, tz, vel.x, vel.y, vel.z, life, 1.1 * big, 1.1 * big, 1, 0.75, 0.42, 1, 14);
       v.lights.request(tx, ty, tz, 1, 0.7, 0.4, 1600 * big, 130);
       const dist = cam.distanceTo(p);
+      // close up, the motor is a 3-5 m white-yellow tongue, not a dot
+      if (dist < 700) {
+        const fl = Math.max(dt * 1.6, 0.03);
+        glow.spawn(G.motorFlame, tx - _f.x * 1.2 * big, ty - _f.y * 1.2 * big, tz - _f.z * 1.2 * big, vel.x - _f.x * 80, vel.y - _f.y * 80, vel.z - _f.z * 80,
+          fl, 0.55 * big, 0.45 * big, 1, 0.82, 0.55, 1, 9);
+      }
       if (dist < 1200) {
         const n = emitCount(item, '_puff', 26 * v.cfg.rate, dt);
         for (let i = 0; i < n; i++) {
           randDir(_d);
           const s = Math.random() * dt;
           lit.spawn(L.shed, tx - vel.x * s, ty - vel.y * s, tz - vel.z * s, vel.x * 0.12 + _d.x * 3, vel.y * 0.12 + _d.y * 3, vel.z * 0.12 + _d.z * 3,
-            rnd(1.4, 2.8), 0.7 * big, rnd(3.2, 5) * big, 0.92, 0.92, 0.93, 0.42, 1.6);
+            rnd(1.4, 2.8), 0.7 * big, rnd(3.2, 5) * big, 0.92, 0.92, 0.93, 0.42, 0);
         }
         if (dist < 400) v.heat(_t, _a.copy(_t).addScaledVector(_f, -9 * big), 1.3 * big, 0.6);
       }
@@ -152,30 +159,49 @@ export class Emitters {
    * Something burning while it moves fast (a hit aircraft, a falling wreck):
    * dense soot that billows out behind, fire licking at the source and torn
    * off along the motion, embers. `s` scales sizes, `heat` 0..1 the fire.
+   *
+   * The soot is laid down per metre travelled, not per second: at 250 m/s a
+   * per-second emitter beads into separate clumps whenever the frame time
+   * wobbles. Spacing is about a third of a young puff's width, so neighbours
+   * always overlap; a lower tier lays fewer, bigger puffs (size x 1/sqrt(rate)).
    */
   _burn(item, p, vel, s, heat, dt) {
     const v = this.vfx, { lit, glow, L, G } = v;
     const rate = v.cfg.rate;
-    // soot: overlapping puffs (emitted closer together than they are wide)
-    // that swell to several times their size while they shear off the source
-    let n = emitCount(item, '_soot', (85 + 45 * heat) * rate, dt);
-    for (let i = 0; i < n; i++) {
+    const k = sizeForRate(rate);
+    const speed = vel.length();
+    const spacing = (1.5 * s * k) / Math.sqrt(rate);
+    item._sootPath ??= makePath();
+    let j = 0;
+    const puff = (x, y, z, f) => {
       randDir(_d);
-      const b = Math.random() * dt;
-      const hot = i % 3 === 0 ? rnd(1.3, 2.6) * (0.5 + 0.5 * heat) : rnd(0, 0.5) * heat;
-      lit.spawn(L.soot, p.x - vel.x * b + _d.x * 0.5 * s, p.y - vel.y * b + _d.y * 0.5 * s, p.z - vel.z * b + _d.z * 0.5 * s,
+      const hot = j++ % 4 === 0 ? rnd(0.6, 1.2) * (0.5 + 0.5 * heat) : 0;
+      lit.spawn(L.soot, x + _d.x * 0.5 * s, y + _d.y * 0.5 * s, z + _d.z * 0.5 * s,
         vel.x * 0.42 + _d.x * 6, vel.y * 0.42 + _d.y * 6 + 1, vel.z * 0.42 + _d.z * 6,
-        rnd(2.4, 4.6), rnd(1.3, 2.0) * s, rnd(7.5, 12) * s, 0.05, 0.047, 0.045, 0.93, hot);
+        rnd(2.4, 4.6), rnd(1.3, 2.0) * s * k, rnd(7.5, 12) * s * k, 0.05, 0.047, 0.045, 0.93, hot, (1 - f) * dt);
+    };
+    emitAlong(item._sootPath, p.x, p.y, p.z, spacing, 64, puff);
+    // a slow or hovering source still smokes (per second, at the rate a
+    // 60 m/s source would get from the spacing above)
+    if (speed < 60) {
+      const n = emitCount(item, '_soot', ((60 - speed) / spacing) * 0.6, dt);
+      for (let i = 0; i < n; i++) puff(p.x, p.y, p.z, Math.random());
     }
-    // fire: stretched tongues close to the source, brighter with heat
-    n = emitCount(item, '_fire', (70 + 60 * heat) * rate, dt);
+    // fire: stretched tongues close to the source, brighter with heat,
+    // spread over the stretch of path flown this frame (spawned at the
+    // source alone, each frame's tongues bunched into one bright bead)
+    const prev = item._prevP ??= p.clone();
+    if (prev.distanceToSquared(p) > 400 * 400) prev.copy(p);
+    let n = emitCount(item, '_fire', (70 + 60 * heat) * rate, dt);
     for (let i = 0; i < n; i++) {
       randDir(_d);
-      const b = Math.random() * dt;
-      glow.spawn(G.fire, p.x - vel.x * b + _d.x * 0.4 * s, p.y - vel.y * b + _d.y * 0.4 * s, p.z - vel.z * b + _d.z * 0.4 * s,
+      const b = Math.random();
+      const bx = p.x + (prev.x - p.x) * b, by = p.y + (prev.y - p.y) * b, bz = p.z + (prev.z - p.z) * b;
+      glow.spawn(G.fire, bx + _d.x * 0.4 * s, by + _d.y * 0.4 * s, bz + _d.z * 0.4 * s,
         vel.x * 0.8 + _d.x * 5, vel.y * 0.8 + _d.y * 5, vel.z * 0.8 + _d.z * 5,
-        rnd(0.12, 0.32), rnd(1.2, 2.0) * s, rnd(2.4, 3.8) * s, 1, 0.52, 0.17, 1, rnd(1.2, 2.6) * (0.6 + 0.4 * heat));
+        rnd(0.07, 0.16), rnd(1.2, 2.0) * s, rnd(2.2, 3.2) * s, 1, 0.52, 0.17, 1, rnd(1.2, 2.6) * (0.6 + 0.4 * heat), b * dt);
     }
+    prev.copy(p);
     n = emitCount(item, '_emb', (8 + 10 * heat) * rate, dt);
     for (let i = 0; i < n; i++) {
       randDir(_d);
@@ -221,7 +247,7 @@ export class Emitters {
       let n = emitCount(f, '_col', (2.6 + s * 0.35) * f.smoke * lod * (0.5 + 0.5 * k), dt);
       for (let j = 0; j < n; j++) {
         const a = rnd(Math.PI * 2), r = rnd(s * 0.6);
-        lit.spawn(L.column, p.x + Math.cos(a) * r, p.y + s * 0.6, p.z + Math.sin(a) * r, rnd(-1, 1), rnd(3, 6) + s * 0.35, rnd(-1, 1),
+        lit.spawn(L.column, p.x + Math.cos(a) * r, p.y + s * 0.6, p.z + Math.sin(a) * r, rnd(-1, 1), rnd(6, 10) + s * 0.5, rnd(-1, 1),
           rnd(20, 30), s * rnd(1.5, 2.2), s * rnd(7, 10) + 8, 0.042, 0.04, 0.038, 0.9, rnd(0, 1.3) * burn);
       }
       n = emitCount(f, '_top', (0.9 + s * 0.14) * f.smoke * lod * (0.5 + 0.5 * k), dt);
@@ -275,6 +301,7 @@ export class Emitters {
         item.trail?.end();
         item.trail = v.ribbons.create(this._style(tier === 2 ? 'damageHeavy' : 'damageLight'));
         item.tier = tier;
+        item._sootPath = null;
       }
       _t.set(rnd(-0.4, 0.4), 0.3, 2.5).applyQuaternion(q).add(p);
       item.trail.strength = tier === 2 ? 1 : saturate((item.level - 0.3) / 0.35) * 0.7 + 0.3;
