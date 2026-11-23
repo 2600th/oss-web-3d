@@ -23,6 +23,19 @@ export function slopeAt(x, z, e = 30, height = terrainHeight) {
 }
 
 /**
+ * Steepest 6 m slope over an emplacement-sized pad (centre and four points
+ * `r` metres out): a site on a convex shoulder can be gentle at its centre
+ * and still fall away 3 m across the footprint.
+ */
+export function padSlope(x, z, r = 4, height = terrainHeight) {
+  return Math.max(
+    slopeAt(x, z, 6, height),
+    slopeAt(x + r, z, 6, height), slopeAt(x - r, z, 6, height),
+    slopeAt(x, z + r, 6, height), slopeAt(x, z - r, 6, height),
+  );
+}
+
+/**
  * Best site near (x, z) within `radius`.
  *   'peak'    highest ground
  *   'ridge'   high ground that is flat enough to build on
@@ -42,6 +55,8 @@ export function findSite(x, z, radius, mode = 'ridge', { step = 90, height = ter
       if (mode === 'peak') score = h;
       else if (mode === 'valley') score = -h - slopeAt(px, pz, 60, height) * 200;
       else if (mode === 'flat') score = -slopeAt(px, pz, 40, height) * 1000 - r * 0.02;
+      // a building pad: flattest at the scale of one emplacement (6 m), then of its surroundings
+      else if (mode === 'pad') score = -(slopeAt(px, pz, 6, height) * 2 + slopeAt(px, pz, 20, height)) * 1000 - r * 0.02;
       else score = h - slopeAt(px, pz, 40, height) * 900 - r * 0.03;
       if (score > bestScore) { bestScore = score; best = { x: px, z: pz, y: h }; }
     }
@@ -56,15 +71,20 @@ export function findSite(x, z, radius, mode = 'ridge', { step = 90, height = ter
 export function scatterSites(cx, cz, count, { rMin = 40, rMax = 220, minSep = 28, seed = 1, height = terrainHeight } = {}) {
   const rng = mulberry32(seed);
   const out = [];
-  const maxTries = count * 30;
+  const maxTries = count * 60;
   for (let tries = 0; out.length < count && tries < maxTries; tries++) {
     const a = rng() * Math.PI * 2;
     const r = rMin + (rMax - rMin) * Math.sqrt(rng());
-    const s = findSite(cx + Math.cos(a) * r, cz + Math.sin(a) * r, 24, 'flat', { step: 12, height });
+    // [ground polish] flattest at the emplacement's own scale (6 m), searched on an
+    // 8 m grid: "flattest over 40 m" picked shelves whose 6 m slope was still 25+ degrees
+    const s = findSite(cx + Math.cos(a) * r, cz + Math.sin(a) * r, 24, 'pad', { step: 8, height });
     // [art pass] "Flattest within 24 m" was still often a 35-45 degree face on the
     // ridges (units then hung off the hillside). Reject local slopes over ~20 degrees
-    // at first, relaxing toward ~45 degrees as tries run out so the count is kept.
-    if (slopeAt(s.x, s.z, 6, height) > 0.36 + 0.64 * (tries / maxTries)) continue;
+    // at first, relaxing as tries run out so the count is kept. [ground polish] the
+    // relaxation now stops near 31 degrees (was 45): past that the seat needs a berm
+    // taller than the sangar it carries. The last quarter of the tries takes anything.
+    const t = tries / maxTries;
+    if (t < 0.75 && padSlope(s.x, s.z, 4, height) > 0.36 + 0.32 * (t / 0.75)) continue;
     if (out.some((o) => Math.hypot(o.x - s.x, o.z - s.z) < minSep)) continue;
     if (Math.hypot(s.x - cx, s.z - cz) < rMin * 0.6) continue;
     out.push(s);
