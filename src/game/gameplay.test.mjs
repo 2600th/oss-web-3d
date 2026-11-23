@@ -155,7 +155,8 @@ test('conditions: environment adapter uses the day/night API when present and fa
   const calls = [];
   const modern = { setTimeOfDay: (h) => calls.push(['tod', h]), weather: { set: (s) => calls.push(['weather', s.type]) }, setPreset: () => calls.push(['preset']) };
   assert.equal(applyToEnvironment(modern, c), 'timeOfDay');
-  assert.deepEqual(calls, [['tod', 22.67], ['weather', 'clear']]);
+  // the clock sets the sun, then the weather's cloud/haze look (sun untouched), then precipitation
+  assert.deepEqual(calls, [['tod', 22.67], ['preset'], ['weather', 'clear']]);
   const old = { setPreset: (name) => calls.push(['preset', name]) };
   calls.length = 0;
   assert.equal(applyToEnvironment(old, resolveConditions({ time: 16, weather: 'storm' })), 'preset');

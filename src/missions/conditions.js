@@ -119,8 +119,15 @@ export function applyToEnvironment(env, c, { timeOnly = false } = {}) {
   try {
     if (typeof env.setTimeOfDay === 'function') { env.setTimeOfDay(c.time); how = 'timeOfDay'; }
     if (timeOnly) return how;
+    // With the day/night API the clock owns the sun, but the sky still needs
+    // the weather's look: cloud type, coverage, storm cells, haze. `sun: null`
+    // tells setPreset to leave the sun where the clock put it.
+    if (how === 'timeOfDay' && typeof env.setPreset === 'function') {
+      env.setPreset(WEATHER[c.weather]?.preset ?? 'default', { coverage: c.coverage, sun: null });
+    }
     const w = env.weather;
-    const state = { type: c.weather, rain: c.rain, snow: c.snow, lightning: c.lightning, wind: c.wind, coverage: c.coverage, turbulence: c.turbulence };
+    // Weather.set takes numbers only (lightning is a strike rate 0..1).
+    const state = { type: c.weather, rain: c.rain, snow: c.snow, lightning: c.lightning === true ? 1 : Number(c.lightning) || 0, wind: c.wind, coverage: c.coverage, turbulence: c.turbulence };
     if (typeof env.setWeather === 'function') env.setWeather(state);
     else if (w && typeof w.set === 'function') w.set(state);
     else if (w && typeof w === 'object') for (const k of ['rain', 'snow', 'lightning', 'wind']) if (k in w && typeof w[k] !== 'function') w[k] = state[k];

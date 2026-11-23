@@ -260,3 +260,26 @@ test('weapon table: every mission special is a distinct, armed weapon', () => {
   assert.ok(WEAPONS.hobs.lockCone > WEAPONS.msl.lockCone * 2 && WEAPONS.lraam.lockRange > WEAPONS.msl.lockRange * 2);
   assert.equal(WEAPONS.lraam.flareChance, 0);
 });
+
+// ---- conditions -> environment ------------------------------------------------
+
+test('weather look is applied when the clock owns the sun', async () => {
+  const { resolveConditions, applyToEnvironment } = await import('./conditions.js');
+  const calls = [];
+  const env = {
+    setTimeOfDay: (h) => calls.push(['time', h]),
+    setPreset: (name, o) => calls.push(['preset', name, o]),
+    weather: { set: (s) => calls.push(['weather', s]) },
+  };
+  const how = applyToEnvironment(env, resolveConditions({ time: 16.2, weather: 'storm' }));
+  assert.equal(how, 'timeOfDay');
+  const preset = calls.find((c) => c[0] === 'preset');
+  assert.ok(preset, 'cloud/haze preset applied');
+  assert.equal(preset[1], 'storm');
+  assert.equal(preset[2].sun, null, 'preset must not move the sun');
+  assert.equal(calls.find((c) => c[0] === 'weather')[1].lightning, 1, 'lightning is a numeric strike rate');
+  // clock ticks touch nothing but the time
+  calls.length = 0;
+  applyToEnvironment(env, resolveConditions({ time: 16.3, weather: 'storm' }), { timeOnly: true });
+  assert.deepEqual(calls.map((c) => c[0]), ['time']);
+});
