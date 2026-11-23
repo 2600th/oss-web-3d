@@ -165,7 +165,9 @@ export class CombatSystem {
         can = this._los;
       }
     }
-    const tr = this.lock.update(dt, t && t.alive ? t : null, can, w.lockTime ?? 1);
+    // Infra-red lock through cloud is slow (radar does not notice).
+    const murk = w.guidance === 'ir' && t && t.class === 'air' && (this.world.cloaked(t) || this.world.cloaked(this.player)) ? 2.5 : 1;
+    const tr = this.lock.update(dt, t && t.alive ? t : null, can, (w.lockTime ?? 1) * murk);
     if (tr) this.game.events.emit(`lock:${tr.event}`, { target: tr.target });
     if (this._lockMark && this._lockMark !== t) this._lockMark.lockedByPlayer = 'none';
     if (t) t.lockedByPlayer = this.lock.state;
@@ -275,6 +277,7 @@ export class CombatSystem {
     const live = this.active && p.alive && !f.crashed;
     p.engine.throttle = f.throttleSmoothed;
     p.engine.reheat = burnerReheat(f.throttleSmoothed);
+    this.world.playerInCloud = game.env?.inCloud ?? 0;
 
     if (live) {
       if (input.pressed.fireMissile) this.fire();

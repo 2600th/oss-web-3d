@@ -133,6 +133,11 @@ export function buildBriefing(ui) {
   const h = el('h2', 'brief-title', text);
   h.id = 'brief-h';
   const loc = el('p', 'brief-loc', text);
+  // gameplay area (small edit): time of day and weather from the mission data
+  // ("0540 · Dawn · Scattered cloud"), and for free flight two chip rows that
+  // call game.flow.setConditions.
+  const cond = el('p', 'brief-loc brief-cond', text);
+  const condRows = el('div', 'brief-cond-pick', text);
   const desc = el('div', 'brief-desc', text);
   // Special weapon for the second pylon (gameplay: flow.setSpecial).
   const spH = el('h3', 'brief-sub', text, 'Special weapon');
@@ -168,6 +173,40 @@ export function buildBriefing(ui) {
       h.textContent = mission.name;
       const limit = Number.isFinite(mission.timeLimit) ? `  ·  ${Math.round(mission.timeLimit / 60)} min window` : '';
       loc.textContent = formatPlace(mission.location) + limit;
+      const gf = ui.game?.flow;
+      const paintCond = () => {
+        const c = gf?.missions?.find((x) => x.id === mission.id)?.conditions ?? mission.conditions;
+        cond.textContent = c?.label ?? '';
+        cond.hidden = !c?.label;
+        return c;
+      };
+      const c0 = paintCond();
+      condRows.textContent = '';
+      condRows.hidden = !(c0?.choose && gf?.setConditions);
+      if (!condRows.hidden) {
+        const opts = gf.conditionOptions;
+        const row = (label, items, isOn, pick) => {
+          const r = el('div', 'brief-specials', condRows);
+          r.setAttribute('role', 'radiogroup');
+          r.setAttribute('aria-label', label);
+          r.dataset.navRow = '';
+          for (const it of items) {
+            const b = el('button', 'chip', r, it.label);
+            b.type = 'button';
+            b.setAttribute('role', 'radio');
+            b.dataset.nav = '';
+            b.addEventListener('click', () => {
+              pick(it);
+              const c = paintCond();
+              for (const x of condRows.querySelectorAll('.chip')) x.setAttribute('aria-checked', String(x._on?.(c) === true));
+            });
+            b._on = (c) => isOn(it, c);
+            b.setAttribute('aria-checked', String(isOn(it, c0)));
+          }
+        };
+        row('Time of day', opts.times, (it, c) => Math.abs(it.time - c.time) < 0.01, (it) => gf.setConditions({ time: it.time }));
+        row('Weather', opts.weather, (it, c) => it.id === c.weather, (it) => gf.setConditions({ weather: it.id }));
+      }
       desc.textContent = '';
       const paras = mission.briefingText?.length ? mission.briefingText : [mission.description ?? ''];
       for (const p of paras) el('p', '', desc, p);

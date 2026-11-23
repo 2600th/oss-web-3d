@@ -109,6 +109,7 @@ export class Fighter {
     s.missile = m ? { range: m.position.distanceTo(f.position) } : null;
     s.lockedBy = this.entity.lockedByPlayer ?? 'none';
     s.alerted = ctx.alerted === true;
+    s.visibility = ctx.conditions?.visibility ?? 1;
     s.role = this.role;
     s.leaderAlive = !!this.leader?.entity.alive;
     s.leaderEngaged = !!this.leader && !['patrol', 'formation', 'intercept'].includes(this.leader.mem.mode);
@@ -186,6 +187,13 @@ export class Fighter {
     if (k.jink > 0 && s && s.angleOff > 2 && s.aspect < 0.5 && range < 1300) {
       _right.crossVectors(f.forward, f.up);
       _des.normalize().addScaledVector(_right, Math.sin(this.time * 3.1) * k.jink * 0.7).addScaledVector(f.up, Math.cos(this.time * 2.3) * k.jink * 0.35);
+    }
+    // Weather: a pilot who is defensive goes for the cloud layer, where an
+    // infra-red seeker cannot hold him.
+    const layer = ctx.conditions?.cloud;
+    if (layer && (m.mode === 'evade' || m.mode === 'extend' || m.mode === 'break')) {
+      _des.normalize();
+      _des.y = Math.max(-0.5, Math.min(0.5, ((layer.base + layer.top) * 0.5 - f.position.y) / 1200));
     }
     // Never descend into the floor outside of a committed attack.
     const agl = f.position.y - terrainHeight(f.position.x, f.position.z);

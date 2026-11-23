@@ -103,8 +103,8 @@ test('conditions: remaining, arrived, captured, flags, any/not, and nothing-spaw
 
 // ---- campaign data ----------------------------------------------------------
 
-test('campaign: four missions and free flight, all references resolve', () => {
-  assert.deepEqual(MISSIONS.map((m) => m.id), ['m1', 'm2', 'm3', 'm4', 'free']);
+test('campaign: six missions and free flight, all references resolve', () => {
+  assert.deepEqual(MISSIONS.map((m) => m.id), ['m1', 'm2', 'night', 'm3', 'storm', 'm4', 'free']);
   const collect = (c, out) => {
     if (!c || typeof c !== 'object') return out;
     for (const k of ['destroyed', 'remaining', 'arrived']) if (c[k]) out.add(c[k]);

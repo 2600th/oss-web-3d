@@ -11,6 +11,7 @@ import { Onboarding, controlLabel } from './onboarding.js';
 import { accuracy, computeScore, rankFor, loadProgress, recordResult, saveProgress, isUnlocked } from './scoring.js';
 import { WEAPONS } from '../combat/weapons.js';
 import { difficultyFor } from '../game/difficulty.js';
+import { resolveConditions, applyToEnvironment, conditionsLabel } from './conditions.js';
 
 export const order = 52;
 export function createSystem(game) { return new MissionSystem(game); }
@@ -20,6 +21,7 @@ const FAIL_TEXT = {
   crashed: 'Vajra One was lost to the mountain.',
   time: 'The window closed before the task was done.',
   overrun: 'Anvil could not hold the face. The crest stayed in hostile hands.',
+  escaped: 'Too many trucks reached the pass. The ammunition went through.',
   objective: 'The objective was not met.',
 };
 const OUTRO_SECONDS = { complete: 6, failed: 3.5 };
@@ -93,10 +95,35 @@ export class MissionSystem {
     return this.list.map((m, i) => ({
       id: m.id, order: m.order, name: m.name, location: m.location, summary: m.summary, briefing: m.briefing,
       free: m.free === true, timeLimit: m.timeLimit, parTime: m.parTime, rank: m.rank,
+      // Time of day and weather: `label` is ready for the briefing; `choose`
+      // means the player picks them (free flight, flow.setConditions).
+      conditions: this._conditionsMeta(m),
       specials: m.specials.map((id) => ({ id, name: WEAPONS[id].name, short: WEAPONS[id].short, ammo: WEAPONS[id].ammo, description: WEAPONS[id].description })),
       special: m.special, unlocked: isUnlocked(this.list, i, this.progress),
       best: this.progress.missions[m.id] ?? null,
     }));
+  }
+
+  _conditionsDef(m) {
+    return m.conditions?.choose ? { ...m.conditions, ...(this.game.flow?.freeConditions ?? {}) } : (m.conditions ?? {});
+  }
+
+  _conditionsMeta(m) {
+    const c = resolveConditions(this._conditionsDef(m));
+    return { time: c.time, weather: c.weather, label: conditionsLabel(c.time, c.weather), night: c.night, choose: m.conditions?.choose === true };
+  }
+
+  /** Set the sortie's time of day and weather (environment, AI, weapons, flight). */
+  _applyConditions(m) {
+    const game = this.game;
+    const c = resolveConditions(this._conditionsDef(m), game.conditions ?? (game.conditions = {}));
+    this.conditions = c;
+    this._condTimer = 0;
+    c.applied = applyToEnvironment(game.env, c);
+    this.combat.world.conditions = c;
+    this.ai.ctx.conditions = c;
+    game.flight.turbulence = c.turbulence;
+    game.events.emit('conditions:change', { ...c });
   }
 
   // -------------------------------------------------------------- start --
@@ -121,6 +148,7 @@ export class MissionSystem {
     this.ai.hostile = true;
     this.ai.maxAttackers = m.maxAttackers ?? 2;
     game.spawnAt(m.start);
+    this._applyConditions(m);
     this.recon = m.recon ? new Recon() : null;
     this.onboard = m.onboarding ? new Onboarding({ veteran: this.progress.missions[m.id]?.completed === true }) : null;
 
@@ -146,6 +174,7 @@ export class MissionSystem {
 
   stop() {
     this._setOptic(false);
+    if (this.game.flight) this.game.flight.turbulence = 0;
     if (this.combat) this.combat.active = false;
     this.ai?.clear();
     this.runner = null;
@@ -293,6 +322,17 @@ export class MissionSystem {
     const f = game.flight;
     const p = this.combat.player;
 
+    // The clock runs (a dusk strike ends in the dark).
+    const c = this.conditions;
+    if (c?.advance && r.state === 'running') {
+      c.time = (c.time + (c.advance * dt) / 60) % 24;
+      if ((this._condTimer -= dt) <= 0) {
+        this._condTimer = 2;
+        resolveConditions({ time: c.time, weather: c.weather, advance: c.advance }, c);
+        applyToEnvironment(game.env, c, { timeOnly: true });
+        game.events.emit('conditions:change', { ...c });
+      }
+    }
     if (r.state === 'running') {
       // Convoys that made it out.
       for (const u of this.ai.ground) {
@@ -336,6 +376,7 @@ export class MissionSystem {
     hud.timeRemaining = r.timeRemaining;
     hud.objective = r.objective();
     hud.mission = { id: m.id, name: m.name, phase: r.phase?.id ?? null, phaseName: r.phase?.name ?? null, state: r.state };
+    hud.conditions = c ? { time: c.time, weather: c.weather, label: c.label, night: c.night, light: c.light, turbulence: c.turbulence } : null;
     hud.recon = this.recon ? {
       active: this.recon.active, captured: this.recon.captured, total: this.recon.total,
       progress: this.recon.progress, focus: this.recon.focus?.entity ?? null, quality: this.recon.focus?.quality ?? 0,

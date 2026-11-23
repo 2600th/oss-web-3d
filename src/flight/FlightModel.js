@@ -122,6 +122,17 @@ export const AIRCRAFT = {
   gripHigh: 2.9,
 };
 
+/** Peak disturbance at turbulence 1, rad/s of commanded rate. */
+export const TURBULENCE = { pitch: 0.07, roll: 0.3 };
+const GUST = { pitch: 0, roll: 0 };
+
+/** Smooth zero-mean gust pair in -1..1 (incommensurate sines; deterministic in t). */
+export function gust(t, out = { pitch: 0, roll: 0 }) {
+  out.pitch = (Math.sin(t * 1.9) + Math.sin(t * 4.3 + 1.3) + Math.sin(t * 7.7 + 0.4)) / 3;
+  out.roll = (Math.sin(t * 1.3 + 2.1) + Math.sin(t * 3.1 + 0.7) + Math.sin(t * 6.1 + 4.2)) / 3;
+  return out;
+}
+
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _v = new THREE.Vector3();
@@ -162,6 +173,14 @@ export class FlightModel {
     /** 0..1, how much of the high-G turn is engaged this step (for HUD/VFX). */
     this.highG = 0;
     this.throttleSmoothed = 0.72;
+    /**
+     * 0..1 rough air (set by the mission's weather). Adds a small, smooth,
+     * zero-mean disturbance to the roll and pitch rates: enough to make a
+     * storm felt through the stick and to spoil a lazy gun solution, never
+     * enough to take the aircraft away from the pilot.
+     */
+    this.turbulence = 0;
+    this._gustTime = 0;
 
     /**
      * The rate ceilings this frame's control inputs are actually scaled by.
@@ -268,8 +287,14 @@ export class FlightModel {
     this.pitchAuthority = pitchCap;
     this.rollAuthority = rollCap;
 
-    const targetPitch = -control.pitch * pitchCap;
-    const targetRoll = -control.roll * rollCap;
+    let targetPitch = -control.pitch * pitchCap;
+    let targetRoll = -control.roll * rollCap;
+    if (this.turbulence > 0 && !this.destroyed) {
+      const g = gust(this._gustTime += dt, GUST);
+      const k = this.turbulence * (0.5 + 0.5 * authority);
+      targetPitch += g.pitch * TURBULENCE.pitch * k;
+      targetRoll += g.roll * TURBULENCE.roll * k;
+    }
     const targetYaw = -control.yaw * Math.min(AIRCRAFT.maxYawRate * authority, gLimitedRate * 0.5);
 
     this.rates.x += (targetPitch - this.rates.x) * (1 - Math.exp(-AIRCRAFT.pitchAgility * dt));

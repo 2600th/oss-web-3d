@@ -15,6 +15,21 @@ export const order = 55;
 export function createSystem(game) { return new AiSystem(game); }
 
 const D2R = Math.PI / 180;
+
+let _lampGeo = null, _lampMat = null;
+/** Two small emissive lamps at the front of a truck (HDR, so they bloom). */
+function headlights() {
+  _lampGeo ??= new THREE.SphereGeometry(0.45, 8, 6);
+  _lampMat ??= new THREE.MeshBasicMaterial({ color: new THREE.Color(14, 12, 8) });
+  const g = new THREE.Group();
+  g.name = 'headlights';
+  for (const x of [-0.8, 0.8]) {
+    const m = new THREE.Mesh(_lampGeo, _lampMat);
+    m.position.set(x, 1.3, -3.2);
+    g.add(m);
+  }
+  return g;
+}
 const FORMATION = [
   { x: 0, y: 0, z: 0 }, { x: 70, y: -8, z: -90 }, { x: -70, y: -8, z: -90 }, { x: 140, y: -16, z: -180 },
 ];
@@ -37,7 +52,7 @@ export class AiSystem {
     /** Missions switch this off for cinematic / briefing states. */
     this.hostile = true;
     this._tokenTimer = 0;
-    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false, difficulty: DIFFICULTY.normal };
+    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false, difficulty: DIFFICULTY.normal, conditions: null };
 
     game.events.on('target:destroyed', ({ target }) => this._onDestroyed(target));
   }
@@ -117,6 +132,8 @@ export class AiSystem {
     const e = u.entity;
     this.root.add(e.object3d);
     if (def.model !== false) groundModel(type).then((m) => { u.model = m; e.object3d.add(m); if (!e.alive) wreck(e.object3d, type); });
+    // Night convoys drive on dipped headlights: the way to find them.
+    if (type === 'truck' && this.ctx.conditions?.night) e.object3d.add(headlights());
     this.combat.addTarget(e);
     this.ground.push(u);
     return u;
@@ -180,6 +197,7 @@ export class AiSystem {
     } else if (target.unit) {
       if (target.armor === 'soft' && target.kind !== 'truck') target.object3d.visible = false;
       else wreck(target.object3d, target.unit.wreckId ?? target.kind);
+      target.object3d.getObjectByName('headlights')?.removeFromParent();
       target.unit._setFiring?.(false, this.ctx);
       target.velocity.set(0, 0, 0);
     }

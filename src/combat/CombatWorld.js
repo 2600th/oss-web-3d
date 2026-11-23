@@ -44,6 +44,10 @@ export class CombatWorld {
     this.god = false;
     /** Scales damage to the player and hostile missiles (game/difficulty.js). */
     this.difficulty = DIFFICULTY.normal;
+    /** Weather for the sortie (missions/conditions.js), or null. */
+    this.conditions = null;
+    /** 0..1, how deep in cloud the player is (from the environment, when it knows). */
+    this.playerInCloud = 0;
 
     this.bullets = {
       n: 0,
@@ -84,6 +88,13 @@ export class CombatWorld {
   removeTarget(e) {
     const i = this.targets.indexOf(e);
     if (i >= 0) this.targets.splice(i, 1);
+  }
+
+  /** Is this aircraft hidden from infra-red by cloud right now? */
+  cloaked(e) {
+    const c = this.conditions?.cloud;
+    if (c && e.position.y > c.base && e.position.y < c.top) return true;
+    return e === this.player && this.playerInCloud > 0.6;
   }
 
   // ------------------------------------------------------------- launch --
@@ -305,6 +316,8 @@ export class CombatWorld {
             // launch grace so a high-off-boresight shot can come round).
             if (m.age > 0.35 && cos < Math.cos(w.seekerCone)) ok = false;
             if (ok && m.guide && !m.guide(m)) ok = false;
+            // An infra-red seeker cannot hold a target inside solid cloud.
+            if (ok && w.guidance === 'ir' && tgt.class === 'air' && !tgt.isFlare && this.cloaked(tgt) && this.rng() < (this.conditions?.irLoss ?? 0.3) * dt) ok = false;
           }
           if (!ok) {
             m.target = tgt = null;

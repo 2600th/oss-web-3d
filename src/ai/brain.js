@@ -87,7 +87,7 @@ export function decide(s, m, k, dt, rng = Math.random) {
   if (!s.targetAlive) return set(s.role === 'wing' && s.leaderAlive ? 'formation' : 'patrol');
 
   if (!m.aware) {
-    if (s.range < k.detect || s.lockedBy !== 'none' || s.alerted) m.aware = true;
+    if (s.range < k.detect * (s.visibility ?? 1) || s.lockedBy !== 'none' || s.alerted) m.aware = true;
     else return set(s.role === 'wing' && s.leaderAlive ? 'formation' : 'patrol');
   }
 

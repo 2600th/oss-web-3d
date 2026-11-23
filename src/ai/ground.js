@@ -103,7 +103,10 @@ export class GroundUnit {
     const p = ctx.player;
     this.locking = false;
     const dist = p.position.distanceTo(e.position);
-    const inRange = p.alive && ctx.hostile !== false && dist < this.def.range && dist > (this.def.minRange ?? 0);
+    // Guns and shoulder-launched missiles are laid by eye: dark and murk
+    // shorten their reach. A radar site does not care.
+    const reach = this.def.range * (this.def.weapon === 'e_sam' ? 1 : (ctx.conditions?.visibility ?? 1));
+    const inRange = p.alive && ctx.hostile !== false && dist < reach && dist > (this.def.minRange ?? 0);
     if (inRange) {
       this.losTimer -= dt;
       if (this.losTimer <= 0) {
