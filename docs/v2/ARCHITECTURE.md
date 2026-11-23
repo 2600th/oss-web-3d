@@ -367,3 +367,40 @@ when unavoidable; say so in your report.
   Terrain additions: `ready`, `material(s)`, `stats`, `height`, `verify()`,
   `crackTest()`, `gpuTime()` (dev; use `?gputime`). Rivers are shaded in the
   terrain material (`src/world/water/river.js`), there is no separate water mesh.
+
+### Visual polish: weather, cloud occlusion, tracers (additive unless noted)
+
+- `game.env.weather` (`src/world/weather/Weather.js`) — weather state; owns no rendering.
+  Gameplay picks per-mission weather with `env.setPreset(name)` (presets now carry
+  `rain`, `snow`, `lightning`, `wind: [east, south] m/s`, `humidity`) or directly with
+  `env.weather.set({ rain, snow, lightning, wind, humidity })` (0..1 each; `lightning`
+  is a strike rate; `wind` an array or Vector3). Live read-only fields, updated each
+  frame at the camera: `rain`, `snow` (frozen above ~4.7-5.5 km, plus ice crystals in
+  cloud), `precipitation`, `wetness` (rain or inside cloud: for lens/canopy water),
+  `humidity` (1 inside cloud), `wind` (Vector3, shared with clouds, smoke and trails),
+  `visibilityKm`, `lightning { intensity 0..1, position, distance }`, `flashFill`.
+  `env.weather.strike(camera, position?)` forces a strike. Shortcuts on the
+  environment: `env.rain`, `env.snow`, `env.wind`, `env.lightning`, `env.onLightning(fn)`.
+- New event `weather:lightning` `{position, distance}` — once per strike (audio:
+  thunder after `distance / 340` s).
+- `game.env.cloudVisibility` — TSL `Fn(screenUv, viewDistanceMetres) -> 0..1`: how much
+  of something at that distance shows through the resolved cloud layer in front of it.
+  The VFX layer uses it per fragment; anything else drawn after the clouds can too.
+- Inside cloud (`env.inCloud`) the environment now dims `env.sun` and raises
+  `env.ambient` (and adds the lightning flash to it); `env.inCloud` falls faster than it
+  rises so leaving a cloud is a clean break.
+- Tracers: one set. `src/vfx/core/Tracers.js` draws every live round in
+  `game.systems.combat.world.bullets`; the box tracers in `src/combat/visuals.js` only
+  appear when there is no VFX system (placeholder mode). `vfx.tracer(position,
+  velocity, hostile)` adds a visual-only round.
+- `explosion` event sizes now follow combat blast radii: fireball radius small 6.5 m,
+  medium 14 m, large 25 m, huge 50 m (`EXPLOSION_SIZES` in `src/vfx/core/ring.js`).
+- **Changed:** `aircraft.sockets.nozzle` (`src/flight/Aircraft.js`) moved to the measured
+  jet-pipe exit `(0, -0.61, 6.42)`; it was `(0, 0.05, bbox.max.z - 0.3)`, level with the
+  fin. VFX places aircraft effects from its own measured table (`MIG21` in
+  `src/vfx/effects/AircraftFx.js`; override per entity with `entity.vfxSockets`). The
+  `socketPositions` for the MiG family in `src/assets/catalog.js` and the wingtip
+  sockets in `Aircraft.js` are still the old bounding-box guesses (true wingtip trailing
+  edge: `(±3.6, -0.76, 3.3)`).
+- Glow particles streak with perspective (screen motion at their depth), so anything
+  passing the camera at speed draws as a radial streak.

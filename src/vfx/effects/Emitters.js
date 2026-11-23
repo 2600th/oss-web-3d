@@ -148,6 +148,45 @@ export class Emitters {
     }
   }
 
+  /**
+   * Something burning while it moves fast (a hit aircraft, a falling wreck):
+   * dense soot that billows out behind, fire licking at the source and torn
+   * off along the motion, embers. `s` scales sizes, `heat` 0..1 the fire.
+   */
+  _burn(item, p, vel, s, heat, dt) {
+    const v = this.vfx, { lit, glow, L, G } = v;
+    const rate = v.cfg.rate;
+    // soot: overlapping puffs (emitted closer together than they are wide)
+    // that swell to several times their size while they shear off the source
+    let n = emitCount(item, '_soot', (85 + 45 * heat) * rate, dt);
+    for (let i = 0; i < n; i++) {
+      randDir(_d);
+      const b = Math.random() * dt;
+      const hot = i % 3 === 0 ? rnd(1.3, 2.6) * (0.5 + 0.5 * heat) : rnd(0, 0.5) * heat;
+      lit.spawn(L.soot, p.x - vel.x * b + _d.x * 0.5 * s, p.y - vel.y * b + _d.y * 0.5 * s, p.z - vel.z * b + _d.z * 0.5 * s,
+        vel.x * 0.42 + _d.x * 6, vel.y * 0.42 + _d.y * 6 + 1, vel.z * 0.42 + _d.z * 6,
+        rnd(2.4, 4.6), rnd(1.3, 2.0) * s, rnd(7.5, 12) * s, 0.05, 0.047, 0.045, 0.93, hot);
+    }
+    // fire: stretched tongues close to the source, brighter with heat
+    n = emitCount(item, '_fire', (70 + 60 * heat) * rate, dt);
+    for (let i = 0; i < n; i++) {
+      randDir(_d);
+      const b = Math.random() * dt;
+      glow.spawn(G.fire, p.x - vel.x * b + _d.x * 0.4 * s, p.y - vel.y * b + _d.y * 0.4 * s, p.z - vel.z * b + _d.z * 0.4 * s,
+        vel.x * 0.8 + _d.x * 5, vel.y * 0.8 + _d.y * 5, vel.z * 0.8 + _d.z * 5,
+        rnd(0.12, 0.32), rnd(1.2, 2.0) * s, rnd(2.4, 3.8) * s, 1, 0.52, 0.17, 1, rnd(1.2, 2.6) * (0.6 + 0.4 * heat));
+    }
+    n = emitCount(item, '_emb', (8 + 10 * heat) * rate, dt);
+    for (let i = 0; i < n; i++) {
+      randDir(_d);
+      glow.spawn(G.ember, p.x, p.y, p.z, vel.x * 0.6 + _d.x * 10, vel.y * 0.6 + _d.y * 10, vel.z * 0.6 + _d.z * 10, rnd(0.5, 1.5), rnd(0.1, 0.22), 0.03, 1, 0.6, 0.2, 1, rnd(5, 12));
+    }
+    const life = Math.max(dt * 2.5, 0.04);
+    glow.spawn(G.glow, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 2.2 * s, 2.2 * s, 1, 0.5, 0.15, 1, 3 + 5 * heat);
+    glow.spawn(G.halo, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 7 * s, 7 * s, 1, 0.42, 0.12, 1, 0.3 + 0.3 * heat);
+    v.lights.request(p.x, p.y, p.z, 1, 0.55, 0.22, (1400 + 1200 * heat) * s, 110);
+  }
+
   // ---------------- fires ----------------
   fire(pos, { size = 3, duration = Infinity, smoke = 1 } = {}) {
     const max = this.vfx.cfg.fires;
@@ -176,11 +215,20 @@ export class Emitters {
       const s = f.size, p = f.pos;
       // the burn dies down over the first minutes, the smoke keeps going
       const burn = k * (0.45 + 0.55 * Math.exp(-f.age / 90));
-      let n = emitCount(f, '_col', (2.0 + s * 0.3) * f.smoke * lod * (0.5 + 0.5 * k), dt);
+      // The column: dense oily smoke rolling off the fire, and above it the
+      // older smoke - paler, much bigger, a minute old - which is what makes
+      // it tower and lean away downwind (visible from across the valley).
+      let n = emitCount(f, '_col', (2.6 + s * 0.35) * f.smoke * lod * (0.5 + 0.5 * k), dt);
       for (let j = 0; j < n; j++) {
         const a = rnd(Math.PI * 2), r = rnd(s * 0.6);
         lit.spawn(L.column, p.x + Math.cos(a) * r, p.y + s * 0.6, p.z + Math.sin(a) * r, rnd(-1, 1), rnd(3, 6) + s * 0.35, rnd(-1, 1),
-          rnd(17, 26), s * rnd(1.4, 2.0), s * rnd(6, 9) + 7, 0.042, 0.04, 0.038, 0.85, rnd(0, 1.3) * burn);
+          rnd(20, 30), s * rnd(1.5, 2.2), s * rnd(7, 10) + 8, 0.042, 0.04, 0.038, 0.9, rnd(0, 1.3) * burn);
+      }
+      n = emitCount(f, '_top', (0.9 + s * 0.14) * f.smoke * lod * (0.5 + 0.5 * k), dt);
+      for (let j = 0; j < n; j++) {
+        const a = rnd(Math.PI * 2), r = rnd(s * 0.8);
+        lit.spawn(L.columnTop, p.x + Math.cos(a) * r, p.y + s, p.z + Math.sin(a) * r, rnd(-1.5, 1.5), rnd(5, 8) + s * 0.4, rnd(-1.5, 1.5),
+          rnd(44, 62), s * rnd(2.0, 3.0), s * rnd(13, 19) + 26, 0.1, 0.098, 0.096, 0.6);
       }
       if (dist < 7000 && burn > 0.02) {
         n = emitCount(f, '_fl', 13 * lod, dt);
@@ -218,7 +266,7 @@ export class Emitters {
   }
 
   _updateDamage(dt) {
-    const v = this.vfx, { lit, glow, L, G } = v;
+    const v = this.vfx, { lit, L } = v;
     for (const [entity, item] of this.damaged) {
       if (!isAlive(entity) || !readPose(entity, item.pose, dt)) { this.clearDamage(entity); continue; }
       const { position: p, velocity: vel, quaternion: q } = item.pose;
@@ -232,41 +280,35 @@ export class Emitters {
       item.trail.strength = tier === 2 ? 1 : saturate((item.level - 0.3) / 0.35) * 0.7 + 0.3;
       item.trail.push(_t);
       if (tier === 2) {
-        const heat = saturate((item.level - 0.65) / 0.3);
-        // burning fuel: hot puffs that roll into black smoke as they cool
-        let n = emitCount(item, '_fl', (26 + 22 * heat) * v.cfg.rate, dt);
+        this._burn(item, _t, vel, 1, saturate((item.level - 0.65) / 0.3), dt);
+      } else {
+        // light damage: a thin grey stream with some body to it
+        const n = emitCount(item, '_puff', 16 * v.cfg.rate, dt);
         for (let i = 0; i < n; i++) {
           randDir(_d);
-          const s = Math.random() * dt;
-          lit.spawn(L.burn, _t.x - vel.x * s, _t.y - vel.y * s, _t.z - vel.z * s, vel.x * 0.5 + _d.x * 3, vel.y * 0.5 + _d.y * 3, vel.z * 0.5 + _d.z * 3,
-            rnd(1.3, 2.6), rnd(1.4, 2.0), rnd(5, 8), 0.06, 0.057, 0.055, 0.9, rnd(1.5, 2.4));
+          const b = Math.random() * dt;
+          lit.spawn(L.shed, _t.x - vel.x * b, _t.y - vel.y * b, _t.z - vel.z * b, vel.x * 0.4 + _d.x * 3, vel.y * 0.4 + _d.y * 3, vel.z * 0.4 + _d.z * 3,
+            rnd(1.2, 2.2), 0.8, rnd(3, 4.5), 0.5, 0.5, 0.51, 0.35 * item.trail.strength);
         }
-        n = emitCount(item, '_fc', 70 * v.cfg.rate, dt);
-        for (let i = 0; i < n; i++) {
-          randDir(_d);
-          const s = Math.random() * dt;
-          glow.spawn(G.flame, _t.x - vel.x * s, _t.y - vel.y * s, _t.z - vel.z * s, vel.x * 0.75 + _d.x * 4, vel.y * 0.75 + _d.y * 4, vel.z * 0.75 + _d.z * 4,
-            rnd(0.15, 0.35), rnd(1.0, 1.8), rnd(2.0, 3.2), 1, 0.5, 0.16, 1, rnd(1.2, 2.4));
-        }
-        glow.spawn(G.glow, _t.x, _t.y, _t.z, vel.x, vel.y, vel.z, Math.max(dt * 2.5, 0.04), 2.6, 2.6, 1, 0.5, 0.15, 1, 4 + 5 * heat);
-        v.lights.request(_t.x, _t.y, _t.z, 1, 0.55, 0.22, 1400, 90);
       }
     }
   }
 
   // ---------------- falling wrecks ----------------
   wreck(pos, vel, scale = 1) {
-    if (this.wrecks.length >= 8) { const old = this.wrecks.shift(); old.trail.end(); }
+    if (this.wrecks.length >= 8) { const old = this.wrecks.shift(); old.trail.end(); this.vfx.explosions.releaseDebris(old.hulk, old); }
     const w = {
       pos: pos.clone(), vel: vel ? vel.clone() : new THREE.Vector3(), age: 0, scale,
       trail: this.vfx.ribbons.create(this._style('wreck', scale)),
     };
+    // the hulk itself: a dark tumbling piece inside the fire
+    w.hulk = this.vfx.explosions.spawnDebris(w.pos, w.vel, 2.6 * scale, w);
     this.wrecks.push(w);
     return w;
   }
 
   _updateWrecks(dt) {
-    const v = this.vfx, { lit, glow, L, G } = v;
+    const v = this.vfx;
     for (let i = this.wrecks.length - 1; i >= 0; i--) {
       const w = this.wrecks[i];
       w.age += dt;
@@ -276,37 +318,17 @@ export class Emitters {
       const gy = terrainHeight(w.pos.x, w.pos.z);
       if (w.pos.y <= gy + 1 || w.age > 45) {
         w.trail.end();
+        v.explosions.releaseDebris(w.hulk, w);
         this.wrecks.splice(i, 1);
         if (w.pos.y <= gy + 1) {
           w.pos.y = gy;
-          v.explosion(w.pos, Math.max(5, 10 * w.scale), 'ground', null);
+          v.explosion(w.pos, Math.max(6, 14 * w.scale), 'ground', null);
           if (w.scale < 0.8) v.spawnFire(w.pos, { size: 2 * w.scale + 1, duration: 80 });
         }
         continue;
       }
-      const s = w.scale, p = w.pos, vel = w.vel;
-      w.trail.push(p);
-      let n = emitCount(w, '_fl', 30 * v.cfg.rate, dt);
-      for (let j = 0; j < n; j++) {
-        randDir(_d);
-        const b = Math.random() * dt;
-        lit.spawn(L.burn, p.x - vel.x * b, p.y - vel.y * b, p.z - vel.z * b, vel.x * 0.5 + _d.x * 4, vel.y * 0.5 + _d.y * 4, vel.z * 0.5 + _d.z * 4,
-          rnd(1.6, 3.2), rnd(2.0, 2.8) * s, rnd(7, 11) * s, 0.06, 0.057, 0.055, 0.92, rnd(1.6, 2.6));
-      }
-      n = emitCount(w, '_fc', 80 * v.cfg.rate, dt);
-      for (let j = 0; j < n; j++) {
-        randDir(_d);
-        const b = Math.random() * dt;
-        glow.spawn(G.flame, p.x - vel.x * b, p.y - vel.y * b, p.z - vel.z * b, vel.x * 0.75 + _d.x * 5, vel.y * 0.75 + _d.y * 5, vel.z * 0.75 + _d.z * 5,
-          rnd(0.2, 0.45), rnd(1.6, 2.6) * s, rnd(3, 4.6) * s, 1, 0.5, 0.16, 1, rnd(1.2, 2.4));
-      }
-      n = emitCount(w, '_sp', 10 * v.cfg.rate, dt);
-      for (let j = 0; j < n; j++) {
-        randDir(_d);
-        glow.spawn(G.ember, p.x, p.y, p.z, vel.x * 0.6 + _d.x * 10, vel.y * 0.6 + _d.y * 10, vel.z * 0.6 + _d.z * 10, rnd(0.6, 1.6), rnd(0.12, 0.25), 0.03, 1, 0.6, 0.2, 1, rnd(5, 12));
-      }
-      glow.spawn(G.glow, p.x, p.y, p.z, vel.x, vel.y, vel.z, Math.max(dt * 2.5, 0.04), 4 * s, 4 * s, 1, 0.5, 0.15, 1, 7);
-      v.lights.request(p.x, p.y, p.z, 1, 0.55, 0.22, 2600 * s, 150);
+      w.trail.push(w.pos);
+      this._burn(w, w.pos, w.vel, w.scale, 1, dt);
     }
   }
 

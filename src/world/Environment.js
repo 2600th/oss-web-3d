@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { Fn, float, positionWorld, uniform } from 'three/tsl';
 import { Atmosphere } from './atmosphere/Atmosphere.js';
 import { Clouds } from './clouds/Clouds.js';
+import { Weather } from './weather/Weather.js';
 
 /**
  * Sky, sun, ambient, aerial perspective and volumetric clouds.
@@ -14,6 +15,10 @@ import { Clouds } from './clouds/Clouds.js';
  *   applyCloudShadow(m)  hook cloudShadow into a node material's received shadow
  *   inCloud              0..1, how deep the camera is in cloud
  *   sunVisibility        0..1, cloud shadow at the focus (player) position
+ *   cloudVisibility      TSL Fn(screenUv, viewDistanceMetres) -> float, how much of something
+ *                        at that distance shows through the cloud in front of it
+ *   weather              rain / snow / wind / humidity / lightning state (src/world/weather/Weather.js);
+ *                        `rain`, `wind`, `lightning` here are shortcuts into it
  *   setPreset(name)      'default' | 'morning' | 'noon' | 'golden' | 'overcast' | 'storm'
  *   setSun(elevDeg, azDeg)
  *   update(dt, camera, focus)
@@ -22,13 +27,17 @@ import { Clouds } from './clouds/Clouds.js';
 
 export const PRESETS = {
   // Late-morning summer: scattered-to-broken cumulus building over the ridges.
-  default: { sun: [44, 112], coverage: 0.42, type: 0.5, ridge: 0.5, haze: 1.0, cirrus: 0.3, storm: 0, sigma: 0.03, envTint: 1, exposure: 1 },
-  morning: { sun: [17, 80], coverage: 0.36, type: 0.4, ridge: 0.4, haze: 1.5, cirrus: 0.4, storm: 0, sigma: 0.028, envTint: 1, exposure: 1.15 },
-  noon: { sun: [74, 176], coverage: 0.45, type: 0.6, ridge: 0.55, haze: 0.9, cirrus: 0.25, storm: 0, sigma: 0.03, envTint: 1, exposure: 0.95 },
+  // Weather fields (all optional): rain, snow, lightning (strike rate), wind
+  // [east, south] m/s, humidity (how readily wings and tips pull vapour).
+  default: { sun: [44, 112], coverage: 0.42, type: 0.5, ridge: 0.5, haze: 1.0, cirrus: 0.3, storm: 0, sigma: 0.03, envTint: 1, exposure: 1, wind: [9, 4], humidity: 0.3 },
+  morning: { sun: [17, 80], coverage: 0.36, type: 0.4, ridge: 0.4, haze: 1.5, cirrus: 0.4, storm: 0, sigma: 0.028, envTint: 1, exposure: 1.15, wind: [4, 2], humidity: 0.5 },
+  noon: { sun: [74, 176], coverage: 0.45, type: 0.6, ridge: 0.55, haze: 0.9, cirrus: 0.25, storm: 0, sigma: 0.03, envTint: 1, exposure: 0.95, wind: [10, 5], humidity: 0.25 },
   // Sun 3.5 degrees up: long warm light, rim-lit cloud, peach haze on the horizon.
-  golden: { sun: [3.5, 287], coverage: 0.4, type: 0.5, ridge: 0.45, haze: 2.2, cirrus: 0.42, storm: 0, sigma: 0.028, envTint: 1, exposure: 1.7 },
-  overcast: { sun: [40, 150], coverage: 0.95, type: 0.3, ridge: 0.15, haze: 2.6, cirrus: 0, storm: 0.25, sigma: 0.033, envTint: 0.7, exposure: 1.3 },
-  storm: { sun: [32, 205], coverage: 0.86, type: 0.95, ridge: 0.3, haze: 3.2, cirrus: 0, storm: 1, sigma: 0.042, envTint: 0.5, exposure: 1.4 },
+  // (cirrus was 0.42: at this sun angle the sheet is lit edge-on and nearly
+  // white, and that much of it flattened the whole upper sky)
+  golden: { sun: [3.5, 287], coverage: 0.4, type: 0.5, ridge: 0.45, haze: 2.2, cirrus: 0.2, storm: 0, sigma: 0.028, envTint: 1, exposure: 1.7, wind: [6, 2], humidity: 0.4 },
+  overcast: { sun: [40, 150], coverage: 0.95, type: 0.3, ridge: 0.15, haze: 2.6, cirrus: 0, storm: 0.25, sigma: 0.033, envTint: 0.7, exposure: 1.3, rain: 0.35, wind: [12, 6], humidity: 0.65 },
+  storm: { sun: [32, 205], coverage: 0.86, type: 0.95, ridge: 0.3, haze: 3.2, cirrus: 0, storm: 1, sigma: 0.042, envTint: 0.5, exposure: 1.4, rain: 1, lightning: 1, wind: [21, 11], humidity: 0.85 },
 };
 
 const GROUND_ALBEDO = [0.26, 0.23, 0.2];
@@ -58,6 +67,10 @@ export class Environment {
      * top-down sun shadow map. Use applyCloudShadow(material) to hook it up.
      */
     this.cloudShadow = this.clouds ? this.clouds.shadowAt : Fn(([p]) => float(1).add(p.x.mul(0)));
+    /** TSL Fn(screenUv, viewDistanceMetres) -> 0..1 through the cloud in front (see Clouds.visibilityAt). */
+    this.cloudVisibility = this.clouds ? this.clouds.visibilityAt : Fn(([st, d]) => float(1).add(st.x.mul(0)).add(d.mul(0)));
+    /** Rain, snow, wind, humidity, lightning (see src/world/weather/Weather.js). */
+    this.weather = new Weather(this);
     // Light shafts: the aerial-perspective froxels march the same shadow map.
     if (this.clouds && !low) this.atmosphere.setShadowFn(this.cloudShadow);
 
@@ -99,6 +112,13 @@ export class Environment {
 
   get presets() { return Object.keys(PRESETS); }
 
+  // Shortcuts into the weather state.
+  get rain() { return this.weather.rain; }
+  get snow() { return this.weather.snow; }
+  get wind() { return this.weather.wind; }
+  get lightning() { return this.weather.lightning; }
+  onLightning(fn) { return this.weather.onLightning(fn); }
+
   setSun(elevationDeg, azimuthDeg) {
     const el = THREE.MathUtils.degToRad(elevationDeg);
     const az = THREE.MathUtils.degToRad(azimuthDeg);
@@ -129,6 +149,7 @@ export class Environment {
       c.weatherDirty = true;
       c.resetHistory();
     }
+    this.weather.set({ rain: p.rain ?? 0, snow: p.snow ?? 0, lightning: p.lightning ?? 0, wind: p.wind ?? [9, 4], humidity: p.humidity ?? 0.3 });
     this._dirty = true;
     return p;
   }
@@ -172,6 +193,8 @@ export class Environment {
     const gi = ground.map((g) => g * Math.PI);
     this.ambient.groundColor.setRGB(gi[0] / sm, gi[1] / sm, gi[2] / sm);
     this.ambient.intensity = sm * f;
+    this._sunBase = m;
+    this._ambientBase = sm * f;
 
     const t = this._envTintScalar ?? 1;
     this._envGround.value.set(ground[0], ground[1], ground[2]);
@@ -211,10 +234,20 @@ export class Environment {
       this._updateLights(alt);
     }
 
+    this.weather.update(dt, camera);
     if (this.clouds) {
       this.clouds.update(dt, camera, focus);
       this.inCloud = this.clouds.inCloud;
       this.sunVisibility = this.clouds.sunVisibility;
+    }
+    // Light inside cloud, and lightning as scene light. The cloud shadow map
+    // only covers what is below the layer, so in the cloud the direct sun has
+    // to be taken down here: it falls off to a fraction as the cloud closes
+    // in and the (white, directionless) fill comes up. A flash kicks the fill.
+    if (this._sunBase !== undefined) {
+      const k = THREE.MathUtils.clamp(this.inCloud, 0, 1);
+      this.sun.intensity = this._sunBase * (1 - 0.86 * k);
+      this.ambient.intensity = this._ambientBase * (1 + 5 * k) + this.weather.flashFill * 2.2;
     }
     atm.update(camera);
 

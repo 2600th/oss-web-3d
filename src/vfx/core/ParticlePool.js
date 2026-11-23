@@ -249,6 +249,7 @@ export class ParticlePool {
     const vSoft = varying(c.size.mul(c.T2.y).max(0.25));
     const vT = varying(c.t);
     const vThin = varying(c.T2.w);
+    const vShadow = varying(sh.cloudShadow(c.center));
 
     material.fragmentNode = Fn(() => {
       const cell = vCell.add(0.5).floor();
@@ -259,8 +260,9 @@ export class ParticlePool {
       // silhouette is crisp cauliflower rather than fog, and erodes with age.
       const dn = texture(sh.tex.noise, uv().mul(2.3).add(vec2(cell.mul(0.137), cell.mul(0.71)))).g;
       const dn2 = texture(sh.tex.noise, uv().mul(5.1).add(vec2(cell.mul(0.41), cell.mul(0.23)))).r;
-      const cut = dn.mul(0.7).add(dn2.mul(0.3)).mul(vT.sub(0.25).max(0).mul(0.75).add(0.34));
-      const shaped = saturate(ta.a.sub(cut).div(float(1).sub(cut)).mul(1.5));
+      // (thin media -- vapour, mist -- stay soft: a carved edge reads as a sprite)
+      const cut = dn.mul(0.7).add(dn2.mul(0.3)).mul(vT.sub(0.25).max(0).mul(0.75).add(0.34)).mul(vThin.mul(0.92).oneMinus());
+      const shaped = saturate(ta.a.sub(cut).div(float(1).sub(cut)).mul(mix(float(1.5), float(1), vThin)));
       const gain = shaped.div(ta.a.max(1e-3));
       const L = vLight;
       const wp = max(L, 0), wn = max(L.negate(), 0);
@@ -274,12 +276,14 @@ export class ParticlePool {
         .add(u.groundColor.mul(tb.g.mul(0.55).add(side.mul(0.2))));
       // lighting channels are premultiplied by the baked alpha: rescale to the carved one
       const detail = dn2.mul(0.5).add(0.75);
-      const lit = vColor.rgb.mul(u.sunColor.mul(sunLit).mul(1.0).mul(detail).add(amb.mul(0.45))).mul(gain);
+      // (the 0.45 on ambient was tuned against the old hemisphere-fill inputs,
+      // which were about 0.8 of the physical sky radiance used now)
+      const lit = vColor.rgb.mul(u.sunColor.mul(sunLit).mul(vShadow).mul(detail).add(amb.mul(0.4))).mul(gain);
       // fire: hot in the dense core, cooling to soot over life
       const heat = vHeat.mul(tb.a.mul(1.6).add(0.2)).mul(dn.mul(0.8).add(0.6));
       const fire = fireRamp(heat).mul(shaped);
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(vSoft));
-      const k = vVis.mul(depthFade).mul(u.fade);
+      const k = vVis.mul(depthFade).mul(u.fade).mul(sh.cloudVis());
       const alpha = shaped.mul(vColor.a).mul(k);
       return vec4(lit.mul(vColor.a).mul(k).add(fire.mul(k)), alpha);
     })();
@@ -295,10 +299,20 @@ export class ParticlePool {
 
     const shape = c.T2.x, stretch = c.T2.y, minPx = c.T2.z, flicker = c.T2.w;
     const vrel = c.V.xyz.sub(u.camVel);
-    const s2 = vec2(dot(vrel, u.camRight), dot(vrel, u.camUp));
+    // Motion across the screen, in metres at the particle's depth, with
+    // perspective: something coming straight at the camera but off to one
+    // side still sweeps outward (rain and cloud droplets at flying speed
+    // radiate from the point you are flying towards).
+    const rel = c.center.sub(u.camPos);
+    const depth = dot(rel, u.camFwd).max(0.5);
+    const along = dot(vrel, u.camFwd);
+    const s2 = vec2(dot(vrel, u.camRight), dot(vrel, u.camUp))
+      .sub(vec2(dot(rel, u.camRight), dot(rel, u.camUp)).div(depth).mul(along));
     const sl = length(s2);
     const dir2 = select(sl.greaterThan(1e-3), s2.div(sl.max(1e-3)), vec2(1, 0));
-    const streak = sl.mul(stretch).min(c.size.mul(60).add(4));
+    // (never longer than a fraction of its distance: a streak a metre from
+    // the lens would otherwise be a line across the whole screen)
+    const streak = sl.mul(stretch).min(c.size.mul(60).add(4)).min(c.dist.mul(0.45));
     const angle = c.seed.mul(6.283);
     const rot = vec2(cos(angle), sin(angle));
     const d = select(stretch.greaterThan(0), dir2, rot);
@@ -342,7 +356,7 @@ export class ParticlePool {
           select(vShape.lessThan(2.5), ringS,
             select(vShape.lessThan(3.5), flash, flame))));
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(vSoft));
-      return vec4(vCol.mul(s).mul(depthFade).mul(u.fade), 0);
+      return vec4(vCol.mul(s).mul(depthFade).mul(u.fade).mul(sh.cloudVis()), 0);
     })();
     return material;
   }

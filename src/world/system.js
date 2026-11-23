@@ -55,6 +55,10 @@ export function createSystem(game) {
     if (post.uniforms?.sunRefLum) post.uniforms.sunRefLum.value = a.sunIrradiance.value.x * a.sunDiscGain.value / 3;
   };
 
+  // Lightning strikes are announced on the event bus (audio: thunder, after
+  // distance / 340 seconds).
+  env.onLightning?.(({ position, distance }) => game.events?.emit('weather:lightning', { position, distance }));
+
   return {
     name: 'atmosphere',
     env,

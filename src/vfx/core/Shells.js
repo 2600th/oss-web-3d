@@ -10,7 +10,7 @@ import {
  * instanced draw per kind; an instance is an origin, an axis and four
  * parameters, so nothing here cares how the owner is oriented or parented.
  *
- * plume  params: x = core brightness, y = shock diamonds (count), z = glow, w = layer (0 outer, 1 inner)
+ * plume  params: x = core brightness, y = shock diamonds (count), z = glow, w = layer (0 outer, 1 inner, 2 nozzle ring)
  * vapour params: x = amount, y = start radius, z = end radius
  */
 export class Shells {
@@ -83,30 +83,43 @@ export class Shells {
     const sh = this.shared, u = sh.u;
     const m = this._base(true);
     const { sO, sD, sQ, axis, z, radial } = this._frame();
+    // layer: 0 = outer flame, 1 = inner core with the shock diamonds,
+    // 2 = the nozzle ring (a short band of glowing petals at the exit)
+    const layer = sQ.w;
+    const isInner = select(layer.greaterThan(0.5).and(layer.lessThan(1.5)), float(1), float(0));
+    const isRing = select(layer.greaterThan(1.5), float(1), float(0));
     const nD = sQ.y.max(0.001);
     const diamondAmt = saturate(sQ.y.mul(0.5));
-    const inner = sQ.w;
-    const taper = mix(float(0.42), float(0.12), inner);
-    const bulge = cos(z.mul(nD).mul(6.2832)).mul(0.09).mul(diamondAmt).mul(exp(z.mul(-2))).add(1);
-    const rad = sD.w.mul(mix(float(1), float(0.5), inner)).mul(mix(float(1), taper, pow(z, 0.7))).mul(bulge);
+    // an under-expanded jet swells and necks once per shock cell
+    const swell = cos(z.mul(nD).mul(6.2832)).mul(0.12).mul(diamondAmt).mul(exp(z.mul(-1.6))).add(1);
+    const taper = mix(float(1), mix(float(0.4), float(0.1), isInner), pow(z, 0.8));
+    const rad = sD.w.mul(mix(float(1), float(0.55), isInner)).mul(mix(taper.mul(swell), float(1), isRing));
     const world = sO.xyz.add(axis.mul(z.mul(sO.w))).add(radial.mul(rad));
     m.positionNode = world;
     const vRad = varying(radial), vWorld = varying(world), vZ = varying(z), vQ = varying(sQ);
     const vSeed = varying(sO.x.add(sO.z).mul(0.37).fract());
+    const vInner = varying(isInner), vRing = varying(isRing);
     m.fragmentNode = Fn(() => {
       const facing = abs(dot(normalize(vRad), normalize(u.camPos.sub(vWorld))));
       const n = texture(sh.tex.noise, vec2(vZ.mul(1.4).sub(u.time.mul(3.2)).add(vSeed), uv().x.mul(2))).r;
       const nDf = vQ.y.max(0.001);
-      const dia = pow(cos(vZ.mul(nDf).mul(6.2832)).mul(0.5).add(0.5), 5).mul(exp(vZ.mul(-2.6))).mul(saturate(vQ.y.mul(0.5)));
-      const isInner = vQ.w;
-      const body = exp(vZ.mul(mix(float(3.2), float(2.0), isInner)).negate()).mul(n.mul(0.9).add(0.55));
-      const shape = pow(facing, mix(float(0.9), float(2.2), isInner));
-      const inten = body.mul(mix(float(0.3), float(0.55), isInner)).add(dia.mul(isInner).mul(2.6)).mul(shape).mul(vQ.x);
-      const hot = mix(vec3(0.5, 0.66, 1.0), vec3(1.0, 0.5, 0.14), smoothstep(0.0, 0.22, vZ));
-      const col = mix(hot, vec3(1.0, 0.24, 0.04), smoothstep(0.4, 1, vZ)).add(vec3(1, 0.85, 0.6).mul(dia.mul(isInner).mul(0.6)));
-      const ends = smoothstep(0, 0.03, vZ).mul(pow(float(1).sub(vZ), 1.3));
+      const dia = pow(cos(vZ.mul(nDf).mul(6.2832)).mul(0.5).add(0.5), 6).mul(exp(vZ.mul(-2.2))).mul(saturate(vQ.y.mul(0.5)));
+      const body = exp(vZ.mul(mix(float(3.0), float(1.8), vInner)).negate()).mul(n.mul(0.9).add(0.55));
+      // emissive gas: brightest where the view ray crosses the most of it
+      const shape = pow(facing, mix(float(1.1), float(2.4), vInner));
+      const inten = body.mul(mix(float(0.22), float(0.5), vInner)).add(dia.mul(vInner).mul(3.0)).mul(shape).mul(vQ.x);
+      const hot = mix(vec3(0.55, 0.68, 1.0), vec3(1.0, 0.52, 0.16), smoothstep(0.0, 0.25, vZ));
+      const col = mix(hot, vec3(1.0, 0.22, 0.04), smoothstep(0.45, 1, vZ)).add(vec3(1, 0.9, 0.7).mul(dia.mul(vInner).mul(0.7)));
+      const ends = smoothstep(0, 0.04, vZ).mul(pow(float(1).sub(vZ), 1.4));
+      const flame = col.mul(inten).mul(ends).mul(3.0);
+      // nozzle ring: seen from behind the band is edge-on all the way round
+      // (a ring); from the side it is a dim strip. Dull red on dry thrust,
+      // yellow-white in reheat (vQ.z = glow).
+      const rim = pow(float(1).sub(facing), 1.5).mul(0.9).add(0.1);
+      const ringCol = mix(vec3(1.0, 0.27, 0.06), vec3(1.0, 0.74, 0.4), saturate(vQ.z));
+      const ring = ringCol.mul(rim).mul(vQ.z.mul(2.4).add(0.16)).mul(n.mul(0.3).add(0.85)).mul(smoothstep(0, 0.2, vZ)).mul(smoothstep(1, 0.55, vZ)).mul(vQ.x);
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(0.35));
-      return vec4(col.mul(inten).mul(ends).mul(depthFade).mul(3.2).mul(u.fade), 0);
+      return vec4(mix(flame, ring, vRing).mul(depthFade).mul(u.fade).mul(sh.cloudVis()), 0);
     })();
     return m;
   }
@@ -128,7 +141,7 @@ export class Shells {
       const along = smoothstep(0, 0.1, vZ).mul(smoothstep(0.35, 1, vZ).oneMinus());
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(0.6));
       const axial = float(1).sub(abs(dot(normalize(vAxis), normalize(u.camPos.sub(vWorld)))).pow(2).mul(0.8));
-      const a = saturate(vQ.x.mul(shell).mul(along).mul(axial).mul(smoothstep(0.2, 0.7, n.mul(0.65).add(n2.mul(0.35)))).mul(0.8)).mul(depthFade).mul(u.fade);
+      const a = saturate(vQ.x.mul(shell).mul(along).mul(axial).mul(smoothstep(0.2, 0.7, n.mul(0.65).add(n2.mul(0.35)))).mul(0.8)).mul(depthFade).mul(u.fade).mul(sh.cloudVis());
       const ndl = dot(nrm, u.sunDir).mul(0.35).add(0.65);
       const col = u.sunColor.mul(0.5).mul(ndl).add(u.skyColor.mul(0.34));
       return vec4(col.mul(a), a);
