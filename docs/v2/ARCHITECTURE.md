@@ -464,3 +464,29 @@ when unavoidable; say so in your report.
 - **Dev.** `game.dev.run(id, {special, bot, difficulty})`, `dev.batch(id, n, opts)`,
   `dev.table()`, `dev.runs`: the flying bot (`src/game/dev/Bot.js`), real intents,
   damage on, about 20x real time. Evidence in `docs/v2/evidence/polish-gameplay/`.
+
+- **assets polish: aircraft, ground units, HUD (additive).**
+  - `public/models/mig21.glb` is now *baked* (root `mig21`, `extras.baked = 1`: nose -Z,
+    unit scale) and carries named, pivoted control surfaces `stab_L/R`, `aileron_L/R`,
+    `flap_L/R` (+`rotation.x` = trailing edge down). `Aircraft.js` skips its own
+    normalisation for baked roots; `aircraft.surfaces` (`SurfaceRig`,
+    `src/assets/controlSurfaces.js`) animates them from `flight.rates` /
+    `pitchAuthority` / `rollAuthority` / airspeed. `mig21_hostile` (LOD0 and LOD1) has the
+    same pivots; catalog entries list them under `pivots`.
+  - New system `game.systems.assets` (`src/assets/system.js`, order 15): drives hostile
+    fighter surfaces from their quaternion delta (within 3 km), seats ground units on
+    the terrain (slope-aligned vehicles, near-level emplacements, an earth/gravel berm
+    child named `foundation` under hanging edges), lays AAA/flak/SAM turrets and
+    barrels on their target and sets `unit.aimRig = true` (then `src/ai/ground.js`
+    stops turning the whole unit). Base kits (`kind === 'base'`) are left alone.
+  - `configureAssets({tier, env})` (`src/assets/loadModel.js`): models loaded after it
+    get node materials (aircraft paint/clearcoat/canopy, ground bump + breakup) and cloud
+    shadows; on `?quality=low` the canopy stays standard and the paint-roughness,
+    clearcoat and ground bump/breakup nodes are skipped.
+  - `src/ai/sites.js` `scatterSites` rejects sites steeper than about 20° (relaxing as
+    tries run out).
+  - HUD: target markers and labels are placed around a keep-out list
+    (`src/ui/declutter.js`: tapes, heading, corner panels, banner, radio plate); a marker
+    on a tape shrinks to a pip. On a portrait phone the radio plate moves up over the
+    objective line while it would cover a marker; on a landscape phone the orders
+    banner sits under the tapes (`layout.bannerY`) and the ladder is cut around it.

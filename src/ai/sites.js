@@ -56,10 +56,15 @@ export function findSite(x, z, radius, mode = 'ridge', { step = 90, height = ter
 export function scatterSites(cx, cz, count, { rMin = 40, rMax = 220, minSep = 28, seed = 1, height = terrainHeight } = {}) {
   const rng = mulberry32(seed);
   const out = [];
-  for (let tries = 0; out.length < count && tries < count * 30; tries++) {
+  const maxTries = count * 30;
+  for (let tries = 0; out.length < count && tries < maxTries; tries++) {
     const a = rng() * Math.PI * 2;
     const r = rMin + (rMax - rMin) * Math.sqrt(rng());
     const s = findSite(cx + Math.cos(a) * r, cz + Math.sin(a) * r, 24, 'flat', { step: 12, height });
+    // [art pass] "Flattest within 24 m" was still often a 35-45 degree face on the
+    // ridges (units then hung off the hillside). Reject local slopes over ~20 degrees
+    // at first, relaxing toward ~45 degrees as tries run out so the count is kept.
+    if (slopeAt(s.x, s.z, 6, height) > 0.36 + 0.64 * (tries / maxTries)) continue;
     if (out.some((o) => Math.hypot(o.x - s.x, o.z - s.z) < minSep)) continue;
     if (Math.hypot(s.x - cx, s.z - cz) < rMin * 0.6) continue;
     out.push(s);

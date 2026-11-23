@@ -72,7 +72,13 @@ Check renders: `cockpit/overlay_eye_*.jpg`. Built by `tools/blender/build_cockpi
 - Licence: CC BY 4.0 derivative. Attribution is in `public/THIRD_PARTY_NOTICES.txt` and
   in the GLB `asset.extras`.
 
-## Control surfaces (stretch): investigated, not shipped
+## Control surfaces: shipped (see `docs/v2/evidence/polish-art-hud/`)
+
+Update: stabilators, ailerons and flaps are now cut by
+`tools/blender/build_mig_surfaces.py` and ship as pivoted nodes in `mig21.glb` and
+`mig21_hostile.glb` (both LODs). `Object_12` turned out to be the pylons, not the flaps;
+the flaps are cut from the airframe like the ailerons. The rudder and airbrakes are
+still fused (below). The original survey follows.
 
 `tools/blender/probe_surfaces.py` lists the large loose parts of the joined airframe
 mesh (`Object_13`):
@@ -81,12 +87,11 @@ mesh (`Object_13`):
 | --- | --- | --- |
 | stabilators | 2 islands per side, x ±0.48..1.95, z -7.47..-4.47 (three), 834 faces | yes, cleanly; hinge is the root spar near z ≈ -5.6 |
 | ailerons | about 4 islands per side at the outer trailing edge, x ±2.04..3.26, z 2.64..3.21 | yes, with care (upper and lower skin plus end caps) |
-| flaps | already their own node `Object_12` (604 tris) | yes |
+| flaps | (`Object_12` is the pylons) cut from the airframe at the inboard trailing edge | yes |
 | rudder | fused into the two rear-fuselage/fin islands (1288 faces each) | no: the fin geometry would have to be re-cut |
 | airbrakes | flush ventral panels, not split from the skin | no |
 
-Splitting them would also mean a separately normalised player GLB, which Aircraft.js
-does not expect. That is left for a follow-up.
+(Splitting them meant a baked player GLB; Aircraft.js now skips normalising baked roots.)
 
 ## Weapons and ground units
 
