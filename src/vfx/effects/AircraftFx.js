@@ -1,7 +1,9 @@
 import * as THREE from 'three/webgpu';
 import { Shells } from '../core/Shells.js';
+import { GUN_MUZZLE } from '../core/sockets.js';
 import { plumeState, vapourAmount, vapourGates, contrailAmount, vapourCone, speedOfSound, saturate, smoothstep, lerp } from '../core/ring.js';
 import { rnd, randDir, readPose, makePose, isAlive } from './util.js';
+import { sizeForRate } from '../core/fxmath.js';
 
 const _d = new THREE.Vector3();
 const _p = new THREE.Vector3();
@@ -25,7 +27,7 @@ const MIG21 = {
   wingtipR: new THREE.Vector3(3.6, -0.76, 3.3),
   wingRootL: new THREE.Vector3(-1.25, -0.5, 1.7),  // over the inner wing, where the vapour sheet sits
   wingRootR: new THREE.Vector3(1.25, -0.5, 1.7),
-  gun: new THREE.Vector3(0, -0.6, -2.5),           // (not measured)
+  gun: new THREE.Vector3(GUN_MUZZLE.x, GUN_MUZZLE.y, GUN_MUZZLE.z), // GSh-23 muzzle (core/sockets.js; combat fires from it too)
   // delta leading edge: root -> tip, and the wing plane height
   leRoot: [0.75, -1.1], leTip: [3.45, 2.16], wingY: -0.72,
 };
@@ -47,11 +49,13 @@ export class AircraftFx {
     this.vfx = vfx;
     const game = vfx.game;
     this.items = new Map();
-    this.plumes = new Shells(vfx.shared, 48, 'plume');
+    this.plumes = new Shells(vfx.shared, 24, 'plume');
+    this.rings = new Shells(vfx.shared, 24, 'ring');
     this.cones = new Shells(vfx.shared, 12, 'vapour');
     this.plumes.mesh.renderOrder = 2;
+    this.rings.mesh.renderOrder = 2;
     this.cones.mesh.renderOrder = 1;
-    vfx.scene.add(this.plumes.mesh, this.cones.mesh);
+    vfx.scene.add(this.plumes.mesh, this.rings.mesh, this.cones.mesh);
 
     // The player is always present; combat does not need to announce it.
     const flight = game.flight;
@@ -108,18 +112,26 @@ export class AircraftFx {
     if (item) item.firing = firing;
   }
 
-  /** One muzzle flash (also usable for ground guns). */
+  /**
+   * One muzzle flash (also usable for ground guns). A 23 mm muzzle flash is
+   * a short forward cone of burning propellant gas about a metre long with a
+   * hot star at the muzzle, gone within a frame or two, then a puff of grey
+   * gun smoke that the airflow strips back along the belly.
+   */
   muzzleFlash(pos, dir, vel = null, scale = 1) {
     const { glow, lit, G, L, lights } = this.vfx;
     const vx = vel?.x ?? 0, vy = vel?.y ?? 0, vz = vel?.z ?? 0;
-    glow.spawn(G.flash, pos.x + dir.x * 0.5 * scale, pos.y + dir.y * 0.5 * scale, pos.z + dir.z * 0.5 * scale, vx, vy, vz,
-      0.035, rnd(1.2, 2.0) * scale, rnd(1.8, 2.8) * scale, 1, 0.82, 0.5, 1, rnd(14, 26));
-    glow.spawn(G.jet, pos.x + dir.x * scale, pos.y + dir.y * scale, pos.z + dir.z * scale, vx + dir.x * 30, vy + dir.y * 30, vz + dir.z * 30,
-      0.05, 0.9 * scale, 0.4 * scale, 1, 0.7, 0.3, 1, 5);
-    if (Math.random() < 0.5) {
-      lit.spawn(L.shed, pos.x, pos.y, pos.z, vx * 0.5 + dir.x * 8, vy * 0.5 + dir.y * 8, vz * 0.5 + dir.z * 8, rnd(0.5, 1), 0.3 * scale, 1.8 * scale, 0.6, 0.6, 0.6, 0.3);
+    // the star at the muzzle
+    glow.spawn(G.flash, pos.x + dir.x * 0.25 * scale, pos.y + dir.y * 0.25 * scale, pos.z + dir.z * 0.25 * scale, vx, vy, vz,
+      0.03, rnd(0.55, 0.8) * scale, rnd(0.9, 1.3) * scale, 1, 0.85, 0.55, 1, rnd(22, 34));
+    // the forward cone of gas: stretched along the barrel by its own motion
+    glow.spawn(G.muzzle, pos.x + dir.x * 0.6 * scale, pos.y + dir.y * 0.6 * scale, pos.z + dir.z * 0.6 * scale,
+      vx + dir.x * 320, vy + dir.y * 320, vz + dir.z * 320, 0.035, 0.38 * scale, 0.55 * scale, 1, 0.62, 0.24, 1, rnd(14, 22));
+    if (Math.random() < 0.6) {
+      lit.spawn(L.gunSmoke, pos.x, pos.y, pos.z, vx * 0.55 + dir.x * 12, vy * 0.55 + dir.y * 12, vz * 0.55 + dir.z * 12,
+        rnd(0.5, 0.9), 0.25 * scale, rnd(1.4, 2.2) * scale, 0.42, 0.42, 0.43, 0.32);
     }
-    lights.request(pos.x, pos.y, pos.z, 1, 0.8, 0.5, 600 * scale * rnd(0.5, 1), 45);
+    lights.request(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z, 1, 0.78, 0.45, 420 * scale * rnd(0.6, 1), 30);
   }
 
   tracer(pos, vel) { this.vfx.tracers.fire(pos, vel); }
@@ -128,6 +140,7 @@ export class AircraftFx {
     const v = this.vfx, { lit, glow, L, G } = v;
     const cam = v.shared.u.camPos.value;
     this.plumes.begin();
+    this.rings.begin();
     this.cones.begin();
     for (const [entity, item] of this.items) {
       if (entity !== this.player && !isAlive(entity)) { this.remove(entity); continue; }
@@ -160,18 +173,16 @@ export class AircraftFx {
         //    a lit burner readable at range.
         const R = entity.nozzleRadius ?? MIG21.nozzleRadius;
         const flick = 0.92 + 0.08 * Math.sin(v.shared.time * 47 + item.seed * 9);
-        if (pl.core > 0.03) {
-          this.plumes.add(_p, _back, pl.length * flick, R, pl.core * 0.9, pl.diamonds, pl.glow, 0);
-          this.plumes.add(_p, _back, pl.length * 0.8 * flick, R, pl.core * 1.3, pl.diamonds, pl.glow, 1);
-        }
+        // one volumetric plume (chord-integrated: brightest seen end-on)
+        if (pl.core > 0.03) this.plumes.add(_p, _back, pl.length * flick, R, pl.core, pl.diamonds, pl.glow, pl.reheat);
         // (the anchor is the exit plane: the band lines the last of the pipe)
         _p2.copy(_p).addScaledVector(_back, -0.36);
-        this.plumes.add(_p2, _back, 0.36, R * 0.9, 1, 0, pl.glow, 2);
+        this.rings.add(_p2, _back, 0.36, R * 0.9, 1, 0, pl.glow, 0);
         const life = Math.max(dt * 2.5, 0.04);
-        glow.spawn(G.core, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, R * 1.4, R * 1.4, 1, 0.55, 0.24, 1, 0.04 + pl.glow * 0.3 + pl.reheat * 1.6);
+        // the flameholder up the pipe: dull orange dry, bright orange-yellow in reheat
+        glow.spawn(G.core, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, R * 1.4, R * 1.4, 1, 0.5 + 0.2 * pl.reheat, 0.18 + 0.12 * pl.reheat, 1, 0.04 + pl.glow * 0.3 + pl.reheat * 1.1);
         if (pl.reheat > 0.05) {
-          glow.spawn(G.glow, _p.x + _back.x * 0.6, _p.y + _back.y * 0.6, _p.z + _back.z * 0.6, vel.x, vel.y, vel.z, life, R * 1.4, R * 1.4, 1, 0.62, 0.3, 1, 1.4 * pl.reheat);
-          glow.spawn(G.halo, _p.x + _back.x * 1.5, _p.y + _back.y * 1.5, _p.z + _back.z * 1.5, vel.x, vel.y, vel.z, life, 3.4, 3.4, 1, 0.5, 0.2, 1, 0.16 * pl.reheat);
+          glow.spawn(G.halo, _p.x + _back.x * 1.5, _p.y + _back.y * 1.5, _p.z + _back.z * 1.5, vel.x, vel.y, vel.z, life, 3.4, 3.4, 1, 0.5, 0.2, 1, 0.05 * pl.reheat);
           v.lights.request(_p.x + _back.x * 2.5, _p.y + _back.y * 2.5, _p.z + _back.z * 2.5, 1, 0.6, 0.3, 1100 * pl.reheat, 70);
         }
         if (dist < 500) v.heat(_p, _p2.copy(_p).addScaledVector(_back, 4 + pl.length * 1.6), 1.0, 0.35 + 0.65 * pl.glow);
@@ -280,6 +291,7 @@ export class AircraftFx {
       }
     }
     this.plumes.end();
+    this.rings.end();
     this.cones.end();
     this._cloudStreaks(dt);
     this._rain(dt);
@@ -302,18 +314,34 @@ export class AircraftFx {
     const lum = 0.25 + 1.6 * (sky.r + sky.g + sky.b) / 3;
     if (speed > 15) _fwd.copy(cv).divideScalar(speed); else _fwd.copy(u.camFwd.value);
     const reach = Math.max(40, speed * 0.45);
-    const fall = (type, n, vy, life0, life1, w0, w1, r, g, b, k) => {
-      for (let i = 0; i < n; i++) {
-        randDir(_d);
-        const ahead = rnd(0.1, 1) * reach;
-        const lat = 1.5 + 26 * Math.random() ** 1.5;
-        _d.addScaledVector(_fwd, -_d.dot(_fwd)).normalize();
-        const x = cam.x + _fwd.x * ahead + _d.x * lat, y = cam.y + _fwd.y * ahead + _d.y * lat, z = cam.z + _fwd.z * ahead + _d.z * lat;
-        glow.spawn(type, x, y, z, wind.x, vy, wind.z, rnd(life0, life1), rnd(w0, w1), w0, r, g, b, 1, k * rnd(0.5, 1.1));
-      }
+    const place = (lat0, latK) => {
+      randDir(_d);
+      const ahead = rnd(0.1, 1) * reach;
+      const lat = lat0 + latK * Math.random() ** 1.5;
+      _d.addScaledVector(_fwd, -_d.dot(_fwd)).normalize();
+      return _p2.set(cam.x + _fwd.x * ahead + _d.x * lat, cam.y + _fwd.y * ahead + _d.y * lat, cam.z + _fwd.z * ahead + _d.z * lat);
     };
-    if (rain >= 0.03) fall(G.rain, Math.floor(2200 * rain * v.cfg.rate * dt + Math.random()), -9, 0.4, 0.8, 0.02, 0.045, 0.8, 0.86, 1, 16 * lum * rain);
-    if (snow >= 0.03) fall(G.snow, Math.floor(650 * snow * v.cfg.rate * dt + Math.random()), -1.5, 0.5, 1.0, 0.035, 0.08, 0.95, 0.97, 1, 8 * lum * snow);
+    // Rain: grey translucent drops, alpha-blended (a drop against a bright
+    // sky is darker than the sky; the additive streaks were glowing lines),
+    // a short shutter (1/80 s) so speed gives dashes instead of warp-speed
+    // lines, and a minimum on-screen width that spreads rather than adds
+    // light (L.rain: minPixels keeps the coverage).
+    if (rain >= 0.03) {
+      const n = Math.floor(2200 * rain * v.cfg.rate * dt + Math.random());
+      const k = sizeForRate(v.cfg.rate);
+      for (let i = 0; i < n; i++) {
+        const p = place(1.0, 14);
+        const w = rnd(0.03, 0.055) * k;
+        lit.spawn(L.rain, p.x, p.y, p.z, wind.x, -9, wind.z, rnd(0.4, 0.8), w, w, 0.72, 0.75, 0.8, Math.min(1, 2 * rain));
+      }
+    }
+    if (snow >= 0.03) {
+      const n = Math.floor(650 * snow * v.cfg.rate * dt + Math.random());
+      for (let i = 0; i < n; i++) {
+        const p = place(1.0, 14);
+        glow.spawn(G.snow, p.x, p.y, p.z, wind.x, -1.5, wind.z, rnd(0.5, 1.0), rnd(0.035, 0.08), 0.035, 0.95, 0.97, 1, 1, 8 * lum * snow * rnd(0.5, 1.1));
+      }
+    }
     const amt = Math.max(rain, snow * 0.6);
     const m = Math.floor(5 * amt * v.cfg.rate * dt + Math.random());
     for (let i = 0; i < m; i++) {
@@ -321,6 +349,18 @@ export class AircraftFx {
       const ahead = rnd(0.4, 1.2) * reach + 30;
       const x = cam.x + _fwd.x * ahead + _d.x * 60, y = cam.y + _fwd.y * ahead + _d.y * 40, z = cam.z + _fwd.z * ahead + _d.z * 60;
       lit.spawn(L.wisp, x, y, z, wind.x, -4, wind.z, rnd(0.6, 1.1), rnd(18, 30), rnd(26, 44), 0.8, 0.82, 0.86, 0.05 * amt);
+    }
+    // Curtains: the shafts of heavier rain a few hundred metres off that give
+    // a storm its depth. Tall grey veils hanging under the cloud, falling and
+    // drifting with the wind, born around the horizon.
+    if (rain >= 0.25) {
+      const c = Math.floor(3 * rain * v.cfg.rate * dt + Math.random());
+      for (let i = 0; i < c; i++) {
+        const a = rnd(Math.PI * 2), r = rnd(250, 1400);
+        const x = cam.x + Math.cos(a) * r, z = cam.z + Math.sin(a) * r;
+        const y = cam.y + rnd(-60, 120);
+        lit.spawn(L.wisp, x, y, z, wind.x, -6, wind.z, rnd(5, 9), rnd(60, 90), rnd(110, 170), 0.5, 0.52, 0.56, 0.09 * rain, 0, -rnd(0.5));
+      }
     }
   }
 
@@ -347,13 +387,21 @@ export class AircraftFx {
       const lat = rnd(2.5, 26);
       _d.addScaledVector(_fwd, -_d.dot(_fwd)).normalize();
       const x = cam.x + _fwd.x * ahead + _d.x * lat, y = cam.y + _fwd.y * ahead + _d.y * lat, z = cam.z + _fwd.z * ahead + _d.z * lat;
-      if (i % 4 === 0) lit.spawn(L.wisp, x, y, z, 0, 0, 0, rnd(0.35, 0.6), rnd(7, 12), rnd(12, 20), 0.95, 0.96, 1, 0.05 * inCloud);
+      if (i % 4 === 0) lit.spawn(L.wisp, x, y, z, 0, 0, 0, rnd(0.35, 0.6), rnd(7, 12), rnd(12, 20), 0.95, 0.96, 1, 0.2 * inCloud);
       else glow.spawn(G.streak, x, y, z, 0, 0, 0, rnd(0.25, 0.55), rnd(0.04, 0.1), 0.04, 0.85, 0.9, 1, 1, 7 * lum * inCloud);
     }
   }
 
+  /** Make every pipeline this module draws exist before the first frame that needs it. */
+  prewarm() {
+    this.plumes.prewarm();
+    this.rings.prewarm();
+    this.cones.prewarm();
+  }
+
   dispose() {
     this.plumes.dispose();
+    this.rings.dispose();
     this.cones.dispose();
   }
 }
