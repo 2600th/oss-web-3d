@@ -86,6 +86,29 @@ export class CombatVisuals {
 
   async init() {
     for (const id of ['aam_ir', 'aam_hobs', 'aam_long', 'sam', 'sam_large', 'rocket', 'bomb']) this.models[id] = await tryLoadModel(id);
+    this._prewarm();
+  }
+
+  /**
+   * The first missile used to stall the frame for most of a second: its
+   * body's colour and shadow pipelines were built on launch. One tiny clone
+   * of every store hangs just in front of the camera for the first frames
+   * (under the loading screen), so they are built then; clones share the
+   * source's geometry and materials, so every later launch reuses them.
+   */
+  _prewarm() {
+    const g = new THREE.Group();
+    g.name = 'combat-prewarm';
+    for (const src of Object.values(this.models)) {
+      if (!src) continue;
+      const c = src.clone();
+      c.traverse((o) => { o.frustumCulled = false; });
+      g.add(c);
+    }
+    if (!g.children.length) return;
+    g.scale.setScalar(1e-3);
+    this._warm = { group: g, frames: 4 };
+    this.group.add(g);
   }
 
   _addMissile(m) {
@@ -145,6 +168,11 @@ export class CombatVisuals {
   }
 
   update(dt) {
+    if (this._warm) {
+      const cam = this.game.camera;
+      this._warm.group.position.copy(cam.position).addScaledVector(cam.getWorldDirection(_p), 5);
+      if (--this._warm.frames <= 0) { this.group.remove(this._warm.group); this._warm = null; }
+    }
     // [vfx] Tracers have one owner: when the VFX system is present it draws
     // every live round itself (src/vfx/core/Tracers.js reads world.bullets),
     // so the placeholder boxes only run in a gameplay-only checkout.

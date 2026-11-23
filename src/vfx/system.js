@@ -7,6 +7,9 @@ import { Ribbons } from './core/Ribbons.js';
 import { Tracers } from './core/Tracers.js';
 import { Lights } from './core/Lights.js';
 import { Heat } from './core/Heat.js';
+import { Bolts } from './core/Bolts.js';
+import { ScorchRing } from './core/fxmath.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
 import { explosionRadius } from './core/ring.js';
 import { defineTypes, TRAILS } from './effects/types.js';
 import { Explosions } from './effects/Explosions.js';
@@ -23,6 +26,8 @@ const TIERS = {
 };
 
 const _clear = new THREE.Color();
+const _top = new THREE.Vector3();
+const _bottom = new THREE.Vector3();
 
 /** The VFX layer's own pass: same camera, transparent black clear. */
 class LayerPass extends PassNode {
@@ -61,6 +66,9 @@ class LayerPass extends PassNode {
  *   addAircraft(entity) / removeAircraft(entity)      afterburner, vapour, vortices
  *   light(position, [r,g,b], intensity, range, duration)
  *   heat(a, b, radius, strength)                      per-frame haze capsule
+ *   scorches                                          ScorchRing of ground blast marks
+ *                                                     ({positions, radii, births, packed, version})
+ *   prewarm()                                         build every VFX pipeline now (init runs it)
  *   stats()
  */
 class VfxSystem {
@@ -86,6 +94,9 @@ class VfxSystem {
     this.tracers = new Tracers(shared);
     this.lights = new Lights(game.scene, cfg.lights);
     this.heatField = new Heat(shared);
+    this.bolts = new Bolts(shared);
+    // ground blast marks for the terrain material to sample (see ARCHITECTURE)
+    this.scorches = new ScorchRing(32);
     const { L, G } = defineTypes(this.lit, this.glow);
     this.L = L; this.G = G;
     this.TRAILS = TRAILS;
@@ -97,7 +108,8 @@ class VfxSystem {
     this.lit.mesh.renderOrder = 1;
     this.glow.mesh.renderOrder = 3; // attached additive meshes (plumes) sit at 2
     this.tracers.mesh.renderOrder = 4;
-    this.scene.add(this.ribbons.mesh, this.lit.mesh, this.glow.mesh, this.tracers.mesh);
+    this.bolts.mesh.renderOrder = 4;
+    this.scene.add(this.ribbons.mesh, this.lit.mesh, this.glow.mesh, this.tracers.mesh, this.bolts.mesh);
     this.pass = new LayerPass(PassNode.COLOR, this.scene, game.camera, { depthBuffer: false });
     const layer = this.pass.getTextureNode();
     game.post.addSceneStage((color) => vec4(color.rgb.mul(layer.a.oneMinus()).add(layer.rgb), color.a), 55);
@@ -108,6 +120,9 @@ class VfxSystem {
     this.aircraft = new AircraftFx(this);
     this._wire(game);
     this.ready = true;
+    // Every pipeline the layer can need is built in the first frames (under
+    // the loading screen), not on the first gun burst / missile / explosion.
+    this._prewarmFrames = 3;
 
     if (import.meta.env.DEV) {
       const { installHarness } = await import('./dev/harness.js');
@@ -149,6 +164,7 @@ class VfxSystem {
       this.setDamage(this.aircraft.player, 0);
     });
     on('player:respawn', () => this.setDamage(this.aircraft.player, 0));
+    on('weather:lightning', (p) => p.position && this.lightning(p.position));
   }
 
   // ---------------- public API ----------------
@@ -175,6 +191,32 @@ class VfxSystem {
   }
 
   heat(a, b, radius, strength) { this.heatField.add(a, b, radius, strength); }
+
+  /**
+   * A cloud-to-ground channel under a strike at `position` (in the cloud).
+   * Lit by env.weather.lightning.intensity, so it pulses with the sky.
+   */
+  lightning(position) {
+    if (!this.ready) return;
+    const base = this.game.env?.clouds?.u?.base?.value ?? position.y;
+    const top = _top.set(position.x, Math.min(position.y, base + 150), position.z);
+    const g = terrainHeight(position.x, position.z);
+    const h = Math.max(200, top.y - g);
+    const a = Math.random() * Math.PI * 2, r = h * (0.05 + Math.random() * 0.25);
+    const bx = position.x + Math.cos(a) * r, bz = position.z + Math.sin(a) * r;
+    this.bolts.strike(top, _bottom.set(bx, terrainHeight(bx, bz), bz));
+  }
+
+  /** Make every pipeline the layer draws or computes exist now (one invisible instance of each). */
+  prewarm() {
+    const renderer = this.game.r.renderer;
+    this.lit.prewarm(renderer);
+    this.glow.prewarm(renderer);
+    this.tracers.prewarm();
+    this.bolts.prewarm();
+    this.aircraft.prewarm();
+    this.explosions.prewarm();
+  }
 
   stats() {
     return {
@@ -206,9 +248,11 @@ class VfxSystem {
     // One set of tracers: combat's live rounds, drawn here (combat's own
     // instanced boxes stand down when this system exists).
     this.tracers.update(game.systems?.combat?.world?.bullets ?? null, dt);
+    this.bolts.update(dt, game.env?.weather?.lightning?.intensity ?? 0);
     const renderer = game.r.renderer;
     this.lit.update(renderer);
     this.glow.update(renderer);
+    if (this._prewarmFrames > 0) { this._prewarmFrames--; this.prewarm(); }
   }
 
   dispose() {
@@ -219,6 +263,7 @@ class VfxSystem {
     this.glow?.dispose();
     this.ribbons?.dispose();
     this.tracers?.dispose();
+    this.bolts?.dispose();
     this.lights?.dispose();
   }
 }
