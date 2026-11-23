@@ -18,6 +18,14 @@ import { ACES } from './cast.js';
 const TOLOLING = { x: -32150, z: 500 };
 const TIGER = { x: -38950, z: 1860 };
 const BATALIK = { x: 25080, z: -20110 };
+// Black Road: the night pair comes up half a minute into the sortie, whichever
+// column the pilot is working by then (the flag stops a second spawn).
+const PROWL = {
+  when: { missionTime: 30, not: { flag: 'prowl' } },
+  do: [{ spawn: 'prowl' }, { flag: 'prowl' }, { music: { state: 'danger', level: 0.75 } }, { radio: ['control', 'Shikhar: two contacts up from the west, low and dark. They are hunting along the road. I will call them for you.', 2] }],
+};
+// Kesar: the (fictional) forward field by Kargil town, in the Suru valley.
+const KESAR = { x: 3300, z: -6300 };
 
 export const MISSIONS = [
   // ------------------------------------------------------------------ M1 --
@@ -168,33 +176,52 @@ export const MISSIONS = [
     summary: 'Supply columns are moving on the valley road under cover of darkness. Find their headlights and stop them.',
     briefing: [
       'Hostile supply columns run the valley road west of Drass after dark. Two are moving tonight.',
-      'There is a quarter moon and no cloud. The trucks drive on dipped headlights: look for the string of lights on the valley floor. In the dark your seeker has to be closer to the road before it will hold a vehicle.',
-      'Gunners cannot see you well at night, so their fire starts late and wide. Do not give them a second pass on the same line.',
-      'If five trucks reach the pass the ammunition is through, and the night is wasted. Guns and rockets are enough for trucks.',
+      'There is a quarter moon and no cloud. The trucks drive on dipped headlights: look for the string of lights on the valley floor. Nothing shows on your sight until you have seen it yourself, and when one is hit the rest kill their lights and run.',
+      'Guns sit along the road. Gunners cannot see you well at night, so their fire starts late and wide. Do not give them a second pass on the same line.',
+      'Night fighters are up. Shikhar will call them for you; you will see them by their burners. If five trucks reach the pass the ammunition is through, and the night is wasted.',
     ],
     start: { x: -15500, z: 9300, alt: 5200, heading: 268, speed: 250 },
     conditions: { time: 22.67, weather: 'clear' },
     specials: ['rkt', 'hobs', 'bomb'], special: 'rkt',
-    timeLimit: 720, parTime: 330, rank: { S: 11200, A: 9600, B: 7800, C: 5500 },
+    timeLimit: 720, parTime: 360, rank: { S: 12400, A: 10400, B: 8200, C: 5800 },
     maxAttackers: 2,
+    // Night spotting (missions/spotting.js): trucks and fighters are off the
+    // HUD until the pilot has seen them; a column goes dark when it is hit.
+    spotting: {
+      tags: ['night_trucks', 'night_air'],
+      // A dark truck shows from just outside a shoulder-launch team's night reach
+      // (3800 m x visibility 0.52 = 1960 m): finding it again is a test of
+      // patience, not a forced trip into the missiles.
+      truck: { lit: 5200, dark: 2200 }, fighter: { lit: 5000, dark: 2600 },
+      keep: 1.4, hold: 3800, lose: 8, scatter: { seconds: 20, speed: 1.45, spread: 2.2 },
+      darkLine: ['fac', 'Anvil Six. They have killed their lights and they are running. I have lost them on the floor.', 1],
+      picture: { every: 22, first: 6, range: 18000 },
+    },
     groups: {
-      col1: { kind: 'convoy', from: { x: -28500, z: 8100 }, heading: 280, length: 9000, count: 5, speed: 14, tags: ['night_trucks', 'night_col1'], isTarget: true },
-      col2: { kind: 'convoy', from: { x: -33000, z: 7700 }, heading: 280, length: 8500, count: 6, speed: 16, tags: ['night_trucks', 'night_col2'], isTarget: true },
-      picket1: { kind: 'base', near: { x: -31500, z: 8000 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'tent', count: 2 }] },
-      picket2: { kind: 'base', near: { x: -36500, z: 7400 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 2 }, { type: 'flak', count: 1 }] },
-      nightcap: { kind: 'fighters', type: 'veteran', count: 3, at: { x: -44000, z: -6000, alt: 6400 }, heading: 135, tags: ['night_air'], isTarget: true, aware: true },
+      col1: { kind: 'convoy', from: { x: -28500, z: 8100 }, heading: 280, length: 7200, count: 5, speed: 14, tags: ['night_trucks', 'night_col1'], isTarget: true },
+      col2: { kind: 'convoy', from: { x: -33000, z: 7700 }, heading: 280, length: 6800, count: 6, speed: 16, tags: ['night_trucks', 'night_col2'], isTarget: true },
+      picket1: { kind: 'base', near: { x: -31500, z: 8000 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 1 }, { type: 'tent', count: 2 }] },
+      picket2: { kind: 'base', near: { x: -36500, z: 7400 }, search: 1200, snap: 'flat', tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'manpads', count: 1 }, { type: 'flak', count: 1 }] },
+      // Guns strung along the road itself, so a pass down the column is a pass over them.
+      road1: { kind: 'base', near: { x: -29650, z: 7330 }, snap: false, spread: 110, tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }] },
+      road2: { kind: 'base', near: { x: -34800, z: 7720 }, snap: false, spread: 110, tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }, { type: 'flak', count: 1 }] },
+      road3: { kind: 'base', near: { x: -37750, z: 6950 }, snap: false, spread: 110, tags: ['night_picket'], units: [{ type: 'aaa', count: 2 }] },
+      // A pair working the valley while you are busy on the road.
+      prowl: { kind: 'fighters', type: 'bandit', count: 2, at: { x: -43000, z: 2500, alt: 5400 }, heading: 75, skillOverrides: { dark: true }, tags: ['night_air'], isTarget: true, aware: true },
+      nightcap: { kind: 'fighters', type: 'veteran', count: 2, at: { x: -44000, z: -6000, alt: 6400 }, heading: 135, skillOverrides: { dark: true }, tags: ['night_air'], isTarget: true, aware: true },
     },
     phases: [
       {
         id: 'first', name: 'First column', objective: { text: 'Find the headlights on the valley road and stop the column', track: { destroyed: 'night_col1', total: 5 }, marker: { x: -30500, z: 8000 } },
         enter: [
           { music: { state: 'cruise', level: 0.35 } },
-          { spawn: 'col1' }, { spawn: 'picket1' },
+          { spawn: 'col1' }, { spawn: 'picket1' }, { spawn: 'road1' },
           { radio: ['control', 'Vajra One, Shikhar. Dark night, clear air. First column is on the road west of Drass, moving west.', 1] },
           { radio: ['fac', 'Anvil Six. We can hear engines on the valley floor. Lights on the road, Vajra — a string of them.', 1] },
         ],
         triggers: [
-          { when: { destroyed: 'night_col1', count: 1 }, do: [{ music: { state: 'combat', level: 0.6 } }, { radio: ['fac', 'That lit the valley up! The rest are still rolling.', 1] }] },
+          { when: { destroyed: 'night_col1', count: 1 }, do: [{ music: { state: 'combat', level: 0.6 } }] },
+          PROWL,
           { when: { destroyed: 'night_col1' }, do: [{ bonus: { label: 'First column stopped', score: 1200 } }] },
         ],
         failWhen: { arrived: 'night_trucks', count: 5 }, failReason: 'escaped',
@@ -204,18 +231,19 @@ export const MISSIONS = [
         id: 'second', name: 'Second column', objective: { text: 'Stop the second column before the pass', track: { destroyed: 'night_col2', total: 6 }, marker: { x: -35000, z: 7600 } },
         enter: [
           { music: { state: 'combat', level: 0.7 } },
-          { spawn: 'col2' }, { spawn: 'picket2' },
+          { spawn: 'col2' }, { spawn: 'picket2' }, { spawn: 'road2' }, { spawn: 'road3' },
           { radio: ['control', 'Shikhar: second column, further west, six vehicles and moving faster. Guns are covering the road ahead of them.', 2] },
         ],
         triggers: [
           { when: { destroyed: 'night_col2' }, do: [{ bonus: { label: 'Second column stopped', score: 1200 } }] },
-          { when: { time: 45 }, do: [{ spawn: 'nightcap' }, { music: { state: 'danger', level: 0.85 } }, { radio: ['control', 'Vajra One, three contacts from the north-west, no lights, descending. Night fighters.', 2] }] },
+          PROWL,
+          { when: { time: 45 }, do: [{ spawn: 'nightcap' }, { music: { state: 'danger', level: 0.85 } }, { radio: ['control', 'Vajra One, two more from the north-west, no lights, descending. Night fighters.', 2] }] },
         ],
         failWhen: { arrived: 'night_trucks', count: 5 }, failReason: 'escaped',
         done: { all: [{ any: [{ destroyed: 'night_col2' }, { arrived: 'night_col2' }] }, { time: 46 }] },
       },
       {
-        id: 'cap', name: 'Night fighters', objective: { text: 'Shoot down the night fighters', track: { destroyed: 'night_air' } },
+        id: 'cap', name: 'Night fighters', objective: { text: 'Shoot down the night fighters', track: { destroyed: 'night_air', total: 4 } },
         enter: [{ radio: ['wing', 'Two is blind up here, lead. Watch for their burners.', 1] }],
         done: { destroyed: 'night_air' },
         exit: [
@@ -294,17 +322,21 @@ export const MISSIONS = [
     summary: 'A hostile fighter sweep is coming in under cover of a storm. Hold the sky over Kargil.',
     briefing: [
       'A storm cell is sitting over the Suru valley, and hostile fighters are using it: three groups, coming to sweep the sky ahead of their own strike.',
-      'Solid cloud from 5700 to 7400 metres. An aircraft inside it cannot be held by a heat-seeker, and they know it. Neither can you.',
+      'Solid cloud from 5700 to 7400 metres. A heat-seeker cannot hold an aircraft inside it and a gunner cannot see past his own nose. That cuts both ways: they will hide in it, and so can you when a missile is coming.',
       'The radar missile does not care about cloud. Take it, and shoot before the merge.',
+      'There will be a gap after the second group. Kesar has a hot-turn crew standing by under the cloud; take the top-up if you need it.',
       'Expect rough air: the gun will be hard work. Fly the aircraft first.',
     ],
     start: { x: -6000, z: 2500, alt: 5300, heading: 40, speed: 270 },
     conditions: { time: 16.2, weather: 'storm' },
     specials: ['lraam', 'hobs'], special: 'lraam',
-    timeLimit: 780, parTime: 330, rank: { S: 13200, A: 11500, B: 9000, C: 6500 },
+    timeLimit: 900, parTime: 420, rank: { S: 13200, A: 11500, B: 9000, C: 6500 },
     maxAttackers: 2,
     groups: {
       raid1: { kind: 'fighters', type: 'bandit', count: 3, at: { x: 12000, z: -30000, alt: 6500 }, heading: 205, tags: ['storm_air'], isTarget: true, aware: true },
+      // Four-ships, one group at a time, with the regroup between the last two.
+      // (Pairs from two sides were measured too: the radar missile picks a
+      // pair apart before the merge and the sortie stops being a fight.)
       raid2: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 30000, z: -22000, alt: 6600 }, heading: 240, tags: ['storm_air'], isTarget: true, aware: true },
       raid3: { kind: 'fighters', type: 'veteran', count: 4, at: { x: 2000, z: -36000, alt: 6800 }, heading: 185, speed: 290, tags: ['storm_air'], isTarget: true, aware: true },
     },
@@ -321,22 +353,44 @@ export const MISSIONS = [
           { when: { time: 30 }, do: [{ radio: ['control', 'Shikhar: they are holding in cloud. Heat-seekers will not hold them there. Radar shot, or wait for them to come down.', 1] }] },
         ],
         done: { destroyed: 'storm_air', count: 3 },
+        exit: [{ radio: ['control', 'Shikhar: first group is down. The next four are a minute or two out, from the east. Get your speed back.', 1] }],
       },
       {
         id: 'second', name: 'Second group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
           { spawn: 'raid2' },
-          { radio: ['control', 'Second group, four more, from the east. These are better. They will try to drag you up into the weather.', 2] },
+          { radio: ['control', 'Second group, four from the east. These are better. They will try to drag you up into the weather.', 2] },
+        ],
+        triggers: [
+          { when: { time: 20 }, do: [{ radio: ['wing', 'Lead, Two. If one gets a heat-seeker on you, climb into the grey. It will lose you there.', 1] }] },
         ],
         done: { destroyed: 'storm_air', count: 7 },
+      },
+      {
+        // The breather: a top-up under the cloud, or straight on if you would rather.
+        id: 'regroup', name: 'Regroup', objective: { text: 'Gap in the raid: top up over Kesar, under the cloud', marker: KESAR },
+        enter: [
+          { music: { state: 'cruise', level: 0.45 } },
+          { radio: ['control', 'Shikhar: scope is clear for now. The last group is forming up north. You have a minute, Vajra One.', 1] },
+          { radio: ['tower', 'Kesar Tower. Hot-turn crew is on the apron. Come through low over the field, under the cloud, and we will top you up.', 1] },
+        ],
+        triggers: [
+          { when: { zone: { ...KESAR, r: 3200, below: 5600 } }, do: [
+            { resupply: { health: 35, flares: 36, msl: 12, sp: 2 } }, { flag: 'topped_up' },
+            { radio: ['tower', 'Kesar Tower. Rails full, flares in, the worst of it patched. Go and finish it, Vajra One.', 2] },
+          ] },
+        ],
+        done: { any: [{ flag: 'topped_up' }, { time: 75 }] },
       },
       {
         id: 'third', name: 'Last group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
           { music: { state: 'danger', level: 0.95 } },
-          { maxAttackers: 3 },
           { spawn: 'raid3' },
           { radio: ['control', 'Shikhar: last group, four, north, fast. That is everything they have in this weather. Hold them.', 2] },
+        ],
+        triggers: [
+          { when: { destroyed: 'storm_air', count: 9 }, do: [{ radio: ['control', 'Shikhar: two remaining. Keep your speed up and stay out of their sights.', 1] }] },
         ],
         done: { destroyed: 'storm_air', count: 11 },
         exit: [
