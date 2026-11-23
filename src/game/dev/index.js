@@ -66,6 +66,9 @@ export function install(game) {
    * the flow leaves the sortie.
    */
   dev.sim = (seconds, dt = 1 / 30) => {
+    // Slow-motion kill cams would stretch a headless run; switch them off.
+    if (game.cameraRig.options) game.cameraRig.options.killCam = false;
+    game.timeScale = Math.max(game.timeScale, 1);
     const n = Math.round(seconds / dt);
     for (let i = 0; i < n; i++) {
       game.update(dt);

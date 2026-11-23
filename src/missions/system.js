@@ -240,12 +240,20 @@ export class MissionSystem {
     this._opticOn = on;
     const game = this.game;
     game.events.emit('camera:request', on ? { mode: 'optic', fov: OPTIC.fov, depression: OPTIC.depression } : { mode: 'restore' });
-    // Gameplay-only checkout: no camera system to honour the request, so drive
-    // the foundation rig directly (first-person, narrow field of view).
-    if (!game.systems.camera) {
-      const rig = game.cameraRig;
-      if (on) { this._savedCam = { mode: rig.mode, fov: rig.baseFov }; rig.mode = 'hud'; rig.baseFov = OPTIC.fov; }
-      else if (this._savedCam) { rig.mode = this._savedCam.mode; rig.baseFov = this._savedCam.fov; this._savedCam = null; }
+    // The rig has no optic view of its own: borrow the HUD-only first-person
+    // view at the optic's field of view, and put everything back afterwards.
+    const rig = game.cameraRig;
+    const set = (mode) => (rig.setMode ? rig.setMode(mode) : (rig.mode = mode));
+    if (on) {
+      this._savedCam = { mode: rig.mode, baseFov: rig.baseFov, cockpitFov: rig.cockpitFov };
+      set('hud');
+      rig.baseFov = OPTIC.fov;
+      if (rig.cockpitFov !== undefined) rig.cockpitFov = OPTIC.fov;
+    } else if (this._savedCam) {
+      set(this._savedCam.mode);
+      rig.baseFov = this._savedCam.baseFov;
+      if (this._savedCam.cockpitFov !== undefined) rig.cockpitFov = this._savedCam.cockpitFov;
+      this._savedCam = null;
     }
   }
 

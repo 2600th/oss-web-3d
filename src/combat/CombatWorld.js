@@ -144,7 +144,7 @@ export class CombatWorld {
 
   /** Timed AA shell burst. */
   flak(position, radius, damage, owner) {
-    this.events.emit('explosion', { position: position.clone(), size: 'small', kind: 'air' });
+    this.events.emit('explosion', { position: position.clone(), size: 'small', kind: 'flak' });
     const p = this.player;
     if (p?.alive && owner?.team !== p.team) {
       const d = p.position.distanceTo(position);

@@ -251,7 +251,7 @@ export const MISSIONS = [
       {
         id: 'irbis', name: 'Irbis', objective: { text: 'Survive Irbis flight — shoot down all four', track: { destroyed: 'm4_aces' } },
         enter: [
-          { music: { state: 'danger', level: 1 } },
+          { music: { state: 'ace', level: 1 } },
           { maxAttackers: 2 },
           { spawn: 'irbisA' },
           { radio: ['control', 'Vajra One — Shikhar. Two contacts, north, very high, very fast. They are not answering to any pattern we know.', 2] },

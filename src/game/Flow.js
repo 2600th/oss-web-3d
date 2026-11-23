@@ -75,7 +75,7 @@ export class Flow {
     }
   }
 
-  _menuMusic() { this.game.events.emit('music:intensity', { level: 0.2, state: 'menu' }); }
+  _menuMusic(state = 'menu') { this.game.events.emit('music:intensity', { level: 0.2, state }); }
 
   // ---------------------------------------------------------------- API --
 
@@ -103,6 +103,7 @@ export class Flow {
     if (!m || !m.unlocked) return false;
     this.selected = id;
     this.special = m.special;
+    this._menuMusic('briefing');
     this._set('briefing', { mission: m, special: this.special });
     return true;
   }
@@ -162,7 +163,10 @@ export class Flow {
     this.game.playerControl = false;
     this.ms.stop();
     this._cinematic(true);
-    if (result.remembrance) this._set('remembrance', { remembrance: result.remembrance, result });
+    if (result.remembrance) {
+      this._menuMusic('memorial');
+      this._set('remembrance', { remembrance: result.remembrance, result });
+    }
     else this._set('debrief', { result });
   }
 
@@ -173,7 +177,7 @@ export class Flow {
       case 'select': return this.selectMission(this.selected ?? this.missions[0]?.id);
       case 'briefing': return this.startMission();
       case 'pause': return this.resume();
-      case 'remembrance': return this._set('debrief', { result: this.result });
+      case 'remembrance': this._menuMusic(this.result?.completed ? 'victory' : 'defeat'); return this._set('debrief', { result: this.result });
       case 'debrief': return this.openSelect();
       default: return false;
     }

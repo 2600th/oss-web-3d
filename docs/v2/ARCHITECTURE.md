@@ -226,3 +226,61 @@ when unavoidable; say so in your report.
   `game|hud|flight` → in-flight score. The player is recognised in payload entities by
   `isPlayer === true`, `kind/team === 'player'`, `=== game.player`, the string
   `'player'`, or (for `weapon:gun` only) a missing entity.
+
+- **gameplay (combat, AI, missions, controls, flow).** All catalogue events are
+  emitted with the documented payloads. Additions (all additive / optional):
+  - **Player identity.** The player's combat entity is `game.systems.combat.player`
+    (`isPlayer: true`, `id: 'player'`, `kind: 'player'`, `team: 'friendly'`; live
+    `position/velocity/quaternion` from the flight model, `object3d = game.player.group`,
+    `engine {throttle, reheat}`). It is the `owner` of the player's missiles, the
+    `killer` in `target:destroyed`, the `entity` in the player's `weapon:gun` and the
+    `target` of hostile missiles. `aircraft:spawn/despawn` are emitted for hostile
+    aircraft only. Hostile entities: `team: 'hostile'`, `kind` one of
+    `fighter|ace|aaa|flak|manpads|sam|radar|bunker|sangar|supply|tent|truck`,
+    `class: 'air'|'ground'`; recon posts are `kind: 'post'`, `team: 'neutral'`.
+  - **Missiles** carry `weapon` (the table entry, `weapon.id`), `motor` (bool, burning),
+    `target`, `age`, `speed`, `object3d`. `missile.kind` follows the catalogue;
+    `explosion.kind` is `'flak'` for AA shell bursts. Flares: `{position, velocity, owner, age, life}`.
+  - **Extra events:** `target:select {target}`, `weapon:switch {current, weapon}`,
+    `weapon:empty {weapon}`, `weapon:flak {entity, position}` (a shell is on its way),
+    `recon:capture {target, quality, captured, total}`, `score:bonus {label, score}`,
+    `controls:mode {mode}`, `camera:request {mode: 'optic'|'cinematic'|'restore', fov?, subject?}`,
+    `flow:state {state}`, `ai:engage|ai:fire {entity}`, `ai:samLaunch {entity, radarGuided}`.
+    `radio` payloads also carry `duration` (s). `music:intensity.state` may be
+    `briefing`, `memorial`, `ace` (audio's extended set).
+  - **`game.hud` additions:** `highG`, `speedLimits {stall, corner, max}`, `controlMode`,
+    `weapon {id, short, type, rails[], ccip (Vector3|null), lockRange, lockCone}`,
+    `weapons {msl, sp}`, `gun {maxAmmo, range, lead (Vector3|null: aim point)}`,
+    `flares.max`, `lockWarning` (a hostile is locking you), `target` (the selected
+    entry of `targets`), `targets[].{entity, class, selected}`, `targets[].screen` is
+    0..1 from the top-left, `threats[].{level, missile}`, `timeRemaining`,
+    `objective.marker {x, z}`, `mission.phaseName`, `radio {callsign, text, age}|null`,
+    `recon {active, captured, total, progress, focus, quality, axis, fov}|null`.
+  - **Input** (`src/core/Input.js`): one table `DEFAULT_BINDINGS`; `input.actions.<name>`
+    (held), `input.pressed.<name>` (true for one frame, shared), `input.consume(name)`,
+    `input.rebind(action, {keys, pad, mouse})`, `input.mode` (`standard|expert`,
+    `setMode`), `input.invertPitch`, `input.look` (right stick). Touch/UI:
+    `setAction(name, held)`, `pressAction(name)`, `setTouchAxes(pitch, roll)`,
+    `setTouchThrottle(0..1|null)`. Actions include `camera`, `lookTarget` (G / R3),
+    `missileCam` (B), `optic` (V) — these exist as actions, so the camera system's
+    fallback keys (V for look-at-target) are not used; V is the recon optic.
+  - **Flow** (`game.flow`, `src/game/Flow.js`): `state` is
+    `title|select|briefing|sortie|pause|remembrance|debrief`; every change emits
+    `ui:screen {screen: state, ...data}`. Methods: `openSelect()`, `selectMission(id)`,
+    `setSpecial(id)`, `startMission(id?, {special})`, `pause()`, `resume()`, `retry()`,
+    `quitToMenu()`, `toTitle()`, `confirm()`, `back()`; data: `missions`, `mission`,
+    `selected`, `special`, `result`, `cinematic {active, subject}`. Flow owns the pause
+    key and auto-pauses when the tab is hidden. Until a system named `ui`/`hud`/`screens`
+    exists a keyboard fallback drives it (Enter / Backspace / 1-5 / R); set
+    `flow.fallbackKeys = false` to take over. `?mission=m1[&special=rkt]` starts a sortie.
+    Note for audio: the in-flight screen is `sortie` and the memorial is `remembrance`
+    (not `game`/`memorial`); the matching `music:intensity` states are emitted alongside.
+  - **Game.js:** `game.playerControl`, `game.autopilot`, `game.spawnAt({x, z, alt|agl,
+    heading (compass deg), speed})`; a crash no longer respawns by itself (the mission
+    fails and flow moves on); the game still ticks `input` and `flow` while `paused`.
+  - **Flight:** `flight.damage` (0..1), `flight.destroyed`, `flight.highG`; airbrake +
+    pull is a high-G turn. Standard mode uses AssistController profile `combat`
+    (lift-vector law); Expert is direct.
+  - The recon optic borrows `cameraRig` view `hud` and narrows `baseFov`/`cockpitFov`
+    while V is held (restored on release) — camera owner: replace with a real optic
+    view on `camera:request {mode: 'optic'}` when convenient.
