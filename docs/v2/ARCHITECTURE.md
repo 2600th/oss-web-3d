@@ -212,3 +212,17 @@ when unavoidable; say so in your report.
   also carries `base`. Input actions read if present: `camera`, `lookTarget`,
   `missileCam` (fallback keys C / V / B). URL flags: `?gputime`,
   `?reducedMotion`, `?nokillcam`, `?cinematic=<name>`, `?aa=traa|fxaa|smaa|none`.
+
+- **audio (additive, optional):** `game.systems.audio` exposes `setVolume(bus, v)` /
+  `getVolume(bus)` (bus `master|music|sfx|radio|ui|ambience`, 0..1, persisted in
+  localStorage `safedSagar.audio.v1`), `setMuted`, `ui(name)`, `setMusic(state, level)`,
+  `stinger('complete'|'failed')`, `say(radioMsg)`, `play(id, opts)`, `unlock()`.
+  Extra accepted inputs: `music:intensity.state` may also be `briefing`, `ace`,
+  `memorial`, `silence`; `explosion.kind` may be `flak`; `weapon:gun` from an entity
+  with `kind: 'aaa'|'flak'` plays AAA bursts; new optional event `ui:sound {name}`
+  (`click|hover|confirm|back|error|kill|hit`). Any DOM `button`/`[role=button]` click
+  plays `ui_click` unless it has `data-sound="none"` (or `data-sound="confirm"` etc.).
+  `ui:screen` values `title|menu|main|hangar` → menu theme, `briefing`, `memorial`,
+  `game|hud|flight` → in-flight score. The player is recognised in payload entities by
+  `isPlayer === true`, `kind/team === 'player'`, `=== game.player`, the string
+  `'player'`, or (for `weapon:gun` only) a missing entity.
