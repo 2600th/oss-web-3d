@@ -220,6 +220,11 @@ export function upgradeGroundMaterials(root, { tier = 'high', env = null } = {})
       return memo(src, key, () => {
         const m = toNodeMaterial(src, THREE.MeshStandardNodeMaterial);
         filterTextures(m, tier);
+        // Ground kit is built from open, single-sided shells (tarps, bed planks,
+        // fenders, nets). The default shadow side for a front-faced material is
+        // the back face, so a shell lit from its front cast nothing and a truck
+        // threw a lattice of holes. Cast from both faces.
+        m.shadowSide = THREE.DoubleSide;
         if (low || src.userData?.noDetail) return m;
         const burned = !!src.userData?.burned;
         const p = positionLocal;
