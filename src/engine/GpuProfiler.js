@@ -54,6 +54,11 @@ export class GpuProfiler extends InspectorBase {
     const backend = renderer.backend;
     if (!backend.trackTimestamp) return false;
     this.available = true;
+    // three warns once on WebGL2 ("toInspector() is only available with
+    // WebGPU") whenever a non-default inspector meets an InspectorNode (its
+    // shadow nodes carry some). We never inspect nodes, so present ourselves
+    // as the base class to that check; the per-pass hooks still run.
+    Object.defineProperty(this, 'constructor', { value: InspectorBase, configurable: true });
     renderer.inspector = this;
     return true;
   }
