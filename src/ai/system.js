@@ -8,12 +8,28 @@ import { terrainHeight } from '../world/terrain/heightfield.js';
 import { Fighter } from './Fighter.js';
 import { GroundUnit, Convoy } from './ground.js';
 import { findSite, scatterSites, traceValleyRoad, mulberry32 } from './sites.js';
+import { DIFFICULTY } from '../game/difficulty.js';
 import { groundModel, hostileFighterModel, loadBaseKit, preloadModels, wreck } from './models.js';
 
 export const order = 55;
 export function createSystem(game) { return new AiSystem(game); }
 
 const D2R = Math.PI / 180;
+
+let _lampGeo = null, _lampMat = null;
+/** Two small emissive lamps at the front of a truck (HDR, so they bloom). */
+function headlights() {
+  _lampGeo ??= new THREE.SphereGeometry(0.45, 8, 6);
+  _lampMat ??= new THREE.MeshBasicMaterial({ color: new THREE.Color(14, 12, 8) });
+  const g = new THREE.Group();
+  g.name = 'headlights';
+  for (const x of [-0.8, 0.8]) {
+    const m = new THREE.Mesh(_lampGeo, _lampMat);
+    m.position.set(x, 1.3, -3.2);
+    g.add(m);
+  }
+  return g;
+}
 const FORMATION = [
   { x: 0, y: 0, z: 0 }, { x: 70, y: -8, z: -90 }, { x: -70, y: -8, z: -90 }, { x: 140, y: -16, z: -180 },
 ];
@@ -36,7 +52,7 @@ export class AiSystem {
     /** Missions switch this off for cinematic / briefing states. */
     this.hostile = true;
     this._tokenTimer = 0;
-    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false };
+    this.ctx = { player: null, world: null, events: game.events, tokens: this.tokens, hostile: true, playerAgl: 0, alerted: false, difficulty: DIFFICULTY.normal, conditions: null };
 
     game.events.on('target:destroyed', ({ target }) => this._onDestroyed(target));
   }
@@ -47,6 +63,14 @@ export class AiSystem {
     this.ctx.world = this.combat.world;
     preloadModels();
   }
+
+  /** Apply a difficulty table (game/difficulty.js) to everything alive and everything spawned later. */
+  setDifficulty(d) {
+    this.ctx.difficulty = d;
+    for (const f of this.fighters) f.setDifficulty(d);
+  }
+
+  get difficulty() { return this.ctx.difficulty; }
 
   // -------------------------------------------------------------- spawn --
 
@@ -79,10 +103,10 @@ export class AiSystem {
       const f = new Fighter({
         skill: ace ? (ace.skill ?? 'ace') : (def.type ?? 'bandit'),
         name: ace ? ace.callsign : (def.names?.[i] ?? (def.type === 'veteran' ? 'BANDIT (VET)' : 'BANDIT')),
-        isAce: !!ace, ace, health: ace?.health ?? def.health, score: ace?.score ?? def.score,
+        isAce: ace?.lead === true, ace, health: ace?.health ?? def.health, score: ace?.score ?? def.score,
         skillOverrides: ace?.skillOverrides ?? def.skillOverrides, airframeOverrides: ace?.airframeOverrides,
         role: i === 0 ? 'lead' : 'wing', leader, slot, route: i === 0 ? route : null,
-        tags: [...(def.tags ?? [])], isTarget: def.isTarget,
+        tags: [...(def.tags ?? [])], isTarget: def.isTarget, difficulty: this.ctx.difficulty,
       }, this.rng);
       if (i === 0) leader = f;
       const p = base.clone().addScaledVector(fwd, slot.z).addScaledVector(right, slot.x);
@@ -108,6 +132,8 @@ export class AiSystem {
     const e = u.entity;
     this.root.add(e.object3d);
     if (def.model !== false) groundModel(type).then((m) => { u.model = m; e.object3d.add(m); if (!e.alive) wreck(e.object3d, type); });
+    // Night convoys drive on dipped headlights: the way to find them.
+    if (type === 'truck' && this.ctx.conditions?.night) e.object3d.add(headlights());
     this.combat.addTarget(e);
     this.ground.push(u);
     return u;
@@ -171,6 +197,7 @@ export class AiSystem {
     } else if (target.unit) {
       if (target.armor === 'soft' && target.kind !== 'truck') target.object3d.visible = false;
       else wreck(target.object3d, target.unit.wreckId ?? target.kind);
+      target.object3d.getObjectByName('headlights')?.removeFromParent();
       target.unit._setFiring?.(false, this.ctx);
       target.velocity.set(0, 0, 0);
     }
@@ -205,8 +232,9 @@ export class AiSystem {
     this.tokens.clear();
     const p = this.ctx.player.position;
     const alive = this.fighters.filter((f) => f.entity.alive && f.mem.aware);
-    alive.sort((a, b) => (a.entity.isAce ? -1e9 : 0) + a.flight.position.distanceToSquared(p) - ((b.entity.isAce ? -1e9 : 0) + b.flight.position.distanceToSquared(p)));
-    for (let i = 0; i < Math.min(this.maxAttackers, alive.length); i++) this.tokens.add(alive[i]);
+    alive.sort((a, b) => (a.pilot ? -1e9 : 0) + a.flight.position.distanceToSquared(p) - ((b.pilot ? -1e9 : 0) + b.flight.position.distanceToSquared(p)));
+    const cap = Math.max(1, this.maxAttackers + this.ctx.difficulty.attackers);
+    for (let i = 0; i < Math.min(cap, alive.length); i++) this.tokens.add(alive[i]);
   }
 
   update(dt, game) {

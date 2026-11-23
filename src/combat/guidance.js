@@ -157,3 +157,42 @@ export function ballisticImpact(out, pos, vel, groundHeight, { drag = 0, maxTime
   out.set(x, y, z);
   return Infinity;
 }
+
+/**
+ * Impact point of an unguided rocket fired now (rocket CCIP).
+ *
+ * Mirrors CombatWorld's rocket integration: the motor accelerates it along
+ * its flight path to `maxSpeed` for `burn` seconds, then drag takes over, and
+ * gravity (scaled by the weapon's `gravity`) bends the path the whole way.
+ * The pipper used to be the point the nose was looking at, which ignores the
+ * drop: about 20 m short at 2 km, most of a 24 m blast radius.
+ *
+ * @param {(x:number,z:number)=>number} groundHeight
+ * @returns {number} time of flight, Infinity when it does not come down in `weapon.life`
+ */
+export function rocketImpact(out, pos, dir, inheritedSpeed, weapon, groundHeight, dt = 1 / 30) {
+  const g = G * (weapon.gravity ?? 0.5);
+  let speed = Math.max(inheritedSpeed, 80) + (weapon.launchBoost ?? 0);
+  const l = Math.hypot(dir.x, dir.y, dir.z) || 1;
+  let vx = (dir.x / l) * speed, vy = (dir.y / l) * speed, vz = (dir.z / l) * speed;
+  let x = pos.x, y = pos.y, z = pos.z;
+  for (let t = 0; t < weapon.life; t += dt) {
+    vy -= g * dt;
+    speed = Math.hypot(vx, vy, vz);
+    const next = t < weapon.burn ? Math.min(weapon.maxSpeed, speed + weapon.accel * dt) : speed - speed * weapon.coastDrag * dt;
+    const k = Math.max(next, 1) / Math.max(speed, 1e-6);
+    vx *= k; vy *= k; vz *= k;
+    const nx = x + vx * dt, ny = y + vy * dt, nz = z + vz * dt;
+    const h = groundHeight(nx, nz);
+    if (ny <= h) {
+      const above = y - groundHeight(x, z);
+      const f = above / Math.max(1e-6, above - (ny - h));
+      out.set(x + (nx - x) * f, 0, z + (nz - z) * f);
+      out.y = groundHeight(out.x, out.z);
+      return t + dt * f;
+    }
+    x = nx; y = ny; z = nz;
+  }
+  out.set(x, y, z);
+  return Infinity;
+}

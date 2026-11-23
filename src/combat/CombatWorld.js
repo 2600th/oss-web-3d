@@ -4,6 +4,7 @@
 import { Vector3, Quaternion } from 'three';
 import { G, pnAcceleration, steerVelocity, segmentPointDistSq, flareDecoys } from './guidance.js';
 import { WEAPONS, damageAgainst } from './weapons.js';
+import { DIFFICULTY } from '../game/difficulty.js';
 
 const MAX_BULLETS = 768;
 const _a = new Vector3();
@@ -12,6 +13,13 @@ const _p = new Vector3();
 const _n = new Vector3();
 const _fwd = new Vector3(0, 0, -1);
 const _t = { t: 0 };
+
+/** A missile's flare susceptibility at a difficulty (radar missiles stay immune). */
+export function flareChanceFor(weapon, team, d = DIFFICULTY.normal) {
+  const base = weapon.flareChance ?? 0;
+  if (!(base > 0) || team !== 'hostile') return base;
+  return Math.min(0.95, Math.max(0.05, base + d.flare));
+}
 
 let nextId = 1;
 export const newId = (prefix) => `${prefix}${nextId++}`;
@@ -34,6 +42,12 @@ export class CombatWorld {
     this.player = null;
     this.stats = { gunFired: 0, gunHits: 0, mslFired: 0, mslHits: 0, kills: 0, airKills: 0, groundKills: 0, damageTaken: 0 };
     this.god = false;
+    /** Scales damage to the player and hostile missiles (game/difficulty.js). */
+    this.difficulty = DIFFICULTY.normal;
+    /** Weather for the sortie (missions/conditions.js), or null. */
+    this.conditions = null;
+    /** 0..1, how deep in cloud the player is (from the environment, when it knows). */
+    this.playerInCloud = 0;
 
     this.bullets = {
       n: 0,
@@ -76,6 +90,13 @@ export class CombatWorld {
     if (i >= 0) this.targets.splice(i, 1);
   }
 
+  /** Is this aircraft hidden from infra-red by cloud right now? */
+  cloaked(e) {
+    const c = this.conditions?.cloud;
+    if (c && e.position.y > c.base && e.position.y < c.top) return true;
+    return e === this.player && this.playerInCloud > 0.6;
+  }
+
   // ------------------------------------------------------------- launch --
 
   /**
@@ -97,6 +118,8 @@ export class CombatWorld {
       alive: true, age: 0, lost: 0, motor: w.type !== 'bomb', guide,
       speed: vel.length(), lastRange: Infinity, isMissile: true,
     };
+    // Hostile missiles turn harder / softer with the difficulty.
+    if (w.maxG && m.team === 'hostile') m.maxG = w.maxG * this.difficulty.missile;
     m.quaternion.setFromUnitVectors(_fwd, dir);
     this.missiles.push(m);
     if (owner === this.player && w.type === 'missile') this.stats.mslFired++;
@@ -133,7 +156,7 @@ export class CombatWorld {
       if (flareDecoys({
         missilePos: m.position, missileDir: _d, seekerCos: Math.cos(m.weapon.seekerCone ?? 0.8),
         targetPos: owner.position, targetForward: fwd, flarePos: flare.position,
-        flareChance: m.weapon.flareChance ?? 0, roll: this.rng(),
+        flareChance: flareChanceFor(m.weapon, m.team, this.difficulty), roll: this.rng(),
       })) {
         m.target = flare;
         m.decoyed = true;
@@ -159,10 +182,12 @@ export class CombatWorld {
     if (!target.alive || amount <= 0 || target.invulnerable) return false;
     if (target === this.player) {
       if (this.god) return false;
+      amount *= this.difficulty.damage;
       target.health = Math.max(0, target.health - amount);
       this.stats.damageTaken += amount;
       this.events.emit('player:hit', {
         damage: amount, health: target.health / target.maxHealth, source, position: (position ?? target.position).clone(),
+        weapon: weapon?.id ?? null,
       });
       if (target.health <= 0) {
         target.alive = false;
@@ -291,6 +316,8 @@ export class CombatWorld {
             // launch grace so a high-off-boresight shot can come round).
             if (m.age > 0.35 && cos < Math.cos(w.seekerCone)) ok = false;
             if (ok && m.guide && !m.guide(m)) ok = false;
+            // An infra-red seeker cannot hold a target inside solid cloud.
+            if (ok && w.guidance === 'ir' && tgt.class === 'air' && !tgt.isFlare && this.cloaked(tgt) && this.rng() < (this.conditions?.irLoss ?? 0.3) * dt) ok = false;
           }
           if (!ok) {
             m.target = tgt = null;
@@ -301,7 +328,7 @@ export class CombatWorld {
           if (tgt.class !== 'air' && !tgt.isFlare) { _n.copy(tgt.position); _n.y += 5; pnAcceleration(_a, m.position, m.velocity, _n, tgt.velocity, w.nav); }
           else pnAcceleration(_a, m.position, m.velocity, tgt.position, tgt.velocity, w.nav);
           _a.y += G; // hold altitude against gravity
-          pulled = steerVelocity(m.velocity, _a, w.maxG * Math.min(1, 0.25 + m.age * 2.5), dt);
+          pulled = steerVelocity(m.velocity, _a, (m.maxG ?? w.maxG) * Math.min(1, 0.25 + m.age * 2.5), dt);
         } else {
           m.lost += dt;
           if (m.lost > 1.4) return this._detonate(m, 'miss');

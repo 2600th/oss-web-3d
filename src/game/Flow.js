@@ -14,6 +14,11 @@
 // Enter = continue, Backspace = back, 1-5 = pick a mission, R = cycle the
 // special weapon in the briefing. Set `flow.fallbackKeys = false` to disable.
 import { Autopilot } from './Autopilot.js';
+import { TIMES, WEATHER, WEATHER_KEYS } from '../missions/conditions.js';
+import { DIFFICULTY_LEVELS, DEFAULT_DIFFICULTY, difficultyFor, difficultyList } from './difficulty.js';
+
+const DIFFICULTY_KEY = 'safedsagar.v2.difficulty';
+const CONDITIONS_KEY = 'safedsagar.v2.freeConditions';
 
 export const FLOW_STATES = ['boot', 'title', 'select', 'briefing', 'sortie', 'pause', 'remembrance', 'debrief'];
 
@@ -32,8 +37,18 @@ export class Flow {
     /** Title/menu flyby: `{active, subject}` for the camera owner to frame. */
     this.cinematic = { active: false, subject: game.player.group };
     this._last = null;
+    /** 'easy' | 'normal' | 'hard' (see difficulty.js). Change with setDifficulty. */
+    this.difficulty = DEFAULT_DIFFICULTY;
+    /** Free flight's chosen `{time (hours), weather}`; null = the mission's own. */
+    this.freeConditions = null;
+    try {
+      const c = JSON.parse(globalThis.localStorage?.getItem(CONDITIONS_KEY) ?? 'null');
+      if (c && Number.isFinite(c.time) && WEATHER[c.weather]) this.freeConditions = { time: c.time, weather: c.weather };
+    } catch { /* unavailable */ }
 
     game.events.on('flow:missionEnd', ({ result }) => this._onMissionEnd(result));
+    // The settings screen writes the `difficulty` key; follow it.
+    game.events.on('settings:change', ({ key, value }) => { if (key === 'difficulty') this._applyDifficulty(value); });
     const doc = globalThis.document;
     doc?.addEventListener?.('visibilitychange', () => { if (doc.hidden) this.pause(); });
   }
@@ -45,9 +60,58 @@ export class Flow {
 
   get mission() { return this.missions.find((m) => m.id === this.selected) ?? null; }
 
+  /** Choices for free flight: `{times: [{id, label, time}], weather: [{id, label}]}`. */
+  get conditionOptions() {
+    return { times: TIMES, weather: WEATHER_KEYS.map((id) => ({ id, label: WEATHER[id].label })) };
+  }
+
+  /**
+   * Choose free flight's time of day and/or weather: `{time: hours | TIMES id, weather}`.
+   * Applies to the next free-flight launch; emits `flow:conditions`.
+   */
+  setConditions({ time, weather } = {}) {
+    const cur = this.freeConditions ?? { time: 9.5, weather: 'scattered' };
+    const named = TIMES.find((t) => t.id === time);
+    const next = {
+      time: named ? named.time : Number.isFinite(time) ? ((time % 24) + 24) % 24 : cur.time,
+      weather: WEATHER[weather] ? weather : cur.weather,
+    };
+    this.freeConditions = next;
+    try { globalThis.localStorage?.setItem(CONDITIONS_KEY, JSON.stringify(next)); } catch { /* unavailable */ }
+    this.game.events.emit('flow:conditions', { ...next });
+    return next;
+  }
+
+  /** Difficulty rows for a menu: `[{id, label, description}]`. */
+  get difficulties() { return difficultyList(); }
+
+  /** Choose a difficulty. Persists (settings key `difficulty`) and applies at once. */
+  setDifficulty(level) {
+    if (!DIFFICULTY_LEVELS.includes(level)) return false;
+    const settings = this.game.settings;
+    if (settings?.set) settings.set('difficulty', level);
+    else { try { globalThis.localStorage?.setItem(DIFFICULTY_KEY, level); } catch { /* unavailable */ } }
+    this._applyDifficulty(level);
+    return true;
+  }
+
+  _applyDifficulty(level) {
+    if (!DIFFICULTY_LEVELS.includes(level)) return;
+    const game = this.game;
+    const changed = level !== this.difficulty;
+    this.difficulty = level;
+    const d = difficultyFor(level);
+    if (game.systems.combat) game.systems.combat.world.difficulty = d;
+    game.systems.ai?.setDifficulty?.(d);
+    if (changed) game.events.emit('flow:difficulty', { difficulty: level, ...d });
+  }
+
   /** Called once by Game after every system is initialised. */
   boot() {
     const q = new URLSearchParams(globalThis.location?.search ?? '');
+    let stored = null;
+    try { stored = globalThis.localStorage?.getItem(DIFFICULTY_KEY) ?? null; } catch { /* unavailable */ }
+    this._applyDifficulty(q.get('difficulty') ?? this.game.settings?.difficulty ?? stored ?? DEFAULT_DIFFICULTY);
     const id = q.get('mission');
     if (id && this.missions.some((m) => m.id === id)) this.startMission(id, { special: q.get('special') ?? undefined });
     else this.toTitle();
@@ -124,6 +188,7 @@ export class Flow {
     this._cinematic(false);
     game.paused = false;
     game.input.resetForLaunch?.();
+    this._applyDifficulty(this.difficulty);
     if (!this.ms.start(id, { special })) return false;
     this.special = this.ms.special;
     this._last = { id, special: this.special };
