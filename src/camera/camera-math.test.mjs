@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   damp, springStep, chaseDistance, fovTarget, noise1, shakeAngles, explosionTrauma, flightRumble,
-  wrapAngle, inDanger, easeInOut,
+  wrapAngle, inDanger, easeInOut, speedOfSound, machCrossing, warpScale, chaseLagFreq, actionShot,
 } from './cameraMath.js';
+import { TimeWarp } from './timeWarp.js';
 
 test('damp is frame-rate independent', () => {
   let a = 0;
@@ -80,4 +81,65 @@ test('wrapAngle and easeInOut', () => {
   assert.equal(easeInOut(0), 0);
   assert.equal(easeInOut(1), 1);
   assert.equal(easeInOut(0.5), 0.5);
+});
+
+test('speed of sound: ISA lapse, floored at the tropopause', () => {
+  assert.ok(Math.abs(speedOfSound(0) - 340.3) < 0.5);
+  assert.ok(speedOfSound(6000) < speedOfSound(0));
+  assert.ok(Math.abs(speedOfSound(11000) - speedOfSound(15000)) < 1e-9);
+  assert.ok(Math.abs(speedOfSound(15000) - 295.1) < 0.5);
+});
+
+test('Mach crossing: latches on init, fires once each way, hysteresis', () => {
+  const s = {};
+  assert.equal(machCrossing(s, 1.2), 0); // already supersonic on the first frame: no thump
+  assert.equal(machCrossing(s, 0.99), 0); // inside the hysteresis band
+  assert.equal(machCrossing(s, 0.96), -1);
+  assert.equal(machCrossing(s, 0.999), 0);
+  assert.equal(machCrossing(s, 1.0), 1);
+  assert.equal(machCrossing(s, 1.01), 0);
+  let n = 0;
+  for (let i = 0; i < 200; i++) n += Math.abs(machCrossing(s, 0.99 + 0.015 * Math.sin(i))); // hovering at ~M1
+  assert.equal(n, 0);
+});
+
+test('warpScale: eases in, holds, eases out, 1 outside the envelope', () => {
+  const env = { scale: 0.2, ease: 0.1, hold: 1.5, end: 2.3 };
+  assert.equal(warpScale(0, env), 1);
+  assert.equal(warpScale(-1, env), 1);
+  assert.equal(warpScale(2.3, env), 1);
+  assert.ok(Math.abs(warpScale(0.8, env) - 0.2) < 1e-9);
+  assert.ok(warpScale(0.05, env) < 1 && warpScale(0.05, env) > 0.2);
+  assert.ok(warpScale(1.9, env) > 0.2 && warpScale(1.9, env) < 1);
+  // continuous: no step at the joins
+  for (const t of [0.1, 1.5]) assert.ok(Math.abs(warpScale(t - 1e-4, env) - warpScale(t + 1e-4, env)) < 1e-2);
+});
+
+test('TimeWarp drives game.timeScale relative to the base and restores it', () => {
+  const g = { timeScale: 2 };
+  const w = new TimeWarp(g);
+  w.start({ scale: 0.25, ease: 0.1, hold: 1, end: 1.5 });
+  w.update(0.5);
+  assert.ok(Math.abs(g.timeScale - 0.5) < 1e-9);
+  w.update(1.2);
+  assert.equal(g.timeScale, 2);
+  assert.equal(w.active, null);
+  w.start({ scale: 0.25, ease: 0.1, hold: 1, end: 1.5 });
+  w.update(0.5);
+  w.cancel();
+  assert.equal(g.timeScale, 2);
+});
+
+test('chase lag spring loosens with speed and the user lag setting', () => {
+  assert.ok(chaseLagFreq(100) > chaseLagFreq(500));
+  assert.ok(chaseLagFreq(300, 1.5) < chaseLagFreq(300, 1));
+  assert.ok(Number.isFinite(chaseLagFreq(300, 0)) && chaseLagFreq(300, 0) > 0);
+});
+
+test('action camera shots are deterministic and range-aware', () => {
+  assert.equal(actionShot(0, 800), actionShot(0, 800));
+  const far = new Set(), near = new Set();
+  for (let t = 0; t < 60; t += 1) { far.add(actionShot(t, 3000)); near.add(actionShot(t, 800)); }
+  assert.ok(!far.has('enemy'));
+  assert.ok(near.has('enemy') && near.has('shoulder') && near.has('side'));
 });
