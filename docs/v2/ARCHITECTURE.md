@@ -572,9 +572,9 @@ Evidence: `docs/v2/evidence/timeofday/`.
   `post.uniforms.{lookSat,shadowTint,highlightTint,vignette}` from their boot
   values each frame, from `env.exposureHint`. It never touches
   `exposureCompensation`. It also writes `post.uniforms.sunRefLum`.
-  **Runtime patch:** it wraps `post.setFrameState` to zero `sunIntensity` while
-  the key light is the moon (no sun glare from the moon). Post owner: please
-  read `env.keyLight` there and the wrapper can go.
+  Moonlight throws no sun flare or glare: the camera system passes
+  `keyLight: env.keyLight` in `post.setFrameState` and PostFX gates the flare
+  on it (the earlier `setFrameState` wrapper here is gone).
 - **Twilight:** below 1.5 degrees of sun elevation `atmosphere.u.sunIrradiance`
   is multiplied by `twilightGain(elevation)` (up to 60x) so civil twilight
   stays a lit sky; the unscaled value is `env.timeOfDay.sunIrradiance`.
@@ -604,3 +604,72 @@ Evidence: `docs/v2/evidence/timeofday/`.
   so they read hot at night; scaling them by `env.exposureHint` would let night
   exposure go higher. The cloud shadow map shows horizontal bands with the sun
   under about 2 degrees.
+
+### Camera + post polish: motion blur, screen water, feel, camera direction (additive unless marked)
+
+Owner paths: `src/engine/PostFX.js`, `src/fx/**`, `src/flight/CameraRig.js`,
+`src/camera/**`. Evidence: `docs/v2/evidence/polish-camera-post/` (`before-*` and
+`after-*`, same scenarios).
+
+- **Motion blur (changed).** The single-pass velocity blur is replaced by a
+  tile-max / neighbour-max reconstruction (McGuire 2012 with Jimenez's
+  alternating taps; `src/fx/post/motionBlur.js`): prep (full res) -> 4x4 max ->
+  tile max (tier `mbTile` px) -> 3x3 neighbour max -> jittered, depth-aware
+  gather (`mbSamples` taps: 0/10/14/18 by tier; off on low). Fixed shutter time
+  (1/90 s, so the streak per second does not depend on frame rate), radial speed
+  zoom fast and low and a little at Mach 1, camera rotation blur in rolls.
+  Parameters are pure and tested: `src/fx/post/motionParams.js`.
+  - `post.usePlayerVelocity(material)` tags a material as the player airframe
+    (velocity MRT `.z = 1`); it gets its own short shutter
+    (`MOTION_DEFAULTS.playerShutter`). The camera system tags the player jet
+    and cockpit; glass keeps `useTransparentVelocity`.
+- **Screen water (new).** `src/fx/post/screenWater.js`: a small GPU simulation
+  (tier `water` size, 320x180 to 640x360) of beads, runs and wet trails, a fog
+  film wiped by speed, drying; refraction, meniscus, glints in the final pass.
+  Lens in chase-like views, canopy in the cockpit (masked to the glass by
+  depth), none in cinematic / kill / death cams. Frost rime at the frame edge in
+  cold cloud. Drivers are pure and tested: `src/fx/waterModel.js`
+  (`waterDrivers`, `rainFrom`). Rain comes from `env.weather.rain`, else
+  `env.rain`, else a heuristic: the storm preset under the cloud base.
+- **post.options (new keys):** `screenWater` (bool), `speedStreaks` (bool),
+  `dof` (bool). `grain` now actually toggles the grain (it was unused).
+  URL: `?nowater`, `?nodof`.
+- **post.setFrameState (new optional fields):** `agl`, `mach`, `view`,
+  `flightDir` (unit vector), `nearShell` (m, player shell for the blur),
+  `reheat`, `keyLight` (`'sun' | 'moon'`, flare/glare only for the sun),
+  `water` (drivers + `gravity` [x, y] in screen uv + `surface`
+  `'lens' | 'canopy'`, or null), `waterSurface`, `streaks` (0..1), `shock`
+  (ripple phase 0..1) and `shockAmp`,
+  `dof` (`{amount, focus, focal}` or null). All default off.
+- **Grade / lens (changed values).** Film grain fades with metered scene
+  luminance (dusk and night ~0.35x). Starburst and halo toned down; anamorphic
+  streak is a thin core plus sheath; lens dirt lights only above a bloom floor;
+  sharpen after TRAA is luminance-only and clamped. Depth of field
+  (three's `DepthOfFieldNode`) runs only while a cinematic, kill or death cam
+  asks for it (pass skipped otherwise; not on low).
+- **cameraRig.options (new keys):** `fovEffects` 0..1, `actionCam` (bool,
+  cinematic dogfight angles in the chase view; `?actioncam`), `slowMo` (bool),
+  `sortieIntro` (bool), `headBob` 0..1, `cameraLag` 0.4..1.5, `dof` (bool).
+  Existing: `shake`, `reducedMotion`, `killCam`, `missileCam`.
+  `game.systems.camera.setOption(key, value)` sets a rig option and mirrors
+  `dof` / `screenWater` / `speedStreaks` / `reducedMotion` to `post.options`.
+- **cameraRig API (new):** `fovPulse(amount)`, `sonicThump(dir)`,
+  `missileEnded(missile, reason)` (impact slow-mo when `reason === 'hit'`),
+  `playCinematic(name, { blend, blendOut })`, `stopCinematic(name?)`,
+  `cinematicName`, `warp` (`TimeWarp`, writes `game.timeScale` relative to
+  its base and restores it), `dofOut`. Views: `lock` (spring framing of
+  jet + bandit), `missile`, `kill` (orbit, slow-mo, auto-return, aborts in
+  danger), `death`, `action`. Blends back to a riding view keep the jet in frame.
+  `cameraRig.view` can now also be `'action'`.
+- **Cinematics (changed):** `title` is a looping trailer of four shots composed
+  right of centre (clear of the menu; `opts.shift`), `sortie` (new) is the
+  briefing -> sortie shot (skippable with fire or camera; never in danger).
+  Cinematic `out` gained `shift`, `cut`, `dof`.
+- **Events:** new `camera:sonic { direction: +1 | -1, mach }` on a Mach 1
+  crossing; listens to `missile:end` (to the rig) and `flow:state`.
+- **Dev:** `window.__camTest(name)` scenarios (`lowpass`, `roll`, `cloud`,
+  `rain`, `cockpitRain`, `kill`, `lock`, `sun`, `title`, `sortie`) and
+  `__camTest.reset()` (dev builds only, `src/camera/dev.js`);
+  `game.systems.camera.weatherOverride = { rain }`; `post.debugView` gains
+  `'player'`, `'mbTiles'`, `'water'` (call `post.rebuild()` after setting).
+- **Removed:** `velocityMotionBlur` from `src/fx/post/nodes.js` (replaced).

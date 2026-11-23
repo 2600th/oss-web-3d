@@ -249,10 +249,10 @@ export function waterShading(w, st, texel, aspect) {
   const mask = smoothstep(0.1, 0.26, h);
   // a drop is a small fish-eye lens: it inverts and shrinks what is behind
   // it (offset toward the drop's own gradient)
-  const offset = grad.mul(-0.065).mul(mask).add(tgrad.mul(-0.03));
+  const offset = grad.mul(-0.065).mul(mask).add(tgrad.mul(-0.018));
   const n = normalize(vec3(grad.add(tgrad.mul(0.5)).mul(vec2(-6, 6)), 1));
   const L = normalize(vec3(-0.35, 0.6, 0.72));
-  const spec = max(dot(n, L), 0).pow(28).mul(max(mask, smoothstep(0.05, 0.2, c.g).mul(0.5)));
+  const spec = max(dot(n, L), 0).pow(28).mul(max(mask, smoothstep(0.05, 0.2, c.g).mul(0.2)));
   // a thin dark meniscus only at the very edge of a bead (where it is
   // thin and steep); the body of the drop gathers light and reads brighter
   const g = length(grad);
