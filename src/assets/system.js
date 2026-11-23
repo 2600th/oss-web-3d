@@ -23,7 +23,8 @@ import { terrainHeight } from '../world/terrain/heightfield.js';
 import { configureAssets } from './loadModel.js';
 import { CATALOG } from './catalog.js';
 import { SurfaceRig, bodyRates, flapDemand } from './controlSurfaces.js';
-import { upgradeGroundMaterials, applyCloudShadows } from './materials.js';
+import { upgradeGroundMaterials, applyCloudShadows, setGroundDetail } from './materials.js';
+import { LAYERS, LAYER } from '../world/terrain/layers.js';
 import { seatUnit, aimAngles, slew, UNIT_RIGS } from './unitRig.js';
 
 export const order = 15;
@@ -46,7 +47,14 @@ class AssetsSystem {
   init(game) {
     const tier = game.r?.tier?.name ?? 'high';
     this.tier = tier;
-    configureAssets({ tier, env: game.env });
+    // [textures] model textures get the device's anisotropic filtering, and
+    // ground units a weathered grain from the terrain's scree layer
+    configureAssets({ tier, env: game.env, anisotropy: game.r?.renderer?.getMaxAnisotropy?.() ?? 8 });
+    const layers = game.terrain?.layers;
+    if (layers?.albedo) {
+      const [r, g, b] = LAYERS[LAYER.scree].mean;
+      setGroundDetail({ albedo: layers.albedo, layer: LAYER.scree, meanLum: 0.2126 * r + 0.7152 * g + 0.0722 * b });
+    }
     game.player.configure?.({ tier, env: game.env });
     game.events.on('player:respawn', () => game.player.surfaces?.reset?.({}));
   }
@@ -108,7 +116,7 @@ class AssetsSystem {
         const tex = new THREE.TextureLoader().load('./assets/textures/terrain/gravel_col.webp');
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.anisotropy = 4;
+        tex.anisotropy = this.game.r?.renderer?.getMaxAnisotropy?.() ?? 4; // [textures] was 4
         const tri = triplanarTexture(texture(tex), null, null, float(0.3), positionWorld, normalWorld);
         fm.colorNode = tri.rgb.mul(vec3(0.95, 0.92, 0.88));
       }
