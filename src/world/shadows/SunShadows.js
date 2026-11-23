@@ -44,6 +44,10 @@ import {
 const SEARCH_TEXELS = 14; // blocker search radius
 const MAX_TEXELS = 28; // largest filter radius (the penumbra is clamped to it)
 const MIN_TEXELS = 1.25;
+// [ground polish] disc PCF without a blocker search: depth slab boundary (m)
+// and the occluder distance (m) whose penumbra the far slab is filtered with
+const FAR_SLAB = 6;
+const FAR_SEPARATION = 110; // 0.51 m: fades a 0.16 m mast past ~6 m like the PCSS path does
 
 const _filters = new WeakMap();
 
@@ -114,22 +118,69 @@ export function makePCSSFilter({ tanHalf, blocker = 10, taps = 16 }) {
 }
 
 /**
- * Fixed-size disc PCF (no blocker search): `radius` is a uniform in metres.
+ * Disc PCF without a blocker search: `radius` is a uniform in metres.
  * Works on WebGL2 (compare samples only).
+ *
+ * [ground polish] Two depth slabs instead of one fixed disc. A single 0.14 m
+ * disc left a 16 m mast (0.16 m thick) drawing a dark, razor-thin line 25 m
+ * across the snow on WebGL2, where PCSS on WebGPU fades it: past ~17 m from a
+ * 0.16 m caster the sun's disc is never fully covered. Without raw depth
+ * reads the occluder distance cannot be measured, but it can be bracketed
+ * with compares: comparing at a reference moved `farSlab` metres toward the
+ * light counts only occluders farther than that from the receiver. Those get
+ * the wide disc (`farRadius`, the penumbra half-width ~110 m out), the
+ * near ones keep the contact-sharp `radius`:
+ *   lit = pcf(z, r) - pcf(z', r) + pcf(z', R)
+ * The near and far compares at radius r share taps; the wide disc runs only
+ * where a far occluder is within the narrow one or `taps` / 2 samples of the
+ * wide disc see one (most lit and contact-shadowed pixels skip it).
  */
-export function makeDiscPCFFilter({ radius, taps = 12 }) {
-  return Fn(({ depthTexture, shadowCoord, shadow }) => {
+export function makeDiscPCFFilter({ radius, taps = 12, farSlab = null, farRadius = null }) {
+  return Fn(({ depthTexture, shadowCoord, shadow }, builder) => {
+    const reversed = builder.renderer.reversedDepthBuffer === true;
     const u = shadowUniforms(shadow);
     const size = u.mapSize.x;
     const texel = u.right.sub(u.left).div(size);
     const r = clamp(radius.div(texel), MIN_TEXELS, MAX_TEXELS).div(size);
     const phi = interleavedGradientNoise(screenCoordinate.xy).mul(6.28318530718);
-    const acc = float(0).toVar();
+    const z = shadowCoord.z;
+    if (!farSlab || !farRadius) {
+      const acc = float(0).toVar();
+      for (let i = 0; i < taps; i++) {
+        const uv = shadowCoord.xy.add(vogelDiskSample(i, taps, phi).mul(r));
+        acc.addAssign(texture(depthTexture, uv).compare(z));
+      }
+      return acc.div(taps);
+    }
+    // the reference `farSlab` metres nearer the light (orthographic: depth is linear in metres)
+    const dz = farSlab.div(u.far.sub(u.near));
+    const zFar = reversed ? z.add(dz) : z.sub(dz);
+    const all = float(0).toVar();
+    const nearFar = float(0).toVar();
     for (let i = 0; i < taps; i++) {
       const uv = shadowCoord.xy.add(vogelDiskSample(i, taps, phi).mul(r));
-      acc.addAssign(texture(depthTexture, uv).compare(shadowCoord.z));
+      all.addAssign(texture(depthTexture, uv).compare(z));
+      nearFar.addAssign(texture(depthTexture, uv).compare(zFar));
     }
-    return acc.div(taps);
+    const lit = all.div(taps).toVar();
+    const R = clamp(farRadius.div(texel), MIN_TEXELS, MAX_TEXELS).div(size);
+    // a cheap probe of the wide disc: any far occluder there at all?
+    const probe = float(0).toVar();
+    const half = Math.max(4, taps >> 1);
+    const phi2 = phi.add(2.1);
+    for (let i = 0; i < half; i++) {
+      probe.addAssign(texture(depthTexture, shadowCoord.xy.add(vogelDiskSample(i, half, phi2).mul(R))).compare(zFar));
+    }
+    If(nearFar.lessThan(taps - 0.001).or(probe.lessThan(half - 0.001)), () => {
+      const wide = probe.toVar();
+      const phi3 = phi.add(4.2);
+      for (let i = 0; i < taps; i++) {
+        wide.addAssign(texture(depthTexture, shadowCoord.xy.add(vogelDiskSample(i, taps, phi3).mul(R))).compare(zFar));
+      }
+      // far occluders seen through the wide disc instead of the narrow one
+      lit.assign(clamp(lit.sub(nearFar.div(taps)).add(wide.div(taps + half)), 0, 1));
+    });
+    return lit;
   });
 }
 
@@ -232,9 +283,13 @@ export function installSunShadows(light, camera, { tier, backend, layers = 1 }) 
 
   const tanHalf = uniform(penumbraSlope(SUN_ANGULAR_DIAMETER));
   const radius = uniform(fallbackRadius(SUN_ANGULAR_DIAMETER));
+  // [ground polish] WebGL2 / low: occluders more than FAR_SLAB metres from the
+  // receiver are filtered with the penumbra of one FAR_SEPARATION metres out
+  const farSlab = uniform(FAR_SLAB);
+  const farRadius = uniform(fallbackRadius(SUN_ANGULAR_DIAMETER, FAR_SEPARATION));
   const filter = cfg.pcss
     ? makePCSSFilter({ tanHalf, blocker: cfg.blocker, taps: cfg.taps })
-    : makeDiscPCFFilter({ radius, taps: Math.min(cfg.taps || 12, 12) });
+    : makeDiscPCFFilter({ radius, taps: Math.min(cfg.taps || 12, 12), farSlab, farRadius });
   const node = new SunCascades(light, camera, cfg, filter);
   light.shadow.shadowNode = node;
 
@@ -246,10 +301,13 @@ export function installSunShadows(light, camera, { tier, backend, layers = 1 }) 
     config: cfg,
     tanHalf,
     radius,
+    farSlab, // [ground polish] WebGL2 / low disc PCF slabs (uniforms, metres)
+    farRadius,
     update(cam = camera, keyLight = 'sun') {
       const deg = keyLight === 'moon' ? MOON_ANGULAR_DIAMETER : SUN_ANGULAR_DIAMETER;
       tanHalf.value = penumbraSlope(deg);
       radius.value = fallbackRadius(deg);
+      farRadius.value = fallbackRadius(deg, FAR_SEPARATION);
       if (!node.camera) return; // not built yet
       if (Math.abs(cam.fov - fov) > 0.25 || cam.aspect !== aspect || cam.near !== near) {
         fov = cam.fov; aspect = cam.aspect; near = cam.near;
