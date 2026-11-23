@@ -1,18 +1,25 @@
 import * as THREE from 'three/webgpu';
-import { clamp, easeInOut, noise1 } from './cameraMath.js';
+import { clamp, easeInOut, noise1, smoothstep } from './cameraMath.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
 
 const _f = new THREE.Vector3();
 const _r = new THREE.Vector3();
 const _u = new THREE.Vector3();
+const _h = new THREE.Vector3();
+const _s = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * Cinematic camera paths for title screens, mission intros and replays.
  * `cameraRig.playCinematic(name, opts)` runs one; each path is
- *   { duration (s, Infinity = loop until stopped), init(ctx) -> state,
+ *   { duration (s, Infinity = loop until stopped), init(ctx, opts) -> state,
  *     pose(t, state, ctx, out) }
  * ctx.focus = { position, orientation, velocity } of the subject (live).
- * out = { position, target, fov, roll } is filled every frame.
+ * out = { position, target, fov, roll, shift, cut, dof } is filled every frame:
+ *   shift  horizontal composition offset (fraction of frame width; > 0 puts
+ *          the subject right of centre, e.g. clear of a left-hand menu)
+ *   cut    true on the frame a new shot starts (post suppresses blur/TAA)
+ *   dof    { amount 0..1, focus m, focal m } or null
  */
 function axes(focus) {
   _f.set(0, 0, -1).applyQuaternion(focus.orientation);
@@ -20,10 +27,107 @@ function axes(focus) {
   _u.set(0, 1, 0).applyQuaternion(focus.orientation);
 }
 
+/** Level heading frame (no bank): _h = forward on the horizon, _s = right. */
+function levelAxes(focus) {
+  if (focus.velocity && focus.velocity.lengthSq() > 25) _h.copy(focus.velocity);
+  else _h.set(0, 0, -1).applyQuaternion(focus.orientation);
+  _h.y = 0;
+  if (_h.lengthSq() < 1e-6) _h.set(0, 0, -1);
+  _h.normalize();
+  _s.crossVectors(_h, WORLD_UP).normalize();
+}
+
 function headingOf(focus) {
   axes(focus);
   return Math.atan2(_f.x, -_f.z);
 }
+
+const setDof = (out, amount, focus, focal) => {
+  out.dof = out.dof ?? {};
+  out.dof.amount = amount;
+  out.dof.focus = focus;
+  out.dof.focal = focal;
+};
+
+/** Keep a camera position clear of the ground. */
+const clearGround = (p, margin = 6) => {
+  const g = terrainHeight(p.x, p.z) + margin;
+  if (p.y < g) p.y = g;
+  return p;
+};
+
+/**
+ * Title shots. Each: dur (s), init(state, focus) on entry, pose(tt, state,
+ * focus, out). The sequence cuts between them (out.cut) like a trailer.
+ */
+const TITLE_SHOTS = [
+  {
+    // 1. low tracking shot: below and beside the jet, long lens looking up,
+    //    the jet against sky with the ridge line under it
+    dur: 8,
+    init(s, f) { levelAxes(f); s.side = 1; },
+    pose(tt, s, f, out) {
+      levelAxes(f);
+      const drift = tt * 0.9;
+      out.position.copy(f.position).addScaledVector(_s, 46 * s.side).addScaledVector(_h, 14 - drift * 2.2).addScaledVector(WORLD_UP, -13);
+      clearGround(out.position, 8);
+      out.target.copy(f.position).addScaledVector(_h, 6);
+      out.fov = 26 - tt * 0.4;
+      out.roll = -0.05 * s.side;
+      const d = out.position.distanceTo(f.position);
+      setDof(out, 0.85, d, d * 6);
+    },
+  },
+  {
+    // 2. airshow pass: planted ahead of the flight path, the jet screams by
+    dur: 5.5,
+    init(s, f) {
+      levelAxes(f);
+      const speed = Math.max(f.velocity?.length?.() ?? 0, 150);
+      s.anchor = f.position.clone().addScaledVector(_h, speed * 2.6).addScaledVector(_s, -30).addScaledVector(WORLD_UP, -9);
+      clearGround(s.anchor, 5);
+    },
+    pose(tt, s, f, out) {
+      out.position.copy(s.anchor);
+      out.position.x += noise1(tt * 2.5, 1) * 0.12;
+      out.position.y += noise1(tt * 2.5, 2) * 0.12;
+      out.target.copy(f.position);
+      const d = s.anchor.distanceTo(f.position);
+      out.fov = clamp(10 + d * 0.05, 14, 58);
+      out.roll = 0;
+      setDof(out, 0.6, d, Math.max(30, d * 2));
+    },
+  },
+  {
+    // 3. high three-quarter orbit: the valley opening below
+    dur: 9,
+    init(s, f) { s.a0 = headingOf(f) + Math.PI * 0.8; },
+    pose(tt, s, f, out) {
+      const a = s.a0 + tt * 0.09;
+      out.position.set(Math.sin(a) * 70, 26 + tt * 0.8, -Math.cos(a) * 70).add(f.position);
+      clearGround(out.position, 10);
+      out.target.copy(f.position).addScaledVector(WORLD_UP, -4);
+      out.fov = 38;
+      out.roll = 0.02;
+      setDof(out, 0.35, out.position.distanceTo(f.position), 400);
+    },
+  },
+  {
+    // 4. long lens from far behind: compressed ridges stacked behind the jet
+    dur: 7,
+    init(s) { s.k = 0; },
+    pose(tt, s, f, out) {
+      levelAxes(f);
+      out.position.copy(f.position).addScaledVector(_h, -260 + tt * 6).addScaledVector(_s, 18).addScaledVector(WORLD_UP, 9);
+      clearGround(out.position, 8);
+      out.target.copy(f.position).addScaledVector(_h, 120);
+      out.fov = 9.5;
+      out.roll = noise1(tt * 0.6, 3) * 0.01;
+      const d = out.position.distanceTo(f.position);
+      setDof(out, 0.5, d, d * 3);
+    },
+  },
+];
 
 export const CINEMATICS = {
   /** Close, slow orbit around the jet: hangar-reveal energy. */
@@ -36,20 +140,35 @@ export const CINEMATICS = {
       out.target.copy(ctx.focus.position);
       out.fov = 48;
       out.roll = Math.sin(t * 0.21) * 0.03;
+      setDof(out, 0.5, s.radius, s.radius * 4);
     },
   },
 
-  /** Title screen: long lens, wide slow orbit, the ridge line behind the jet. */
+  /**
+   * Title screen: a looping trailer of cuts — low tracking shot, airshow
+   * pass, high orbit, long-lens tail chase — composed right of centre so the
+   * menu on the left never sits on the jet (opts.shift to change).
+   */
   title: {
     duration: Infinity,
-    init: (ctx, o) => ({ a0: headingOf(ctx.focus) + Math.PI * 0.6, radius: o.radius ?? 95, speed: o.speed ?? 0.07 }),
+    init: (ctx, o) => {
+      const s = { shot: o.startShot ?? 0, t0: 0, shift: o.shift ?? 0.17, sub: {} };
+      TITLE_SHOTS[s.shot].init(s.sub, ctx.focus);
+      return s;
+    },
     pose(t, s, ctx, out) {
-      const a = s.a0 + t * s.speed;
-      const h = 14 + Math.sin(t * 0.11) * 10;
-      out.position.set(Math.sin(a) * s.radius, h, -Math.cos(a) * s.radius).add(ctx.focus.position);
-      out.target.copy(ctx.focus.position).addScaledVector(WORLD_UP, -2);
-      out.fov = 30;
-      out.roll = 0;
+      let shot = TITLE_SHOTS[s.shot];
+      out.cut = false;
+      if (t - s.t0 >= shot.dur) {
+        s.shot = (s.shot + 1) % TITLE_SHOTS.length;
+        s.t0 = t;
+        s.sub = {};
+        shot = TITLE_SHOTS[s.shot];
+        shot.init(s.sub, ctx.focus);
+        out.cut = true;
+      }
+      shot.pose(t - s.t0, s.sub, ctx.focus, out);
+      out.shift = s.shift;
     },
   },
 
@@ -75,6 +194,7 @@ export const CINEMATICS = {
       const d = s.anchor.distanceTo(ctx.focus.position);
       out.fov = clamp(14 + d * 0.06, 16, 60);
       out.roll = 0;
+      setDof(out, 0.5, d, Math.max(30, d * 2));
     },
   },
 
@@ -95,6 +215,37 @@ export const CINEMATICS = {
       out.target.copy(ctx.focus.position).addScaledVector(_f, k * 40);
       out.fov = 50 + k * 12;
       out.roll = 0;
+      setDof(out, 1 - k, radius, radius * 3);
+    },
+  },
+
+  /**
+   * Briefing -> sortie: the jet bursts past a camera planted low off its nose
+   * (three-quarter front, long lens opening up), then the rig whips the lens
+   * round into the chase position (playCinematic opts.blendOut).
+   */
+  sortie: {
+    duration: 2.6,
+    init(ctx) {
+      levelAxes(ctx.focus);
+      const speed = Math.max(ctx.focus.velocity?.length?.() ?? 0, 150);
+      const anchor = ctx.focus.position.clone().addScaledVector(_h, speed * 1.55).addScaledVector(_s, 22).addScaledVector(WORLD_UP, -5);
+      clearGround(anchor, 5);
+      return { anchor };
+    },
+    pose(t, s, ctx, out) {
+      // the camera pans with the jet and is dragged a little along its path
+      levelAxes(ctx.focus);
+      const k = smoothstep(1.2, 2.6, t);
+      out.position.copy(s.anchor).addScaledVector(_h, k * 60);
+      const d = out.position.distanceTo(ctx.focus.position);
+      // lead the jet a little, never so much that it leaves the frame as it
+      // screams past (the pan is fastest abeam, where d is smallest)
+      out.target.copy(ctx.focus.position).addScaledVector(_h, Math.min(8 + k * 40, d * 0.2));
+      // frame ~24 m of jet and air around it: long lens far out, wide abeam
+      out.fov = clamp((2 * Math.atan(12 / Math.max(d, 1)) * 180) / Math.PI, 14, 60);
+      out.roll = -0.04 * (1 - k);
+      setDof(out, 0.7 * (1 - k), d, Math.max(25, d * 2));
     },
   },
 };
@@ -102,3 +253,5 @@ export const CINEMATICS = {
 export function cinematicDuration(def, state) {
   return state?.duration ?? def.duration;
 }
+
+export { TITLE_SHOTS };

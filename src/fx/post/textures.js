@@ -99,3 +99,49 @@ export function createDropletTexture(size = 256, seed = 7) {
   tex.name = 'LensDroplets';
   return tex;
 }
+
+/**
+ * Frost / rime texture for the ice rim (cold cloud at altitude). Tileable,
+ * R = frost density (ridged fbm: feathery crystal fronts), G = sparkle mask.
+ */
+export function createFrostTexture(size = 256, seed = 41) {
+  const r = rng(seed);
+  const G = 32;
+  const grid = new Float32Array(G * G);
+  for (let i = 0; i < grid.length; i++) grid[i] = r();
+  const vnoise = (x, y, f) => {
+    // periodic value noise at frequency f (cells per tile)
+    const gx = (x / size) * f, gy = (y / size) * f;
+    const x0 = Math.floor(gx), y0 = Math.floor(gy);
+    const tx = gx - x0, ty = gy - y0;
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    const at = (i, j) => grid[(((j % f) + f) % f) * G + (((i % f) + f) % f)];
+    const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  };
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let v = 0, amp = 0.55;
+      for (const f of [4, 8, 16, 32]) {
+        const n = vnoise(x, y, Math.min(f, G));
+        v += (1 - Math.abs(n * 2 - 1)) * amp; // ridged: thin bright fronts
+        amp *= 0.55;
+      }
+      v = Math.pow(Math.min(1, v / 1.05), 2.2);
+      const sparkle = r() < 0.004 ? 1 : 0;
+      const i = (y * size + x) * 4;
+      data[i] = Math.round(v * 255);
+      data[i + 1] = sparkle * 255;
+      data[i + 2] = 0;
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  tex.name = 'Frost';
+  return tex;
+}

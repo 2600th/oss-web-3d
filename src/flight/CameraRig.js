@@ -2,8 +2,11 @@ import * as THREE from 'three/webgpu';
 import { terrainHeight, maxHeightAlong } from '../world/terrain/heightfield.js';
 import {
   clamp, damp, dampFactor, springStep, chaseDistance, fovTarget, shakeAngles, easeInOut, smoothstep,
+  chaseLagFreq, noise1,
 } from '../camera/cameraMath.js';
 import { CINEMATICS, cinematicDuration } from '../camera/cinematics.js';
+import { TimeWarp } from '../camera/timeWarp.js';
+import { lockView, missileView, killView, deathView, actionView, inDangerNow, springVec, newSpring } from '../camera/views.js';
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const _v = new THREE.Vector3();
@@ -28,20 +31,30 @@ export const MIG21_EYE = new THREE.Vector3(0, 0.22, -2.95);
 /** Base views, cycled by the player. */
 export const VIEWS = ['chase', 'cockpit', 'hud'];
 
+/** Views where the lens rides with the player's jet. */
+export const RIDING = new Set(['chase', 'cockpit', 'hud', 'lock', 'action']);
+
 /**
  * Camera rig.
  *
  * `mode` is the player's base view ('chase' | 'cockpit' | 'hud'); `view` is
  * what is on screen this frame, which may be a temporary override:
  *   'lock'      target-lock framing (held)
+ *   'action'    optional cinematic dogfight angles (options.actionCam, chase only)
  *   'missile'   follow the player's missile (opt-in toggle)
  *   'kill'      short slow-motion kill cam (never in danger)
  *   'death'     detached wreck cam after a crash / shoot-down
  *   'cinematic' scripted path (playCinematic)
  * plus free look (orbit in chase, head turn in the cockpit) layered on top.
  *
- * Shake: `trauma` (0..1 impulse, squared, decays) + `rumble` (continuous,
+ * Feel layers: speed-tuned lag spring on the chase boom, G and thrust springs
+ * (the camera sinks under load, is thrown back by the burner), afterburner
+ * light-off and Mach-crossing FOV pulses, cockpit head bob / G-pull / roll lag,
+ * shake = `trauma` (0..1 impulse, squared, decays) + `rumble` (continuous,
  * set per frame by the camera system from G, guns, stall, fast+low).
+ *
+ * `dofOut` ({amount, focus, focal, bokeh} | null) is written every frame for
+ * the post chain's depth of field (cinematic, kill, death, missile views).
  */
 export class CameraRig {
   constructor(camera) {
@@ -60,23 +73,38 @@ export class CameraRig {
       reducedMotion: false,
       killCam: true,
       missileCam: false,
-      fovEffects: 1,
+      fovEffects: 1, // speed / burner / Mach FOV changes, 0..1
+      actionCam: false, // cinematic dogfight angles in the chase view
+      slowMo: true, // brief time dilation on kill / missile impact / death
+      sortieIntro: true, // briefing -> sortie transition shot
+      headBob: 1, // cockpit head motion (G-pull, roll lag, buffet), 0..1
+      cameraLag: 1, // chase boom lag, 0.4 (stiff) .. 1.5 (loose)
+      dof: true, // depth of field in cinematic / kill cams
     };
     /** free look input, radians; system writes targets, rig springs back when released */
     this.look = { yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0, active: false };
     this.lockHeld = false;
+    /** Enemy the action camera frames (set by the camera system), or null. */
+    this.actionTarget = null;
     this.game = null;
     this.cockpitModel = null;
     this.cut = false; // true on frames where the camera jumped (post suppresses blur)
+    this.dofOut = null;
+    this.warp = new TimeWarp(null);
 
     this._boomQuat = new THREE.Quaternion();
     this._offsetLocal = new THREE.Vector3(0, 3.4, 17);
+    this._offSpring = newSpring();
     this._aim = new THREE.Vector3();
     this._prevVelDir = new THREE.Vector3(0, 0, -1);
     this._turn = new THREE.Vector3();
     this._gSpring = { x: 0, v: 0 };
     this._accSpring = { x: 0, v: 0 };
+    this._fovPulse = { x: 0, v: 0 };
+    this._head = { pitch: { x: 0, v: 0 }, roll: { x: 0, v: 0 } };
+    this._prevRoll = 0;
     this._prevSpeed = 0;
+    this._prevReheat = false;
     this._fov = this.baseFov;
     this._kick = 0;
     this._t = 0;
@@ -84,31 +112,47 @@ export class CameraRig {
     this._blend = null; // { from: {pos, quat, fov}, t, dur }
     this._lastOut = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 62 };
     this._override = null; // { view, ... }
-    this._cine = null;
+    this._lastKill = -1e9;
     this._initialised = false;
   }
 
   /** Called by the camera system so overrides can read hud/events. */
-  attach(game) { this.game = game; }
+  attach(game) { this.game = game; this.warp.game = game; }
 
   reset(flight) {
     this._boomQuat.copy(flight.orientation);
     this._offsetLocal.set(0, 3.4, chaseDistance(flight.airspeed));
+    this._offSpring.init = false;
     _f.set(0, 0, -1).applyQuaternion(flight.orientation);
     this._prevVelDir.copy(flight.velocity.lengthSq() > 1 ? _vd.copy(flight.velocity).normalize() : _f);
     this._aim.copy(flight.position).addScaledVector(_f, 60);
     this._gSpring.x = this._gSpring.v = 0;
     this._accSpring.x = this._accSpring.v = 0;
+    this._fovPulse.x = this._fovPulse.v = 0;
     this._prevSpeed = flight.airspeed;
+    this._prevReheat = !!flight.reheat;
     this.trauma = 0;
     this.look.yaw = this.look.pitch = this.look.targetYaw = this.look.targetPitch = 0;
     if (this._override && this._override.view !== 'cinematic') this._endOverride(false);
+    this.warp.cancel();
     this._blend = null;
     this.cut = true;
     this._initialised = true;
   }
 
   addTrauma(t) { this.trauma = Math.min(1, this.trauma + Math.max(0, t)); }
+
+  /** A quick FOV punch (degrees of initial velocity; + widens). */
+  fovPulse(amount) {
+    const k = this.options.fovEffects * (this.options.reducedMotion ? 0.3 : 1);
+    this._fovPulse.v += amount * k;
+  }
+
+  /** Sonic boom crossing: a thump in the lens (FOV squeeze, shake). */
+  sonicThump(direction = 1) {
+    this.addTrauma(direction > 0 ? 0.32 : 0.18);
+    this.fovPulse(direction > 0 ? -38 : 22);
+  }
 
   // ---------------------------------------------------------------- views
 
@@ -125,14 +169,15 @@ export class CameraRig {
 
   /** Temporary override. kind: 'missile' | 'kill' | 'death' | 'cinematic'. */
   _beginOverride(o, blend = 0.35) {
-    if (this._override?.view === 'kill' && o.view !== 'death') this._restoreTime();
+    if (this._override?.view === 'kill' || this._override?.view === 'missile') this.warp.cancel();
     this._override = o;
     this._startBlend(blend);
   }
 
   _endOverride(blend = 0.3) {
     if (!this._override) return;
-    if (this._override.view === 'kill') this._restoreTime();
+    const v = this._override.view;
+    if (v === 'kill' || v === 'missile') this.warp.cancel();
     const res = this._override.resolve;
     this._override = null;
     if (blend) this._startBlend(blend); else this.cut = true;
@@ -142,23 +187,30 @@ export class CameraRig {
   _startBlend(dur) {
     if (!dur) { this.cut = true; this._blend = null; return; }
     this._blend = {
-      from: { pos: this._lastOut.pos.clone(), quat: this._lastOut.quat.clone(), fov: this._lastOut.fov },
+      from: { pos: this._lastOut.pos.clone(), quat: this._lastOut.quat.clone(), fov: this._lastOut.fov, shift: this._lastOut.shift ?? 0 },
       t: 0, dur,
     };
   }
 
-  _restoreTime() {
-    const g = this.game;
-    if (g && this._savedTimeScale != null) { g.timeScale = this._savedTimeScale; this._savedTimeScale = null; }
-  }
+  /** Legacy name (kept): put normal time back. */
+  _restoreTime() { this.warp.cancel(); }
 
   /** Follow a live missile entity until it ends (+ a beat to watch the hit). */
   followMissile(missile) {
-    if (!missile || this._override?.view === 'death') return;
+    if (!missile || this._override?.view === 'death' || this._override?.view === 'cinematic') return;
     this._beginOverride({ view: 'missile', missile, hold: 0, last: missile.position.clone() }, 0.25);
   }
 
-  /** Slow-mo kill cam on a destroyed target; refused while in danger. */
+  /** Called by the camera system on `missile:end` for the followed missile. */
+  missileEnded(missile, reason) {
+    const o = this._override;
+    if (o?.view === 'missile' && o.missile === missile) o.reason = reason;
+  }
+
+  /**
+   * Slow-mo kill cam on a destroyed target; refused while in danger, within
+   * 6 s of the previous one, or for a kill too far away to be worth a look.
+   */
   killCam(target, position) {
     if (!this.options.killCam || this.options.reducedMotion) return false;
     if (this._override && this._override.view !== 'missile') return false;
@@ -166,11 +218,20 @@ export class CameraRig {
     const flight = g?.flight;
     const p = (position ?? target?.position)?.clone?.();
     if (!p || !flight) return false;
+    if (this._t - this._lastKill < 6) return false;
     _v.copy(p).sub(flight.position);
-    const a0 = Math.atan2(_v.x, -_v.z) + Math.PI * 0.7;
-    this._savedTimeScale = g.timeScale ?? 1;
-    this._beginOverride({ view: 'kill', target, center: p, t: 0, dur: 2.4, a0, radius: clamp(_v.length() * 0.12, 45, 110) }, 0);
+    const dist = _v.length();
+    if (dist > 6000) return false;
+    this._lastKill = this._t;
+    // start beside the player->wreck line, low, so the sky frames the burst
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const a0 = Math.atan2(_v.x, -_v.z) + Math.PI + side * 1.1;
+    const radius = clamp(dist * 0.25, 150, 260); // a large air burst is ~100 m across
+    this._beginOverride({
+      view: 'kill', target, center: p, t: 0, dur: 2.5, a0, radius, height: radius * 0.16 + 3, fov: 42,
+    }, 0);
     this.cut = true;
+    if (this.options.slowMo) this.warp.start({ scale: 0.2, ease: 0.12, hold: 1.5, end: 2.35 });
     return true;
   }
 
@@ -192,12 +253,14 @@ export class CameraRig {
       view: 'death', origin: p.clone(), center: p, anchor, t: 0, a0: Math.atan2(_v.x, -_v.z),
       velocity: velocity?.clone?.() ?? null,
     }, 0.5);
+    if (this.options.slowMo && !this.options.reducedMotion) this.warp.start({ scale: 0.35, ease: 0.1, hold: 0.9, end: 1.7 });
   }
 
   /**
    * Play a named cinematic path (see camera/cinematics.js): 'orbit', 'title',
-   * 'flyby', 'reveal'. Returns a promise resolved when it ends or is stopped.
-   * opts: { focus: {position, orientation, velocity}, duration, ...path opts }
+   * 'flyby', 'reveal', 'sortie'. Returns a promise resolved when it ends or is
+   * stopped. opts: { focus: {position, orientation, velocity}, duration,
+   * blend (in), blendOut, ...path opts }
    */
   playCinematic(name, opts = {}) {
     const def = CINEMATICS[name];
@@ -205,22 +268,30 @@ export class CameraRig {
     const focus = opts.focus ?? this.game?.flight;
     if (!focus) return Promise.reject(new Error('no focus for cinematic'));
     return new Promise((resolve) => {
+      if (this._override?.view === 'cinematic') this._endOverride(0);
       const ctx = { focus };
       const state = def.init(ctx, opts);
       const duration = opts.duration ?? cinematicDuration(def, state);
       this._beginOverride({
-        view: 'cinematic', name, def, ctx, state, t: 0, duration, resolve,
-        out: { position: new THREE.Vector3(), target: new THREE.Vector3(), fov: 50, roll: 0 },
+        view: 'cinematic', name, def, ctx, state, t: 0, duration, resolve, blendOut: opts.blendOut ?? 0.6,
+        out: { position: new THREE.Vector3(), target: new THREE.Vector3(), fov: 50, roll: 0, shift: 0, cut: false, dof: null },
       }, opts.blend ?? 0);
       this.game?.events?.emit('camera:cinematic', { name, state: 'start' });
     });
   }
 
-  stopCinematic() {
-    if (this._override?.view === 'cinematic') this._endOverride(0.6);
+  /** Stop the running cinematic (optionally only if it is `name`). */
+  stopCinematic(name) {
+    const o = this._override;
+    if (o?.view !== 'cinematic' || (name && o.name !== name)) return;
+    this.game?.events?.emit('camera:cinematic', { name: o.name, state: 'end' });
+    this._endOverride(o.blendOut ?? 0.6);
   }
 
+  get cinematicName() { return this._override?.view === 'cinematic' ? this._override.name : null; }
+
   get lockTarget() {
+    if (this.devLockTarget?.alive !== false && this.devLockTarget?.position) return this.devLockTarget;
     const h = this.game?.hud;
     const t = h?.lock?.target;
     if (t && t.alive !== false && t.position) return t;
@@ -237,16 +308,23 @@ export class CameraRig {
     const ts = g?.timeScale ?? 1;
     const rdt = ts > 1e-3 ? Math.min(dt / ts, 0.1) : dt;
     this._t += rdt;
+    this.warp.update(rdt);
     const cam = this.camera;
     this.cut = this.cut || false;
+    this.dofOut = null;
 
     // -- choose the view --------------------------------------------------
     let view = this._override?.view ?? this.mode;
-    if (!this._override && this.lockHeld && this.lockTarget && !flight.crashed) view = 'lock';
+    if (!this._override && !flight.crashed) {
+      if (this.lockHeld && this.lockTarget) view = 'lock';
+      else if (this.mode === 'chase' && this.options.actionCam && this.actionTarget && !inDangerNow(g)) view = 'action';
+    }
     if (view !== this.view) {
       const prev = this.view;
       this.view = view;
-      if (!this.cut && !this._override && (prev === 'lock' || view === 'lock')) this._startBlend(0.28);
+      if (view === 'lock') this._lockFresh = true;
+      if (view === 'action') this._actionFresh = true;
+      if (!this.cut && !this._override && (prev === 'lock' || view === 'lock' || prev === 'action' || view === 'action')) this._startBlend(view === 'action' || prev === 'action' ? 0.8 : 0.3);
       g?.events?.emit('camera:mode', { mode: view, base: this.mode });
     }
 
@@ -256,28 +334,36 @@ export class CameraRig {
     L.yaw = damp(L.yaw, L.active ? L.targetYaw : 0, lookLambda, rdt);
     L.pitch = damp(L.pitch, L.active ? L.targetPitch : 0, lookLambda, rdt);
 
+    // -- feel springs shared by the views -----------------------------------
+    // afterburner light-off: a quick FOV punch on top of the sustained kick
+    if (flight.reheat && !this._prevReheat) { this.fovPulse(30); this.addTrauma(0.08); }
+    this._prevReheat = !!flight.reheat;
+    springStep(this._fovPulse, 0, 2.4, 0.45, rdt);
+
     // -- pose for the view ------------------------------------------------
     let fov;
     let near = 0.5;
+    let shift = 0;
     switch (view) {
       case 'cockpit':
       case 'hud':
         fov = this._firstPerson(rdt, flight, aircraft);
         near = view === 'cockpit' ? 0.05 : 0.3;
         break;
-      case 'lock': fov = this._lockView(rdt, flight); break;
-      case 'missile': fov = this._missileView(rdt, flight); break;
-      case 'kill': fov = this._killView(rdt, flight); break;
-      case 'death': fov = this._deathView(rdt); break;
-      case 'cinematic': fov = this._cinematicView(rdt); break;
+      case 'lock': fov = lockView(this, rdt, flight) ?? this._chase(rdt, flight); break;
+      case 'action': fov = actionView(this, rdt, flight) ?? this._chase(rdt, flight); break;
+      case 'missile': fov = missileView(this, rdt, flight); break;
+      case 'kill': fov = killView(this, rdt, flight); break;
+      case 'death': fov = deathView(this, rdt); break;
+      case 'cinematic': ({ fov, shift } = this._cinematicView(rdt)); break;
       default: fov = this._chase(rdt, flight); break;
     }
     // keep the chase state warm while an override is on screen, so returning is seamless
-    if (view !== 'chase' && view !== 'cockpit' && view !== 'hud') this._chaseState(rdt, flight);
+    if (view !== 'chase' && view !== 'cockpit' && view !== 'hud' && view !== 'lock' && view !== 'action') this._chaseState(rdt, flight);
+    if (RIDING.has(view)) fov += this._fovPulse.x;
 
     // -- airframe visibility ---------------------------------------------
     if (aircraft?.model) {
-      const firstPerson = view === 'cockpit' || view === 'hud';
       aircraft.model.visible = view !== 'hud';
       if (this.cockpitModel) this.cockpitModel.visible = view === 'cockpit';
     }
@@ -288,9 +374,19 @@ export class CameraRig {
       b.t += rdt;
       const k = easeInOut(b.t / b.dur);
       cam.position.lerpVectors(b.from.pos, cam.position, k);
-      _q.copy(b.from.quat).slerp(cam.quaternion, k);
+      if (RIDING.has(view) && flight) {
+        // returning to the jet: the in-between camera keeps looking at it
+        // (a plain slerp between two far-apart poses swings it off frame)
+        _m.lookAt(cam.position, flight.position, _u.set(0, 1, 0));
+        _q2.setFromRotationMatrix(_m);
+        if (k < 0.5) _q.copy(b.from.quat).slerp(_q2, easeInOut(k * 2));
+        else _q.copy(_q2).slerp(cam.quaternion, easeInOut(k * 2 - 1));
+      } else {
+        _q.copy(b.from.quat).slerp(cam.quaternion, k);
+      }
       cam.quaternion.copy(_q);
       fov = b.from.fov + (fov - b.from.fov) * k;
+      shift = (b.from.shift ?? 0) + (shift - (b.from.shift ?? 0)) * k;
       if (b.t >= b.dur) this._blend = null;
     } else if (this.cut) {
       this._blend = null;
@@ -307,10 +403,17 @@ export class CameraRig {
     this.trauma = Math.max(0, this.trauma - rdt * 1.25);
 
     // -- lens ----------------------------------------------------------------
+    if (!this.options.dof) this.dofOut = null;
     this._fov = fov;
-    if (cam.fov !== fov || cam.near !== near) {
+    // three.js slides the frustum's left edge by near*filmOffset/filmWidth, so a
+    // positive filmOffset moves the subject *left*. Convert "fraction of frame
+    // width, > 0 = subject right of centre" into that unit (fov dependent).
+    const frameW = 2 * cam.aspect * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5);
+    const filmOffset = shift ? -shift * frameW * cam.getFilmWidth() : 0;
+    if (cam.fov !== fov || cam.near !== near || cam.filmOffset !== filmOffset) {
       cam.fov = fov;
       cam.near = near;
+      cam.filmOffset = filmOffset;
       cam.updateProjectionMatrix();
     }
     cam.updateMatrixWorld();
@@ -319,6 +422,7 @@ export class CameraRig {
     this._lastOut.pos.copy(cam.position);
     this._lastOut.quat.copy(cam.quaternion);
     this._lastOut.fov = fov;
+    this._lastOut.shift = shift;
   }
 
   /** Called by the system after post has consumed `cut`. */
@@ -373,11 +477,16 @@ export class CameraRig {
     _w.copy(_vd).multiplyScalar(-dist).sub(_r.copy(_f).multiplyScalar(-dist)).multiplyScalar(0.45);
     _v.add(_w);
 
-    // Damp the offset in the aircraft's frame, never the world position:
-    // damping a world position chasing 250 m/s leaves speed/lambda metres of lag.
+    // Spring the offset in the aircraft's frame, never the world position:
+    // damping a world position chasing 250 m/s leaves speed/lambda metres of
+    // lag. The spring loosens with speed (camera lag tuned per speed) and
+    // overshoots a touch, so pulls and burner kicks drag the lens along.
     _q.copy(flight.orientation).invert();
     _v.applyQuaternion(_q);
-    this._offsetLocal.lerp(_v, dampFactor(this.cut ? 1e6 : 10, dt));
+    if (this.cut) this._offSpring.init = false;
+    const freq = chaseLagFreq(flight.airspeed, this.options.reducedMotion ? 0.5 : this.options.cameraLag);
+    springVec(this._offSpring, _v, freq, 0.82, dt);
+    this._offsetLocal.copy(this._offSpring.x);
     _v.copy(this._offsetLocal).applyQuaternion(flight.orientation);
     cam.position.copy(flight.position).add(_v);
 
@@ -412,22 +521,31 @@ export class CameraRig {
   _firstPerson(dt, flight, aircraft) {
     const cam = this.camera;
     this._chaseState(dt, flight);
+    const hb = this.options.headBob * (this.options.reducedMotion ? 0.3 : 1);
     // Eye: measured pilot eye (or the cockpit socket for other airframes).
     // The cockpit overlay's `eye` socket wins (useCockpitEye), then the
     // airframe's cockpit socket (the measured pilot eye), then the fallback.
     const eye = this.useCockpitEye ? this.eye : (aircraft?.sockets?.cockpit?.position ?? this.eye);
     _v.copy(eye);
-    // head drops under +G, rises under -G; small fore-aft surge with thrust
-    _v.y -= clamp(this._gSpring.x * 0.03, -0.03, 0.06);
-    _v.z += clamp(this._accSpring.x * 0.012, -0.02, 0.04);
+    // head drops under +G, rises under -G; small fore-aft surge with thrust;
+    // a fast vertical buffet when the airframe rumbles (fast and low, guns)
+    _v.y -= clamp(this._gSpring.x * 0.03, -0.03, 0.06) * hb;
+    _v.z += clamp(this._accSpring.x * 0.012, -0.02, 0.04) * hb;
+    _v.y += noise1(this._t * 31, 7) * 0.0045 * this.rumble * hb;
     _v.applyQuaternion(flight.orientation);
     cam.position.copy(flight.position).add(_v);
 
-    // head: free look plus a small instinctive turn into the turn
+    // head: free look, a small instinctive turn into the turn, the head
+    // pulled down by G (the helmet is heavy at 7 G) and lagging the roll
     _w.copy(this._turn).applyQuaternion(_q.copy(flight.orientation).invert());
+    const rollRate = flight.rates?.z ?? 0;
+    const rollAcc = (rollRate - this._prevRoll) / Math.max(dt, 1e-3);
+    this._prevRoll = rollRate;
+    springStep(this._head.pitch, -clamp((flight.gLoad - 1) * 0.0075, -0.03, 0.06) * hb, 1.6, 0.7, dt);
+    springStep(this._head.roll, clamp(-rollRate * 0.035 - rollAcc * 0.004, -0.09, 0.09) * hb, 2.2, 0.55, dt);
     const yaw = this.look.yaw * 1.6 + clamp(_w.x * 0.25, -0.12, 0.12);
-    const pitch = this.look.pitch * 1.1 + clamp(_w.y * 0.15, -0.06, 0.1);
-    _e.set(pitch, -yaw, 0, 'YXZ');
+    const pitch = this.look.pitch * 1.1 + clamp(_w.y * 0.15, -0.06, 0.1) + this._head.pitch.x;
+    _e.set(pitch, -yaw, this._head.roll.x, 'YXZ');
     _q.setFromEuler(_e);
     cam.quaternion.copy(flight.orientation).multiply(_q);
     cam.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
@@ -437,104 +555,13 @@ export class CameraRig {
     return this.cut ? target : damp(this._fov ?? target, target, 3, dt);
   }
 
-  // ---------------------------------------------------------------- overrides
-
-  _lockView(dt, flight) {
-    const cam = this.camera;
-    const T = this.lockTarget?.position;
-    if (!T) return this._chase(dt, flight);
-    this._chaseState(dt, flight);
-    // behind the jet on the target line, a touch high: the jet in the lower
-    // foreground, the target framed over its spine
-    _v.copy(T).sub(flight.position);
-    const d = _v.length();
-    _v.divideScalar(Math.max(d, 1));
-    _u.set(0, 1, 0).applyQuaternion(this._boomQuat).lerp(WORLD_UP, 0.5).normalize();
-    _w.copy(flight.position).addScaledVector(_v, -24).addScaledVector(_u, 4.5);
-    const ground = terrainHeight(_w.x, _w.z) + 5;
-    if (_w.y < ground) _w.y = ground;
-    cam.position.copy(_w);
-    // look between target and jet by angle, then open the lens until the jet fits
-    _r.copy(T).sub(_w).normalize();
-    _f.copy(flight.position).sub(_w).normalize();
-    _vd.copy(_r).multiplyScalar(0.72).addScaledVector(_f, 0.28).normalize();
-    cam.up.copy(_u);
-    cam.lookAt(_w.add(_vd));
-    const jetAngle = THREE.MathUtils.radToDeg(_vd.angleTo(_f));
-    return clamp(Math.max(58 - Math.log10(Math.max(d, 10)) * 6, (jetAngle * 2) / 0.72), 34, 72);
-  }
-
-  _missileView(dt, flight) {
-    const o = this._override;
-    const m = o.missile;
-    const cam = this.camera;
-    if (m.alive !== false) {
-      o.last.copy(m.position);
-      if (m.velocity?.lengthSq?.() > 1) _vd.copy(m.velocity).normalize();
-      else _vd.set(0, 0, -1).applyQuaternion(m.quaternion ?? _q.identity());
-      _w.copy(m.position).addScaledVector(_vd, -9).addScaledVector(WORLD_UP, 1.6);
-      if (!o.init) { o.pos = _w.clone(); o.init = true; }
-      o.pos.lerp(_w, dampFactor(12, dt));
-      cam.position.copy(o.pos);
-      cam.up.copy(WORLD_UP);
-      cam.lookAt(_r.copy(m.position).addScaledVector(_vd, 30));
-    } else {
-      o.hold += dt;
-      cam.up.copy(WORLD_UP);
-      cam.lookAt(o.last);
-      if (o.hold > 1.3) this._endOverride(0.4);
-    }
-    return 56;
-  }
-
-  _killView(dt, flight) {
-    const o = this._override;
-    const g = this.game;
-    o.t += dt;
-    // slow motion: ease into 0.25x, hold, ease back out
-    if (g) {
-      const k = o.t < 0.15 ? o.t / 0.15 : o.t > o.dur - 0.5 ? (o.dur - o.t) / 0.5 : 1;
-      g.timeScale = 1 + (0.25 - 1) * clamp(k, 0, 1);
-    }
-    const a = o.a0 + o.t * 0.35;
-    const cam = this.camera;
-    cam.position.set(Math.sin(a) * o.radius, o.radius * 0.28, -Math.cos(a) * o.radius).add(o.center);
-    const ground = terrainHeight(cam.position.x, cam.position.z) + 8;
-    if (cam.position.y < ground) cam.position.y = ground;
-    cam.up.copy(WORLD_UP);
-    const tp = o.target?.position ?? o.center;
-    cam.lookAt(_w.copy(o.center).lerp(tp, 0.5));
-    if (o.t >= o.dur || inDangerNow(g)) this._endOverride(0);
-    return 44;
-  }
-
-  _deathView(dt) {
-    const o = this._override;
-    o.t += dt;
-    const cam = this.camera;
-    if (o.velocity) {
-      // dragged ballistic fall (k = 0.6/s), stopped by the terrain
-      const k = 0.6;
-      const tau = (1 - Math.exp(-k * o.t)) / k;
-      o.center.copy(o.origin).addScaledVector(o.velocity, tau);
-      o.center.y -= 4.9 * o.t * o.t;
-      const gh = terrainHeight(o.center.x, o.center.z);
-      if (o.center.y < gh) { o.center.y = gh; o.velocity = null; }
-    }
-    const a = o.a0 + o.t * 0.12;
-    o.r0 ??= Math.hypot(o.anchor.x - o.origin.x, o.anchor.z - o.origin.z);
-    const r = o.r0 * (1 + o.t * 0.05);
-    cam.position.set(Math.sin(a) * r, 0, -Math.cos(a) * r).add(o.center);
-    cam.position.y = Math.max(o.center.y + (o.anchor.y - o.origin.y) + o.t * 2, terrainHeight(cam.position.x, cam.position.z) + 20);
-    cam.up.copy(WORLD_UP);
-    cam.lookAt(o.center);
-    return clamp(50 - o.t * 2, 34, 50);
-  }
+  // ---------------------------------------------------------------- cinematic
 
   _cinematicView(dt) {
     const o = this._override;
     o.t += dt;
     o.def.pose(o.t, o.state, o.ctx, o.out);
+    if (o.out.cut) this.cut = true;
     const cam = this.camera;
     cam.position.copy(o.out.position);
     const ground = terrainHeight(cam.position.x, cam.position.z) + 4;
@@ -542,16 +569,15 @@ export class CameraRig {
     cam.up.copy(WORLD_UP);
     cam.lookAt(o.out.target);
     if (o.out.roll) cam.rotateZ(o.out.roll);
+    if (o.out.dof) this.dofOut = { ...o.out.dof };
+    const res = { fov: o.out.fov, shift: o.out.shift ?? 0 };
     if (o.t >= o.duration) {
       this.game?.events?.emit('camera:cinematic', { name: o.name, state: 'end' });
-      this._endOverride(0.6);
+      this._endOverride(o.blendOut ?? 0.6);
     }
-    return o.out.fov;
+    return res;
   }
 }
 
-function inDangerNow(g) {
-  if (!g) return false;
-  const h = g.hud ?? {};
-  return (h.threats?.length ?? 0) > 0 || h.warning === 'missile' || g.flight?.crashed;
-}
+/** Kept for importers of the old helper. */
+export { inDangerNow };

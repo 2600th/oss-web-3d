@@ -15,60 +15,7 @@ import {
  */
 export const reversedDepthToDistance = (d, near, far) => near.mul(far).div(d.mul(far.sub(near)).add(near));
 
-// ---------------------------------------------------------------------------
-// Motion blur
-// ---------------------------------------------------------------------------
-
-/**
- * Depth-aware velocity motion blur (simplified McGuire reconstruction).
- *
- * `velocity` is three's MRT velocity: NDC delta current - previous, per frame
- * (camera motion + per-object motion). Converted to a UV vector, scaled by
- * `strength` (shutter/speed/user) and clamped to `maxPx`.
- *
- * Foreground rejection keeps the player's jet sharp in the chase view: a
- * background pixel gathering along its streak ignores taps that land on
- * something much closer that is itself barely moving (the jet rides with the
- * camera, so its own velocity is ~0). Without it the jet smears a ghost of
- * itself into the terrain streaks around it.
- */
-export function velocityMotionBlur({ color, velocity, depth, near, far, strength, maxPx, samples, radial }) {
-  return Fn(() => {
-    const uv0 = uv();
-    const px = screenSize;
-    const v = velocity.sample(uv0).xy.mul(vec2(0.5, -0.5)).mul(strength).toVar();
-    if (radial) {
-      // Stylised speed streaks toward the frame edges (arcade "900 km/h" read):
-      // at altitude nothing is near enough for true camera blur to show speed.
-      const c = uv0.sub(0.5);
-      v.addAssign(c.mul(radial).mul(smoothstep(0.18, 0.62, length(c.mul(vec2(1.6, 1))))));
-    }
-    const lenPx = length(v.mul(px)).toVar();
-    v.mulAssign(min(1, maxPx.div(max(lenPx, 1e-4))));
-    lenPx.assign(min(lenPx, maxPx));
-    const center = color.sample(uv0).toVar();
-    const result = vec4(center).toVar();
-
-    If(lenPx.greaterThan(0.75), () => {
-      const zc = reversedDepthToDistance(depth.sample(uv0).x, near, far);
-      const vc = length(v);
-      const jitter = interleavedGradientNoise(screenCoordinate.xy);
-      const acc = vec4(center.rgb, 1).toVar();
-      const n = float(samples);
-      Loop(samples, ({ i }) => {
-        const t = float(i).add(jitter).div(n).sub(0.5);
-        const suv = uv0.add(v.mul(t));
-        const zs = reversedDepthToDistance(depth.sample(suv).x, near, far);
-        const vs = length(velocity.sample(suv).xy.mul(vec2(0.5, -0.5)).mul(strength));
-        const foreground = zs.lessThan(zc.mul(0.75)).and(vs.lessThan(vc.mul(0.5)));
-        const w = select(foreground, float(0), float(1));
-        acc.addAssign(vec4(color.sample(suv).rgb.mul(w), w));
-      });
-      result.assign(vec4(acc.rgb.div(acc.w), center.a));
-    });
-    return result;
-  })();
-}
+// Motion blur lives in ./motionBlur.js (reconstruction filter).
 
 // ---------------------------------------------------------------------------
 // Sun occlusion (rendered into a 1x1 target, sampled by the flare)
@@ -145,15 +92,19 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
   const r8 = pow(abs(cos(ang.mul(4.0).add(0.6))), 260.0).mul(0.55);
   const fine = pow(abs(cos(ang.mul(23.0).add(1.7))), 30.0).mul(0.25);
   const vary = fract(sin(ang.mul(37.0).floor().mul(12.9898)).mul(43758.5453)).mul(0.6).add(0.4);
-  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-5.2))).mul(2.4).add(fine.mul(exp(dist.mul(-14))).mul(1.5));
+  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-7.5))).mul(1.5).add(fine.mul(exp(dist.mul(-16))).mul(1.2));
   out.addAssign(vec3(1.0, 0.95, 0.88).mul(rays));
 
-  // anamorphic streak: thin, horizontal, cool
-  out.addAssign(vec3(0.45, 0.7, 1.0).mul(exp(abs(d.y).mul(-320))).mul(exp(abs(d.x).mul(-2.2))).mul(0.55));
+  // anamorphic streak (cylindrical front element): a hair-thin hot core and
+  // a softer cool sheath, both running most of the frame width
+  const ax = abs(d.x);
+  const core = exp(abs(d.y).mul(-520)).mul(exp(ax.mul(-1.6))).mul(0.5);
+  const sheath = exp(abs(d.y).mul(-95)).mul(exp(ax.mul(-3.2))).mul(0.12);
+  out.addAssign(vec3(0.62, 0.8, 1.0).mul(core).add(vec3(0.3, 0.5, 1.0).mul(sheath)));
 
   // halo ring around the sun, slightly chromatic
   const ring = (rad, w) => exp(dist.sub(rad).div(w).pow(2).negate());
-  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.09));
+  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.05));
 
   // ghosts along the sun -> centre axis (position = s * f, f < 0 is mirrored)
   const ghost = (f, size, tint, strength, hex) => {
@@ -259,15 +210,68 @@ export const screenStates = Fn(([c, r, grey, red, damage, lowHealth]) => {
   return out;
 }, { c: 'vec3', r: 'float', grey: 'float', red: 'float', damage: 'float', lowHealth: 'float', return: 'vec3' });
 
-/** Fine animated luminance grain, strongest in the mid-tones (display space). */
+/**
+ * Animated film grain (display space). Two octaves of hashed noise (fine +
+ * a softer 2 px clump) so it reads as grain, not as per-pixel digital noise;
+ * strongest in the mid-tones and nearly absent in clipped whites and blacks,
+ * like real stock.
+ */
 // (inline, not a typed Fn: it reads the fragment-coordinate builtin)
 export const filmGrain = (c, amount, seed) => {
+  const hash = (q) => fract(sin(dot(q, vec2(12.9898, 78.233))).mul(43758.5453));
   const p = screenCoordinate.xy.add(vec2(seed.mul(113.0), seed.mul(71.0))).mod(1024.0);
-  const n = fract(sin(dot(p, vec2(12.9898, 78.233))).mul(43758.5453)).sub(0.5);
+  const fine = hash(p).sub(0.5);
+  const clump = hash(p.mul(0.5).floor().add(vec2(seed.mul(7.0), 3.0))).sub(0.5);
+  const n = fine.mul(0.65).add(clump.mul(0.55));
   const l = luminance(c);
-  const w = float(1).sub(abs(l.mul(2).sub(1))).mul(0.7).add(0.3);
+  const w = smoothstep(0.0, 0.18, l).mul(float(1).sub(smoothstep(0.55, 0.98, l))).mul(0.8).add(0.2);
   return c.add(n.mul(amount).mul(w));
 };
+
+// ---------------------------------------------------------------------------
+// Speed: airflow streaks, sonic shock
+// ---------------------------------------------------------------------------
+
+/**
+ * Thin condensation / airflow streaks whipping outward from the flight-path
+ * focus (0..1 coverage). Polar coordinates around the focus: each of 260
+ * angular lanes carries at most one short, hair-thin dash travelling outward;
+ * lanes are sparse and randomly phased so it never reads as a tunnel. Kept to
+ * the periphery: the centre of attention stays clean.
+ */
+export const airflowStreaks = Fn(([uv0, focus, aspect, t]) => {
+  const d = uv0.sub(focus).mul(vec2(aspect, 1));
+  const r = length(d);
+  const a = atan(d.y, d.x).div(6.2831853).add(0.5);
+  const lanes = float(260);
+  const lane = a.mul(lanes).floor();
+  const h1 = fract(sin(lane.mul(12.9898)).mul(43758.5453));
+  const h2 = fract(sin(lane.mul(78.233)).mul(24634.6345));
+  // hair-thin across the lane, the dash fades in along its length
+  const across = abs(fract(a.mul(lanes)).sub(0.5)).mul(2);
+  const thin = smoothstep(0.35, 0.0, across);
+  const speed = h2.mul(1.4).add(1.6);
+  const phase = fract(r.mul(0.55).sub(t.mul(speed)).add(h1));
+  const len = h2.mul(0.06).add(0.03);
+  const dash = smoothstep(0.0, len, phase).mul(smoothstep(len.mul(1.6), len, phase));
+  const sparse = select(h1.greaterThan(0.72), float(1), float(0));
+  const periphery = smoothstep(0.32, 0.75, r);
+  return thin.mul(dash).mul(sparse).mul(periphery);
+}, { uv0: 'vec2', focus: 'vec2', aspect: 'float', t: 'float', return: 'float' });
+
+/**
+ * Sonic "thump": one ring expanding from the flight-path focus that bends the
+ * image as it passes. shock.x = phase 0..1, shock.y = amplitude (uv).
+ */
+export const shockOffset = Fn(([uv0, focus, aspect, shock]) => {
+  const k = vec2(aspect, 1);
+  const d = uv0.sub(focus).mul(k);
+  const r = length(d);
+  const R = shock.x.mul(1.3);
+  const band = exp(r.sub(R).div(0.05).pow(2).negate());
+  const fade = float(1).sub(shock.x).mul(smoothstep(0.0, 0.08, shock.x));
+  return d.div(max(r, 1e-4)).div(k).mul(band).mul(fade).mul(shock.y);
+}, { uv0: 'vec2', focus: 'vec2', aspect: 'float', shock: 'vec2', return: 'vec2' });
 
 /** UV with uniform (non-stretched) aspect for overlay textures. */
 export const aspectUV = (uv0, aspect) => uv0.sub(0.5).mul(vec2(aspect, 1)).add(0.5);

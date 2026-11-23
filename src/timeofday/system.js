@@ -110,17 +110,8 @@ export function createSystem(game) {
     if (u.vignette && day.vignette !== undefined) u.vignette.value = Math.min(0.6, day.vignette * g.vignette);
   };
 
-  // The camera system feeds PostFX the key light as "the sun" for the lens
-  // flare. The moon should not throw a starburst and ghosts: scale the flare
-  // by how much of a sun the key light is. (Post owner: read `env.keyLight`
-  // directly and this wrapper can go.)
-  if (post.setFrameState) {
-    const setFrameState = post.setFrameState.bind(post);
-    post.setFrameState = (s) => {
-      if (s && typeof s.sunIntensity === 'number' && env.keyLight === 'moon') s.sunIntensity = 0;
-      setFrameState(s);
-    };
-  }
+  // Lens flare/glare under the moon: PostFX gates them on the frame state's
+  // `keyLight` (fed from env.keyLight by the camera system).
 
   // ------------------------------------------------------------ cockpit night
   const cockpit = { mats: null, dim: -1 };

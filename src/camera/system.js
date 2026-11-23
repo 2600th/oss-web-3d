@@ -1,11 +1,17 @@
+import * as THREE from 'three/webgpu';
 import { loadModel } from '../assets/loadModel.js';
 import { ScreenState } from '../fx/ScreenState.js';
-import { explosionTrauma, flightRumble, inDanger, clamp } from './cameraMath.js';
+import { waterDrivers, rainFrom } from '../fx/waterModel.js';
+import {
+  explosionTrauma, flightRumble, inDanger, clamp, smoothstep, speedOfSound, machCrossing,
+} from './cameraMath.js';
 
 export const order = 85;
 
 const LOOK_RANGE_YAW = 2.4; // rad, free-look limit (over the shoulder)
 const LOOK_RANGE_PITCH = 1.1;
+const _v = new THREE.Vector3();
+const _g = new THREE.Vector3();
 
 /**
  * Camera + post integration system (order 85, camera/post extras).
@@ -16,12 +22,17 @@ const LOOK_RANGE_PITCH = 1.1;
  *    KeyB toggles the missile-follow cam.
  *  - events -> camera shake (vfx:shake, explosions, hits, guns, near misses),
  *    kill cam (target:destroyed), death cam (player:destroyed / player:crash),
- *    missile cam (missile:launch).
- *  - screen state (G-LOC greyout, redout, damage, wet lens, flash) -> PostFX.
- *  - feeds PostFX the sun, airspeed and camera cuts every frame.
+ *    missile cam (missile:launch / missile:end), sortie intro shot
+ *    (flow:state briefing -> sortie), camera:request {mode:'cinematic'|'restore'}.
+ *  - feel: Mach-crossing thump, afterburner light-off pulse (rig), fast+low
+ *    rumble, action-camera target selection.
+ *  - screen state (G-LOC greyout, redout, damage, flash) and screen water
+ *    (cloud / rain -> drops, runs, fog film, frost) -> PostFX.
+ *  - feeds PostFX the sun, flight path, speed, Mach, AGL, view, depth of field
+ *    and camera cuts every frame.
  *  - loads the cockpit overlay (assets id `mig21_cockpit`) for the cockpit view.
  *
- * game.systems.camera exposes { rig, screen, options }.
+ * game.systems.camera exposes { rig, screen, options, setOption(key, value) }.
  */
 export function createSystem(game) {
   const rig = game.cameraRig;
@@ -31,12 +42,18 @@ export function createSystem(game) {
   const on = (type, fn) => off.push(game.events.on(type, fn));
   const hostileMissiles = new Set();
   const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+  const machState = {};
   let gunRumble = 0;
   let pointer = null;
+  let shock = null; // { t } sonic ripple phase
+  let lastFlow = null;
+  let pendingSortie = false;
+  let actionPick = 0;
 
   rig.attach(game);
   if (post?.options) rig.options.reducedMotion = post.options.reducedMotion;
   if (params.has('nokillcam')) rig.options.killCam = false;
+  if (params.has('actioncam')) rig.options.actionCam = true;
 
   const isPlayer = (e) => !!e && (e === game.player || e === game.playerEntity || e.isPlayer === true ||
     e.id === 'player' || e.object3d === game.player?.group);
@@ -61,13 +78,14 @@ export function createSystem(game) {
     if (!missile) return;
     if (isPlayer(missile.owner)) {
       rig.addTrauma(0.12);
-      if (rig.options.missileCam && (missile.kind ?? 'aam') !== 'rocket') rig.followMissile(missile);
+      if (rig.options.missileCam && (missile.kind ?? 'aam') !== 'rocket' && !dangerNow()) rig.followMissile(missile);
     } else {
       hostileMissiles.add(missile);
     }
   });
   on('missile:end', ({ missile, reason } = {}) => {
     if (!missile) return;
+    rig.missileEnded?.(missile, reason);
     if (hostileMissiles.has(missile)) {
       hostileMissiles.delete(missile);
       const d = missile.position?.distanceTo?.(playerPos()) ?? Infinity;
@@ -76,15 +94,7 @@ export function createSystem(game) {
   });
   on('target:destroyed', ({ target, killer, position } = {}) => {
     if (!isPlayer(killer)) return;
-    const h = game.hud ?? {};
-    const danger = inDanger({
-      threats: h.threats?.length ?? hostileMissiles.size,
-      warning: h.warning,
-      agl: game.flight.agl,
-      health: h.health ?? 1,
-      crashed: game.flight.crashed,
-    });
-    if (!danger) rig.killCam(target, position);
+    if (!dangerNow()) rig.killCam(target, position);
   });
   on('player:destroyed', ({ position, velocity } = {}) => {
     rig.addTrauma(1);
@@ -94,7 +104,21 @@ export function createSystem(game) {
     rig.addTrauma(1);
     if (rig.view !== 'death') rig.deathCam(position ?? game.flight.position);
   });
-  on('player:respawn', () => { screen.reset(); rig.reset(game.flight); });
+  on('player:respawn', () => {
+    screen.reset();
+    rig.reset(game.flight);
+    post?.water?.clear();
+    machState.above = undefined;
+  });
+  // Briefing -> sortie: the intro shot. Started next frame: the ui stops any
+  // running cinematic when it switches screens on the same event.
+  on('flow:state', ({ state, resumed } = {}) => {
+    if (state === 'sortie' && !resumed && (lastFlow === 'briefing' || lastFlow === 'debrief' || lastFlow === 'select')) pendingSortie = true;
+    lastFlow = state;
+  });
+  on('camera:request', ({ mode } = {}) => {
+    if (mode === 'restore') rig.stopCinematic?.('sortie');
+  });
 
   // --- free look: right mouse drag ------------------------------------------
   const canvas = game.r?.canvas;
@@ -131,6 +155,8 @@ export function createSystem(game) {
   // Bindings: prefer the gameplay owner's input.actions when it exists.
   const input = game.input;
   const actionPressed = (name, code) => {
+    const p = input?.pressed?.[name];
+    if (p !== undefined) return !!p;
     const a = input?.actions?.[name];
     if (a !== undefined && a !== null) {
       if (typeof a === 'object') return !!(a.pressed ?? a.down);
@@ -143,6 +169,46 @@ export function createSystem(game) {
     if (a !== undefined && a !== null) return typeof a === 'object' ? !!(a.held ?? a.down) : !!a;
     return input?.keys?.has?.(code) ?? false;
   };
+
+  function dangerNow() {
+    const h = game.hud ?? {};
+    return inDanger({
+      threats: h.threats?.length ?? hostileMissiles.size,
+      warning: h.warning,
+      agl: game.flight.agl,
+      health: h.health ?? 1,
+      crashed: game.flight.crashed,
+    });
+  }
+
+  /** The enemy the action camera frames: the selected air target, else the nearest hostile fighter within 3.5 km. */
+  function pickActionTarget() {
+    const h = game.hud ?? {};
+    const P = playerPos();
+    const sel = h.target?.entity ?? h.lock?.target;
+    if (sel?.position && sel.alive !== false && (sel.class === 'air' || sel.kind === 'fighter' || sel.kind === 'ace') && sel.position.distanceTo(P) < 3500) return sel;
+    let best = null;
+    let bd = 3500;
+    for (const t of h.targets ?? []) {
+      const e = t.entity ?? t;
+      if (!e?.position || e.alive === false || e.team !== 'hostile' || (t.class ?? e.class) !== 'air') continue;
+      const d = e.position.distanceTo(P);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best;
+  }
+
+  /** Tag the player's airframe for the motion blur's player shutter (opaque), keep glass see-through (blended). */
+  function tagPlayer(root) {
+    if (!post || !root) return;
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of [].concat(o.material)) {
+        if (m?.transparent) post.useTransparentVelocity?.(m);
+        else post.usePlayerVelocity?.(m);
+      }
+    });
+  }
 
   async function loadCockpit() {
     // First-person overlay from the assets area (emissive displays, periscope,
@@ -162,16 +228,32 @@ export function createSystem(game) {
         rig.useCockpitEye = true;
       }
       rig.cockpitModel = model;
+      tagPlayer(model);
     } catch (e) {
       console.warn('[camera] cockpit overlay unavailable', e);
     }
   }
 
-  return {
+  /** Screen-water surface for a view: lens on the riding chase views, canopy in first person. */
+  const surfaceFor = (view) => (view === 'cockpit' || view === 'hud' ? 'canopy'
+    : view === 'chase' || view === 'lock' || view === 'action' ? 'lens' : 'none');
+
+  const api = {
     name: 'camera',
     rig,
     screen,
     options: rig.options,
+    /** Runtime weather override for dev/testing ({rain}); null = follow env. */
+    weatherOverride: null,
+    /** Last screen-water drivers (debug). */
+    water: null,
+
+    /** Set a camera or camera-post option by name (UI settings hook). */
+    setOption(key, value) {
+      if (key in rig.options) rig.options[key] = value;
+      if (post?.options && (key === 'dof' || key === 'screenWater' || key === 'speedStreaks' || key === 'reducedMotion')) post.options[key] = value;
+      if (key === 'dof') rig.options.dof = !!value;
+    },
 
     async init() {
       // Terrain vertices are placed by a positionNode: give its materials
@@ -181,13 +263,11 @@ export function createSystem(game) {
         game.terrain.group.traverse((o) => { if (o.material) for (const m of [].concat(o.material)) mats.add(m); });
         for (const m of mats) post.useStaticVelocity(m);
       }
-      // Canopy / gunsight glass on the player's jet: keep the velocity behind it.
-      if (post?.useTransparentVelocity && game.player?.group) {
-        game.player.group.traverse((o) => {
-          if (o.isMesh) for (const m of [].concat(o.material)) post.useTransparentVelocity(m);
-        });
-      }
+      // The player's jet: glass keeps the velocity behind it, the airframe is
+      // tagged for the motion blur's short player shutter.
+      tagPlayer(game.player?.group);
       loadCockpit();
+      if (import.meta.env?.DEV) import('./dev.js').then((m) => m.installCameraDev(game, api));
       if (params.get('cinematic')) rig.playCinematic(params.get('cinematic'));
     },
 
@@ -195,7 +275,8 @@ export function createSystem(game) {
       if (actionPressed('camera', 'KeyC')) rig.cycleMode();
       if (actionPressed('missileCam', 'KeyB')) rig.options.missileCam = !rig.options.missileCam;
       const pad = input?.gamepad;
-      rig.lockHeld = actionHeld('lookTarget', 'KeyV') || !!pad?.buttons?.[11]?.pressed;
+      rig.lockHeld = actionHeld('lookTarget', 'KeyV') || !!pad?.buttons?.[11]?.pressed || !!api.devLock;
+      rig.devLockTarget = api.devLock || null;
       // right stick free look (when the mouse is not driving it)
       if (!pointer && pad?.axes?.length >= 4) {
         const sx = Math.abs(pad.axes[2]) > 0.2 ? pad.axes[2] : 0;
@@ -216,28 +297,94 @@ export function createSystem(game) {
       const f = game.flight;
       gunRumble = game.hud?.gun?.firing === true ? 1 : gunRumble;
       rig.rumble = Math.max(flightRumble(f), gunRumble * 0.6);
+
+      // sortie intro (skippable: any weapon or camera input ends it)
+      if (pendingSortie) {
+        pendingSortie = false;
+        if (rig.options.sortieIntro && !rig.options.reducedMotion && game.playerControl) {
+          rig.playCinematic('sortie', { blendOut: 1.1 }).catch(() => {});
+        }
+      }
+      if (rig.cinematicName === 'sortie' && (input?.pressed?.fireMissile || input?.pressed?.fireGun || input?.pressed?.camera || dangerNow())) {
+        rig.stopCinematic('sortie');
+      }
+
+      // action camera: re-pick the subject a few times a second
+      actionPick -= dt;
+      if (actionPick <= 0) {
+        actionPick = 0.25;
+        rig.actionTarget = rig.options.actionCam && game.playerControl && !dangerNow() ? pickActionTarget() : null;
+      }
+
+      // Mach crossing: sonic thump
+      const mach = f.airspeed / speedOfSound(f.altitude ?? f.position.y);
+      api.mach = mach;
+      const x = machCrossing(machState, mach);
+      if (x !== 0 && game.playerControl && !f.crashed) {
+        rig.sonicThump(x);
+        if (x > 0) shock = { t: 0 };
+        game.events.emit('camera:sonic', { direction: x, mach });
+      }
     },
 
     lateUpdate(dt) {
       const ts = game.timeScale ?? 1;
       const rdt = ts > 1e-3 ? dt / ts : dt;
       const f = game.flight;
+      const env = game.env;
+      const view = rig.view;
+      const inCloud = env?.inCloud ?? 0;
       screen.update(rdt, {
         gLoad: f.gLoad,
         health: game.hud?.health,
-        inCloud: game.env?.inCloud ?? 0,
-        alive: !f.crashed && rig.view !== 'death',
+        inCloud,
+        alive: !f.crashed && view !== 'death',
       });
       if (post?.setFrameState) {
-        const sunI = game.env?.sun ? clamp(game.env.sun.intensity / 3.2, 0, 1.5) : 1;
-        const sunUp = game.env?.sunDirection ? clamp(game.env.sunDirection.y * 8 + 0.3, 0, 1) : 1;
+        const sunI = env?.sun ? clamp(env.sun.intensity / 3.2, 0, 1.5) : 1;
+        const sunUp = env?.sunDirection ? clamp(env.sunDirection.y * 8 + 0.3, 0, 1) : 1;
+        const riding = view === 'chase' || view === 'cockpit' || view === 'hud' || view === 'lock' || view === 'action';
+        const mach = api.mach ?? 0;
+        // water on the glass
+        const surface = surfaceFor(view);
+        const rain = rainFrom(env, f.position.y, api.weatherOverride);
+        const drivers = waterDrivers({ rain, inCloud, airspeed: f.airspeed, altitude: f.position.y, surface });
+        // gravity on the glass, in screen uv (y down): world down seen by the camera
+        const cam = game.camera;
+        _g.set(0, -1, 0).transformDirection(cam.matrixWorldInverse);
+        drivers.gravity = [_g.x * 0.12, -_g.y * 0.12];
+        drivers.surface = surface;
+        api.water = drivers;
+        // sonic ripple
+        let shockPhase = 0;
+        if (shock) {
+          shock.t += rdt;
+          shockPhase = shock.t / 0.45;
+          if (shockPhase >= 1) { shock = null; shockPhase = 0; }
+        }
+        // the jet's distance shell for the motion blur (chase-like views)
+        const camDist = cam.position.distanceTo(f.position);
+        const nearShell = view === 'chase' || view === 'lock' || view === 'action' ? camDist + 16 : 0;
         post.setFrameState({
-          sunDirection: game.env?.sunDirection,
+          sunDirection: env?.sunDirection,
           sunIntensity: sunI * sunUp,
+          // env.sun / sunDirection are the *key* light: the moon at night
+          keyLight: env?.keyLight ?? 'sun',
           // speed-driven blur/streaks only when the lens rides with the jet
-          airspeed: rig.view === 'chase' || rig.view === 'cockpit' || rig.view === 'hud' || rig.view === 'lock' ? f.airspeed : 0,
+          airspeed: riding ? f.airspeed : 0,
+          agl: f.agl,
+          mach: riding ? mach : 0,
+          view,
+          flightDir: f.velocity.lengthSq() > 1 ? _v.copy(f.velocity).normalize() : null,
+          nearShell,
           reheat: !!f.reheat,
           screen,
+          water: surface === 'none' ? null : drivers,
+          waterSurface: surface,
+          streaks: riding ? smoothstep(0.86, 0.97, mach) * (1 - smoothstep(1.25, 1.6, mach)) * 0.9 + smoothstep(240, 360, f.airspeed) * (1 - smoothstep(30, 250, f.agl)) * 0.35 : 0,
+          shock: shockPhase,
+          shockAmp: shockPhase > 0 ? 0.012 * rig.options.fovEffects : 0,
+          dof: rig.dofOut,
         });
         if (rig.cut) post.notifyCut();
       }
@@ -255,4 +402,5 @@ export function createSystem(game) {
       }
     },
   };
+  return api;
 }
