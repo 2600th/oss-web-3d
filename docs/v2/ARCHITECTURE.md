@@ -776,3 +776,55 @@ Owner paths: the terrain texture layers and the albedo / normal / detail terms o
   - The `/pitot/` mesh is dark metal instead of the exporter's magenta.
   - The cockpit atlas in `mig21.glb` is 2048 px. Byte sizes are in
     `catalog.js`.
+
+### Models polish: pilot, nav lights, ground units and weapons (additive unless marked)
+
+Owner paths: `tools/blender/build_pilot.py`, `tools/blender/assets_ground.py` and
+`assets_weapons.py` (tagged `[models polish]`), `src/assets/pilot.js`,
+`src/world/timeofday/lights/**`. Evidence: `docs/v2/evidence/polish-models/`.
+
+- **Pilot asset (new):** `pilot` / `pilot_lod1` in `catalog.js` (kind `pilot`,
+  pivot `pilot_head`, socket `pilot_eye`), in aircraft-model space (nose -Z,
+  +Y up, metres). It is not part of `mig21.glb`; it is parented at runtime.
+  - `src/assets/system.js` adds LOD0 to `game.player.model` and exposes
+    `game.systems.assets.pilot`, a `PilotRig`. Its head is hidden in the
+    `cockpit` and `hud` views.
+  - `src/assets/pilot.js` (new, no three import): `HEAD_LIMITS`,
+    `headAim(dir)`, `turnLook(bank, g)`, and `PilotRig.update(dt, { target,
+    bank, g, firstPerson })`.
+- **Hostile jets (changed):** `hostileFighterModel()` in `src/ai/models.js` now
+  returns a `THREE.LOD` named `hostile-lod`. LOD0 is `mig21_hostile` plus the
+  pilot LOD1, and `mig21_hostile_lod1` takes over at 600 m
+  (`HOSTILE_LOD1_DISTANCE`). Code that searched the returned object's direct
+  children for meshes should traverse instead.
+- **Nav lights (changed):**
+  - `attachNavLights(sprites, obj, opts)` takes `wing`, `tail`, `spine` and
+    `belly` positions. The old `halfSpan` / `wingZ` / `wingY` options are gone.
+  - The defaults are `MIG21_LAMPS` (new export of `fixtures.js`), measured on
+    the mesh's lamp lenses.
+- **`LightSprites.add(..., opts)` (new options):**
+  - `daySize` scales the sprite by day; it is mixed to 1 at night.
+  - `dir` / `cone` set an emission lobe: the model-space direction and the
+    cosine cut-off. The lobe is omnidirectional when `dir` is omitted.
+  - Internally, `lightRange` is now a vec2 `(range, daySize)` and there is a new
+    `lightDir` vec4 attribute.
+- **MiG wingtip sockets (changed):** `wingtipL/R` are now `(∓3.64, -0.777,
+  2.74)`, on the real tips. They were a bounding-box guess 0.7 m off.
+  `Aircraft.js` and `write-catalog.mjs` agree.
+- **Ground units and weapons (changed geometry, same nodes and sockets):**
+  - The Blender `wheel()` helper is now a lathe tyre with tread lugs. Pass
+    `tread=False` for track road wheels.
+  - The truck is resized to Ural-4320 dimensions.
+  - The radar dish is a true paraboloid cut, aimed up.
+  - The sangar sandbags now sit on the wall.
+  - `bomb` is now FAB-250 sized (1.92 x 0.30 m). Socket names are unchanged,
+    and the `tail` / `fuze` / `exhaust` / `feed` positions moved with the
+    geometry.
+- **Foundation berm snow (changed look):** each berm geometry carries a
+  `siteSnow` attribute (0..1) from `siteSnow(heightAt, x, z)` (new export of
+  `src/assets/system.js`).
+  - It replaces the fixed 4700-4950 m band.
+  - It mirrors the terrain material's snow-line terms: altitude, aspect, DEM
+    curvature, detail height and slope shedding.
+  - If `material.js` changes its `snowLine` / `snowRaw` formula, update
+    `siteSnow` to match.
