@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { terrainHeight } from '../world/heightfield.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
 import { REHEAT_THRESHOLD } from './burner.js';
 
 /**

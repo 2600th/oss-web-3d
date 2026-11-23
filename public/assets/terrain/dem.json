@@ -1,0 +1,33 @@
+{
+  "id": "kargil-drass-batalik-srtm1",
+  "resolution": 2049,
+  "geographicBounds": {
+    "west": 75.6,
+    "east": 76.58,
+    "south": 34.1,
+    "north": 34.9
+  },
+  "worldSize": [
+    89906.89277105509,
+    88459.19999999969
+  ],
+  "worldBounds": {
+    "minX": -44953.446385527546,
+    "maxX": 44953.446385527546,
+    "minZ": -44229.599999999846,
+    "maxZ": 44229.599999999846
+  },
+  "cellMetres": [
+    43.899849985866744,
+    43.19296874999985
+  ],
+  "heightMin": 2479,
+  "heightMax": 5947,
+  "voidsFilled": 0,
+  "sha256": "7c8345f1844c85789e5299a3a267fae26e6177a32fc523a74edb7712e06451f0",
+  "attribution": "SRTM 1-arcsecond via Mapzen terrain tiles (AWS Open Data); courtesy USGS/NASA.",
+  "sources": [
+    "https://elevation-tiles-prod.s3.amazonaws.com/skadi/N34/N34E075.hgt.gz",
+    "https://elevation-tiles-prod.s3.amazonaws.com/skadi/N34/N34E076.hgt.gz"
+  ]
+}

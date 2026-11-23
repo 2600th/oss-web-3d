@@ -1,0 +1,2693 @@
+/*
+ * Safed Sagar — interface design system.
+ *
+ * One visual language across the title sequence, the briefing, the in-flight
+ * HUD, the photography overlay and both endings: condensed uppercase type on a
+ * tight tracking, hairline rules, hard corners, and a cold instrument palette
+ * with a single warm channel reserved for warnings. Nothing is rounded, nothing
+ * is drop-shadowed, and colour is used sparingly enough that when the tricolour
+ * appears in the dedication it carries weight.
+ *
+ * No webfonts: a condensed system stack keeps the experience self-contained and
+ * removes a network dependency from the critical path.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --ink: #05070a;
+  --ink-soft: #0b1016;
+  --paper: #e9eef5;
+  --paper-dim: #9aa8b8;
+  --paper-faint: #6d7b8c;
+
+  --instrument: #b8d8c4;
+  --instrument-dim: #8fae9a;
+  --caution: #e5a23c;
+  --danger: #e05a4a;
+  /* Amber, for a reading that wants attention before it wants action. */
+  --caution: #d7a13a;
+  --confirm: #7fd6a0;
+
+  --saffron: #ff9933;
+  --india-green: #138808;
+
+  --rule: rgba(184, 216, 196, 0.42);
+  --rule-soft: rgba(184, 216, 196, 0.22);
+
+  --font: 'Barlow Condensed', 'Roboto Condensed', 'Oswald', 'Archivo Narrow',
+    'Helvetica Neue', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --track: 0.14em;
+
+  /*
+   * The touch action rail, described once.
+   *
+   * Every on-screen action — Boost, Recon, Shoot, and the zoom pair — is one
+   * column against the right edge: one width, one right edge, one vertical
+   * pitch. It used to be five independent rules with five different numbers
+   * (96x58 at 14px, 84x46 at 84px, 84x46 at 126px, 44x44 at 374px) and the
+   * result on a phone was a scatter rather than a control column: Shoot and
+   * Recon in different columns at different sizes, and the zoom buttons
+   * floating unattached in the middle of the photograph.
+   *
+   * The zoom pair is two half-width buttons filling exactly one slot, so the
+   * column has a single left edge from top to bottom:
+   *   (--act-w - --act-gap) / 2 = 44px, the minimum comfortable touch target.
+   *
+   * --act-lane is the width the HUD and the recon readouts have to leave clear
+   * for that column. Only ever consumed inside a coarse-pointer block; there is
+   * no rail on a desktop.
+   */
+  --act-w: 96px;
+  --act-h: 52px;
+  --act-gap: 8px;
+  --act-pitch: calc(var(--act-h) + var(--act-gap));
+  --act-edge: max(14px, calc(env(safe-area-inset-right) + 14px));
+  --act-right: var(--act-edge);
+  --act-bottom: max(96px, calc(env(safe-area-inset-bottom) + 96px));
+  --act-lane: calc(var(--act-right) + var(--act-w) + var(--act-gap));
+  /* Direct mode parks the throttle strip on the bezel and steps the column
+     inboard of it, so --act-lane (which resolves against the Assisted column)
+     is too narrow for anything that has to clear the buttons in *both* modes.
+     The HUD and the recon readouts are outside #touch and cannot see its
+     per-mode override, so they leave this wider lane instead. */
+  --throttle-w: 58px;
+  --act-lane-max: calc(
+    var(--act-edge) + var(--throttle-w) + var(--act-gap) + var(--act-w) + var(--act-gap)
+  );
+  /* The lane the HUD instruments leave along both edges. Wide enough for the
+     58px throttle strip, which is the only control that shares a horizontal
+     band with a tape. */
+  --hud-lane: 80px;
+  /* The smallest margin any HUD element keeps from the bezel — the same 14px
+     --act-edge and --tape-inset floor at, named so the navigation cue's
+     placement bounds can floor at it too. */
+  --hud-margin: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#viewport {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: manipulation;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.noscript {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  letter-spacing: var(--track);
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ layers */
+
+.layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 700ms ease;
+}
+.layer.show {
+  opacity: 1;
+  visibility: visible;
+}
+.centre {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 6vh 8vw;
+}
+
+/* Letterbox bars. Used by the title sequence and both endings so the cinematic
+   moments are visually distinct from the playable ones. */
+.letterbox::before,
+.letterbox::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9vh;
+  background: var(--ink);
+  z-index: 2;
+}
+.letterbox::before {
+  top: 0;
+}
+.letterbox::after {
+  bottom: 0;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  /* Heavy enough that serif body copy reads over sunlit snow, light enough in
+     the centre that the mountains behind still register as a living scene. */
+  background:
+    radial-gradient(130% 100% at 50% 45%, rgba(5, 7, 10, 0.5), rgba(5, 7, 10, 0.94)),
+    linear-gradient(180deg, rgba(5, 7, 10, 0.55), rgba(5, 7, 10, 0.2) 40%, rgba(5, 7, 10, 0.7));
+}
+
+/* --------------------------------------------------------------- typography */
+
+.eyebrow {
+  font-size: clamp(11px, 1.15vw, 16px);
+  letter-spacing: 0.62em;
+  text-indent: 0.62em;
+  color: var(--paper-dim);
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(44px, 8.6vw, 132px);
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  line-height: 0.98;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: clamp(12px, 1.5vw, 20px);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: var(--paper-dim);
+  text-transform: uppercase;
+}
+
+.lede {
+  font-size: clamp(15px, 1.9vw, 25px);
+  font-style: italic;
+  letter-spacing: 0.04em;
+  color: var(--paper-dim);
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+/* The dedication is the one block of real prose in the experience, and it is
+   centred, so its measure decides whether it reads as an inscription or as a
+   paragraph that overflowed. 62ch of Georgia is 685px — about 95 characters a
+   line, well past the 45-75 that stays readable — and at that width every
+   sentence here overran one line by a few words: the first wrapped to 676px
+   plus a 40px line containing only "War.", the second to 658px plus 419px.
+   46ch lands near 58 characters, so each sentence breaks into even lines. */
+.dedication {
+  max-width: 46ch;
+  margin: 0 auto;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(13px, 1.35vw, 18px);
+  line-height: 1.7;
+  color: var(--paper-dim);
+  letter-spacing: 0.015em;
+}
+.dedication p {
+  margin: 0 0 1.35em;
+  /* Evens the line lengths within each sentence and takes the orphan with it.
+     Browsers without it fall back to normal wrapping, which the narrower
+     measure has already made acceptable. */
+  text-wrap: balance;
+}
+/* The stack gap owns the space before "Jai Hind", so the last paragraph must
+   not add a second one on top of it. */
+.dedication p:last-child {
+  margin-bottom: 0;
+}
+
+.jaihind {
+  font-size: clamp(15px, 1.8vw, 23px);
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  text-transform: uppercase;
+  color: var(--paper);
+}
+
+.tricolour {
+  width: min(320px, 46vw);
+  height: 2px;
+  margin: 0 auto;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--saffron) 18%,
+    var(--paper) 50%,
+    var(--india-green) 82%,
+    transparent
+  );
+  opacity: 0.85;
+}
+
+.stack > * + * {
+  margin-top: var(--gap, 1.6rem);
+}
+
+.prompt {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  padding: 9px 5px;
+  font-family: var(--font);
+  font-size: clamp(11px, 1.05vw, 14px);
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  color: var(--instrument-dim);
+  text-transform: uppercase;
+  animation: none;
+  cursor: pointer;
+  pointer-events: none;
+}
+.prompt.live {
+  animation: pulse 2.6s ease-in-out infinite;
+  pointer-events: auto;
+}
+.prompt:hover,
+.prompt:focus-visible {
+  color: var(--paper);
+  border-bottom-color: var(--rule);
+  outline: none;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.disclaimer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2.4vh;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--paper-faint);
+  text-transform: uppercase;
+  padding: 6px 6vw 8px;
+  line-height: 1.7;
+  z-index: 3;
+  /* This line is a statement the project is required to make, and it sat at
+     10px of --paper-faint directly over sunlit snow, where it was effectively
+     invisible. Same rule the HUD follows: legibility comes from a local scrim,
+     never from raising the opacity of the type until it shouts. */
+  background: linear-gradient(to top, rgba(3, 6, 10, 0.72), rgba(3, 6, 10, 0));
+  text-shadow: 0 1px 2px rgba(2, 4, 6, 0.9);
+}
+
+/* A hard optical wipe makes screen changes feel edited rather than faded. */
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+.veil i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -28vw;
+  width: 24vw;
+  background: linear-gradient(90deg, transparent, var(--ink) 18%, var(--ink) 82%, transparent);
+  transform: skewX(-7deg);
+}
+.veil.run {
+  visibility: visible;
+}
+.veil.run i {
+  animation: screen-sweep 720ms cubic-bezier(0.72, 0, 0.22, 1) both;
+}
+@keyframes screen-sweep {
+  to { transform: translateX(156vw) skewX(-7deg); }
+}
+
+.notice {
+  position: fixed;
+  top: max(18px, calc(env(safe-area-inset-top) + 12px));
+  left: 50%;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  width: min(640px, calc(100vw - 32px));
+  padding: 11px 12px 11px 16px;
+  border: 1px solid rgba(229, 162, 60, 0.58);
+  background: rgba(8, 11, 15, 0.94);
+  color: var(--paper-dim);
+  font: 11px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transform: translate(-50%, -12px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+.notice::before {
+  content: 'NOTICE';
+  color: var(--caution);
+  letter-spacing: 0.2em;
+}
+.notice.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.notice span { flex: 1; }
+.notice-dismiss {
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--rule-soft);
+  background: transparent;
+  color: var(--paper-dim);
+  font: 10px/1 var(--font);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 5px 4px 5px 15px;
+  cursor: pointer;
+}
+.notice-dismiss:hover,
+.notice-dismiss:focus-visible { color: var(--paper); outline: none; }
+
+/* ------------------------------------------------------------------ panels */
+
+.panel {
+  position: relative;
+  border: 1px solid var(--rule-soft);
+  background: linear-gradient(180deg, rgba(11, 16, 22, 0.82), rgba(5, 7, 10, 0.72));
+  padding: 14px 18px;
+}
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--rule);
+}
+.panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.panel::after {
+  right: -1px;
+  bottom: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.panel-title {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  color: var(--instrument-dim);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+/* --------------------------------------------------------------- briefing */
+
+.briefing {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: clamp(20px, 3vw, 54px);
+  align-items: start;
+  width: min(1080px, 88vw);
+  text-align: left;
+}
+
+/* The shared .eyebrow tracking is sized for the title screen, where the line
+   is centred across the whole viewport. Inside the briefing's 549px column
+   that same 0.62em measures 707px and orphans "Himalaya" on a second line.
+   Tighten the tracking to fit, and balance the break that a wider fallback
+   face can still force. */
+.briefing .eyebrow {
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  text-wrap: balance;
+}
+
+.brief-heading {
+  font-size: clamp(24px, 3.4vw, 44px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+
+/* The briefing is the one screen the player reads rather than skips, so it
+   earns an entrance. Each block rises into place behind the layer's own fade,
+   staggered in reading order: the left column top-to-bottom, with the controls
+   panel joining alongside the objectives and the launch button landing last,
+   so the eye is delivered to the only control on the screen. Gated on
+   .layer.show because the layer is built at boot — ungated, the whole sequence
+   would play out while the briefing was still invisible. */
+.layer.show .brief-col > * {
+  animation: brief-rise 460ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+  animation-delay: calc(var(--brief-step, 0) * 70ms + 90ms);
+}
+.brief-col > *:nth-child(2) { --brief-step: 1; }
+.brief-col > *:nth-child(3) { --brief-step: 2; }
+.brief-col > *:nth-child(4) { --brief-step: 3; }
+.brief-col + .brief-col > *:nth-child(1) { --brief-step: 2; }
+.brief-col + .brief-col > *:nth-child(2) { --brief-step: 4; }
+@keyframes brief-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.brief-sub {
+  font-size: 11px;
+  letter-spacing: 0.34em;
+  color: var(--instrument);
+  text-transform: uppercase;
+  margin-bottom: 22px;
+}
+
+.brief-body {
+  font-size: clamp(13px, 1.25vw, 16px);
+  line-height: 1.75;
+  color: var(--paper-dim);
+  letter-spacing: 0.02em;
+}
+.brief-body strong {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.target-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+.target-list li {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  color: var(--paper-dim);
+}
+.target-list li:last-child {
+  border-bottom: 0;
+}
+.target-list .mark {
+  color: var(--instrument-dim);
+}
+.target-list .name {
+  color: var(--paper);
+  letter-spacing: 0.2em;
+}
+.target-list .id {
+  color: var(--instrument-dim);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.target-list li.done .mark {
+  color: var(--confirm);
+}
+.target-list li.done .name {
+  color: var(--confirm);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--paper-dim);
+}
+.controls-grid kbd {
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--instrument);
+  border: 1px solid var(--rule);
+  padding: 2px 7px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* -------------------------------------------------------------------- HUD */
+
+#hud {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 500ms ease;
+  color: var(--instrument);
+  /* Sunlit snow is the brightest background a HUD can sit on, and thin
+     instrument-green type disappears against it. A tight dark halo restores
+     contrast everywhere without resorting to opaque panels, which would block
+     the view the pilot is trying to read the ground through.
+
+     The third, wider stop was added after the lighting rebalance: with snow no
+     longer held down by a blue cast and the frame now reaching much brighter
+     highlights, the 3 px halo alone stopped carrying the dimmest elements —
+     the objective count and the tape labels, which use --instrument-dim. It is
+     soft and low-opacity on purpose, so it reads as depth rather than as an
+     outline. */
+  text-shadow:
+    0 0 3px rgba(3, 6, 10, 0.95),
+    0 1px 2px rgba(3, 6, 10, 0.8),
+    0 0 9px rgba(3, 6, 10, 0.55);
+}
+#hud.show {
+  opacity: 1;
+}
+.hud-plate {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+/* The same halo for the photography overlay, which sits over the same snow. */
+#recon {
+  text-shadow: 0 0 3px rgba(3, 6, 10, 0.95), 0 1px 2px rgba(3, 6, 10, 0.8);
+}
+
+/* Airspeed and altitude tapes.
+   One inset drives both, and the radar altimeter above the right-hand tape
+   reads the same variable — they are a matched pair of instruments and the eye
+   notices immediately when they are not. A breakpoint that has to move one of
+   them changes --tape-inset and the others follow. */
+#hud { --tape-inset: 4.5vw; }
+.tape {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 92px;
+  height: 40vh;
+  min-height: 240px;
+  border-top: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  overflow: hidden;
+}
+.tape.left {
+  left: var(--tape-inset);
+  border-right: 1px solid var(--rule);
+}
+.tape.right {
+  right: var(--tape-inset);
+  border-left: 1px solid var(--rule);
+}
+
+.tape-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  will-change: transform;
+}
+.tape-tick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid var(--rule-soft);
+  box-shadow: 0 1px 1px rgba(3, 6, 10, 0.55);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--instrument-dim);
+  padding: 2px 6px;
+}
+.tape.left .tape-tick {
+  text-align: right;
+}
+.tape.right .tape-tick {
+  text-align: left;
+}
+.tape-tick.major {
+  border-top-color: var(--rule);
+  color: var(--instrument);
+}
+
+.tape-readout {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  padding: 4px 8px;
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  color: var(--paper);
+  z-index: 2;
+  min-width: 82px;
+}
+.tape.left .tape-readout {
+  right: -1px;
+  text-align: right;
+}
+.tape.right .tape-readout {
+  left: -1px;
+  text-align: left;
+}
+.tape-label {
+  position: absolute;
+  bottom: -22px;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--instrument-dim);
+}
+.tape.left .tape-label {
+  right: 0;
+}
+.tape.right .tape-label {
+  left: 0;
+}
+.tape-unit {
+  position: absolute;
+  top: -22px;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: var(--instrument-dim);
+}
+.tape.left .tape-unit {
+  right: 0;
+}
+.tape.right .tape-unit {
+  left: 0;
+}
+
+/* Heading strip */
+.heading-strip {
+  position: absolute;
+  top: 3.4vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 46vw);
+  height: 34px;
+  border-bottom: 1px solid var(--rule);
+  overflow: hidden;
+}
+.heading-inner {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  height: 100%;
+  will-change: transform;
+}
+.heading-tick {
+  position: absolute;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--rule-soft);
+  height: 8px;
+}
+.heading-tick.major {
+  height: 14px;
+  border-left-color: var(--rule);
+}
+.heading-tick span {
+  position: absolute;
+  bottom: 15px;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--instrument-dim);
+}
+.heading-tick.cardinal span {
+  color: var(--paper);
+  font-weight: 700;
+}
+.heading-caret {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 8px solid var(--paper);
+}
+.heading-readout {
+  position: absolute;
+  top: calc(3.4vh + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  color: var(--paper);
+}
+
+/* Target steering */
+.target-block {
+  position: absolute;
+  left: 50%;
+  bottom: 4.5vh;
+  transform: translateX(-50%);
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  line-height: 1.9;
+  text-shadow: 0 1px 2px rgba(1, 4, 7, 0.98), 0 0 7px rgba(1, 4, 7, 0.9);
+}
+.target-block .name {
+  color: var(--paper);
+  font-size: 14px;
+  letter-spacing: 0.34em;
+}
+.target-block .range {
+  color: var(--instrument);
+  font-size: 17px;
+  letter-spacing: 0.14em;
+}
+.target-block .bearing { color: var(--instrument); }
+.target-block .name.complete { color: var(--confirm); }
+
+/* Throttle */
+.throttle {
+  position: absolute;
+  left: 4.5vw;
+  bottom: 5vh;
+  width: 92px;
+}
+.throttle-bar {
+  height: 6px;
+  border: 1px solid var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.block-label {
+  margin-bottom: 6px;
+  color: var(--instrument-dim);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+.throttle-gate {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 84%;
+  z-index: 2;
+  border-left: 1px solid var(--caution);
+}
+.throttle-readout {
+  margin-top: 6px;
+  color: var(--paper);
+  font: 11px/1 var(--mono);
+  text-align: right;
+}
+.throttle-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: var(--instrument);
+  transition: background-color 200ms ease;
+}
+.throttle-fill.reheat {
+  background: var(--caution);
+}
+.throttle-label {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--instrument-dim);
+  margin-bottom: 6px;
+}
+
+/* Objectives */
+.objectives {
+  position: absolute;
+  right: 4.5vw;
+  bottom: 5vh;
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.objectives .count {
+  color: var(--paper);
+  font-size: 20px;
+  letter-spacing: 0.1em;
+}
+.objective-pips {
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+  margin-top: 7px;
+}
+.objective-pips i {
+  width: 15px;
+  height: 3px;
+  background: var(--rule);
+  display: block;
+}
+.objective-pips i.done {
+  background: var(--confirm);
+}
+
+/* Objective navigation stays line-only so it cannot hide terrain detail. */
+/* The cue's placement bounds, read back through getComputedStyle.
+   A floor of --hud-margin as well as the notch inset: on a phone with no notch
+   every env() here resolves to zero, and the placement search will happily park
+   the cue flush against the bezel — which is where it sat, with the chevron
+   2.8px from the edge, while every other instrument kept a 14px margin. */
+.navigation-safe-area {
+  position: absolute;
+  inset: 0;
+  padding:
+    max(var(--hud-margin), env(safe-area-inset-top))
+    max(var(--hud-margin), env(safe-area-inset-right))
+    max(var(--hud-margin), env(safe-area-inset-bottom))
+    max(var(--hud-margin), env(safe-area-inset-left));
+  visibility: hidden;
+  pointer-events: none;
+}
+/*
+ * The navigation cue is an arrow and a label, laid out as one row.
+ *
+ * It used to be a fixed 150x64 box carrying a search bracket and an
+ * acquisition corner-frame. Those reticles could not work: the bracket is
+ * 126px across and "SEARCH · CLOSING · TARGET BELOW" is 219px, so the label
+ * ran 107px out through the border, and no shortening fixes it — every phase's
+ * label is wider than a frame small enough to sit on a target. The frames are
+ * gone. What is left sizes itself to its own content, which also means
+ * _cueSize() measures something true and placement can keep the whole cue on
+ * screen instead of clamping a box the text was hanging out of.
+ */
+.navigation-cue {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: max-content;
+  max-width: 100vw;
+  pointer-events: none;
+  color: var(--instrument);
+  transition: left 90ms linear, top 90ms linear, opacity 120ms ease;
+}
+.navigation-cue.hidden { opacity: 0; visibility: hidden; }
+.navigation-cue.dimmed { opacity: 0.34; }
+
+.nav-direction {
+  order: 1;
+  font: 10px/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+/* The arrow sits on the side it points to, so the pair reads as one gesture. */
+.nav-edge-chevron {
+  display: none;
+  font: 19px/1 var(--mono);
+}
+.nav-edge-left { order: 0; }
+.nav-edge-right { order: 2; }
+.navigation-cue.turn-left .nav-edge-left,
+.navigation-cue.turn-right .nav-edge-right { display: block; }
+
+/*
+ * On-target mode: a marker on the base, the label under it.
+ *
+ * The root collapses to the marker itself and is centred on the projected
+ * point, so the thing the eye locks onto is exactly where the base is. The
+ * label hangs out of flow beneath it, free to be any width, and is the part
+ * that gives if it would leave the frame.
+ */
+.nav-marker {
+  display: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid currentColor;
+  transform: rotate(45deg);
+  background: transparent;
+}
+.navigation-cue.on-target {
+  display: block;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+}
+.on-target .nav-marker { display: block; }
+/* Out-specifies .navigation-cue.turn-left .nav-edge-left, which is three
+   classes deep and would otherwise keep the arrow on a target you can see. */
+.navigation-cue.on-target .nav-edge-chevron { display: none; }
+.on-target .nav-direction {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+}
+
+/* A masked target reads as a dimmer, hollower version of the same cue. */
+.navigation-cue.dashed .nav-direction { opacity: 0.72; }
+.navigation-cue.dashed .nav-marker { border-style: dashed; opacity: 0.7; }
+
+.target-bearing-caret {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--caution);
+  transition: transform 90ms linear;
+}
+.target-bearing-caret.hidden { display: none; }
+.nav-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Reticle */
+.reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  opacity: 0.55;
+}
+.reticle::before,
+.reticle::after {
+  content: '';
+  position: absolute;
+  background: var(--instrument);
+}
+.reticle::before {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+.reticle::after {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+/* Warnings */
+.warnings {
+  position: absolute;
+  left: 50%;
+  top: 24vh;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.warn {
+  font-size: 15px;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  text-transform: uppercase;
+  padding: 4px 14px;
+  border: 1px solid currentColor;
+  display: none;
+}
+.warn.show {
+  display: block;
+  animation: blink 0.62s steps(2, end) infinite;
+}
+.warn.caution {
+  color: var(--caution);
+}
+.warn.danger {
+  color: var(--danger);
+}
+.warn { color: var(--caution); }
+.warn.hard { color: var(--danger); }
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* --------------------------------------------------------- recon overlay */
+
+#recon {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+#recon.show {
+  opacity: 1;
+}
+
+.optic,
+.optic-vignette,
+.optic-falloff,
+.optic-fringe,
+.optic-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.optic { overflow: hidden; }
+.optic-vignette {
+  background: radial-gradient(ellipse 68% 60% at 50% 50%, transparent 53%, rgba(2, 4, 6, 0.34) 78%, rgba(2, 4, 6, 0.82));
+}
+.optic-falloff {
+  background: linear-gradient(180deg, rgba(190, 208, 198, 0.035), transparent 32%, rgba(4, 7, 9, 0.11));
+  mix-blend-mode: screen;
+}
+.optic-fringe {
+  opacity: 0.11;
+  filter: blur(1px);
+}
+.optic-fringe.warm {
+  box-shadow: inset 20px 0 36px rgba(180, 93, 53, 0.4);
+  transform: translateX(-2px);
+}
+.optic-fringe.cool {
+  box-shadow: inset -20px 0 36px rgba(56, 104, 119, 0.42);
+  transform: translateX(2px);
+}
+.optic-grain {
+  opacity: 0.035;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(225, 235, 224, 0.22) 4px),
+    repeating-linear-gradient(90deg, transparent 0 7px, rgba(7, 11, 12, 0.2) 8px);
+  background-size: 5px 5px, 9px 9px;
+}
+
+/* Masked frame: everything outside the camera gate is dimmed. */
+/*
+ * The optical gate, defined once.
+ *
+ * Five rules describe this box — the mask, its frame, the header above it and
+ * the two readouts below it — and each breakpoint used to restate all five in
+ * its own numbers. They drifted: the coarse-pointer block moved the readouts to
+ * pixel offsets that clear the touch buttons but left the gate on percentages,
+ * so on a phone "FRAME THE OBJECTIVE" and the exposure counter sat *inside* the
+ * photograph. A breakpoint now moves the gate by setting these values and
+ * everything else follows.
+ *
+ * There is one vertical inset, not two, and that is a correctness constraint
+ * rather than tidiness. ReconCamera scores framing as `1 - hypot(ndc)/0.72`:
+ * the optimum is the optical axis, which is the centre of the viewport, which
+ * is where the reticle is drawn. A gate with different top and bottom insets
+ * is therefore not concentric with the thing it is asking the pilot to aim —
+ * the phone layout had 18%/36%, which put the reticle 62px below the middle of
+ * the frame and made the overlay lie about where a good photograph is made.
+ */
+#recon {
+  --gate-x: 16%;
+  --gate-y: 20%;
+  /* Clearances for the satellites, measured out from the gate edge. */
+  --gate-head-gap: 42px;
+  --gate-foot-gap: 42px;
+  --gate-exposure-gap: 61px;
+}
+.gate {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 100vmax rgba(3, 5, 8, 0.42);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    var(--gate-x) var(--gate-y),
+    var(--gate-x) calc(100% - var(--gate-y)),
+    calc(100% - var(--gate-x)) calc(100% - var(--gate-y)),
+    calc(100% - var(--gate-x)) var(--gate-y),
+    var(--gate-x) var(--gate-y)
+  );
+}
+.gate-frame {
+  position: absolute;
+  left: var(--gate-x);
+  right: var(--gate-x);
+  top: var(--gate-y);
+  bottom: var(--gate-y);
+  border: 1px solid rgba(184, 216, 196, 0.4);
+}
+.gate-frame span {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--instrument);
+}
+.gate-frame span:nth-child(1) {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.gate-frame span:nth-child(2) {
+  top: -1px;
+  right: -1px;
+  border-left: 0;
+  border-bottom: 0;
+}
+.gate-frame span:nth-child(3) {
+  bottom: -1px;
+  left: -1px;
+  border-right: 0;
+  border-top: 0;
+}
+.gate-frame span:nth-child(4) {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* The status text only ever appears inside .recon-head, which lays it out; what
+   is left here is its typography. It used to carry its own `position:absolute;
+   left:16%; top:calc(20% - 34px)` — a second, silent copy of the gate geometry
+   that no breakpoint updated and nothing applied. The .recon-cross and
+   .recon-zoom rules that sat beside it described elements Hud.js never built. */
+.recon-status {
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+/* The em dash is drawn rather than typed, so hiding the name on a narrow
+   viewport takes the separator with it and leaves the state alone. */
+.recon-status-name::after { content: ' — '; }
+.recon-status-state { color: var(--instrument); }
+
+/* Concentric with the gate because both are concentric with the optical axis —
+   see the --gate-y note above. */
+.recon-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(32vw, 320px);
+  height: min(32vw, 320px);
+  transform: translate(-50%, -50%);
+  overflow: visible;
+  color: var(--instrument);
+  filter: drop-shadow(0 1px 1px rgba(2, 4, 6, 0.9));
+}
+.ret-line,
+.ret-tick {
+  stroke: currentColor;
+  stroke-width: 0.75;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.76;
+}
+.ret-dot,
+.ret-pip { fill: currentColor; opacity: 0.66; }
+.ret-pip { opacity: 0.2; }
+.ret-pip.on { opacity: 0.9; }
+
+/* Anchored by its *bottom* edge, a fixed gap above the gate. The status line
+   wraps on a narrow viewport, and anchoring by the top made it grow downwards
+   into the photograph. */
+.recon-head {
+  position: absolute;
+  left: var(--gate-x);
+  right: var(--gate-x);
+  bottom: calc(100% - var(--gate-y) + var(--gate-head-gap));
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 26px;
+  border-bottom: 1px solid var(--rule-soft);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.recon-head .recon-status {
+  position: static;
+  color: var(--instrument);
+  text-shadow: 0 1px 2px rgba(1, 4, 7, 0.98), 0 0 7px rgba(1, 4, 7, 0.9);
+}
+.recon-optics {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  color: var(--instrument-dim);
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+}
+.recon-optics b { color: var(--paper); font-size: 12px; }
+.recon-frame-no {
+  position: absolute;
+  right: var(--gate-x);
+  bottom: calc(var(--gate-y) - var(--gate-exposure-gap));
+  color: var(--paper-faint);
+  font: 9px/1 var(--mono);
+  letter-spacing: 0.16em;
+}
+
+.quality {
+  position: absolute;
+  left: var(--gate-x);
+  right: var(--gate-x);
+  bottom: calc(var(--gate-y) - var(--gate-foot-gap));
+}
+.quality-bar {
+  height: 4px;
+  border: 1px solid var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.quality-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: var(--danger);
+  transition: background-color 180ms ease;
+}
+.quality-fill.ok {
+  background: var(--caution);
+}
+.quality-fill.good {
+  background: var(--confirm);
+}
+.quality-legend {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.quality-legend b {
+  font-weight: 400;
+  color: var(--paper);
+}
+
+/* Threshold marker on the quality bar. */
+.quality-threshold {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--paper-dim);
+  left: 46%;
+}
+
+.shutter-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(218, 227, 218, 0.42);
+  opacity: 0;
+  pointer-events: none;
+}
+.shutter {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.shutter .blade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 55%;
+  background: #020305;
+  will-change: transform;
+}
+.shutter .blade.top { top: 0; transform: translateY(-100%); }
+.shutter .blade.bottom { bottom: 0; transform: translateY(100%); }
+
+/* Photo thumbnail that flies to the corner after a capture. */
+.photo-pop {
+  position: absolute;
+  right: 4.5vw;
+  top: 12vh;
+  width: 224px;
+  border: 1px solid var(--rule);
+  background: var(--ink);
+  padding: 5px;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+  transition: opacity 320ms ease, transform 320ms ease;
+}
+.photo-pop.show {
+  opacity: 1;
+  transform: none;
+}
+.photo-pop img {
+  display: block;
+  width: 100%;
+  filter: saturate(0.72) contrast(1.06);
+}
+.photo-pop .developing {
+  display: none;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(184, 216, 196, 0.035) 25%, transparent 25% 50%, rgba(184, 216, 196, 0.035) 50% 75%, transparent 75%),
+    #080c10;
+  background-size: 12px 12px;
+  color: var(--paper-faint);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.24em;
+}
+.photo-pop.wet img { display: none; }
+.photo-pop.wet .developing { display: grid; }
+.photo-pop .meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  padding: 6px 2px 1px;
+}
+.photo-pop .meta b {
+  font-weight: 400;
+  color: var(--confirm);
+}
+
+/* ------------------------------------------------------------- debrief */
+
+.debrief {
+  width: min(1120px, 90vw);
+  text-align: center;
+}
+
+.result-title {
+  font-size: clamp(30px, 5.6vw, 76px);
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.result-title.good {
+  color: var(--paper);
+}
+.result-title.bad {
+  color: var(--paper-dim);
+}
+
+.result-line {
+  font-size: clamp(13px, 1.5vw, 19px);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--paper-dim);
+}
+
+/* The heading needs more air above the plates than the stack's default rhythm
+   gives it: set against a grid of photographs, the standard gap read as a label
+   stuck to the top plate rather than a caption for the sheet. Built on top of
+   --gap rather than replacing it so the card still tracks the stack's spacing. */
+.record-eyebrow + .contact-sheet {
+  margin-top: calc(var(--gap, 1.6rem) + 0.85rem);
+}
+
+.contact-sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 100%;
+}
+.contact {
+  border: 1px solid var(--rule-soft);
+  padding: 5px;
+  background: var(--ink-soft);
+}
+.contact img {
+  display: block;
+  width: 100%;
+  filter: saturate(0.7) contrast(1.05);
+}
+.contact .meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  padding: 6px 2px 1px;
+}
+.contact .meta b {
+  font-weight: 400;
+  color: var(--paper);
+}
+.contact.missing {
+  display: grid;
+  place-items: center;
+  min-height: 118px;
+  color: var(--paper-faint);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+}
+
+.plate {
+  position: relative;
+  margin: 0;
+  padding: 6px 6px 8px;
+  border: 1px solid rgba(184, 216, 196, 0.3);
+  background: linear-gradient(145deg, #0a0e12, #05070a);
+  text-align: left;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+}
+.plate:nth-child(even) { transform: translateY(5px) rotate(0.12deg); }
+.plate-window {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #080b0e;
+  border: 1px solid rgba(233, 238, 245, 0.08);
+}
+.plate-window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 25px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+}
+.plate-window img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  filter: saturate(0.68) contrast(1.08) sepia(0.04);
+}
+.plate-wet,
+.plate.empty {
+  display: grid;
+  place-items: center;
+  min-height: 118px;
+  color: var(--paper-faint);
+  font: 10px/1.4 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  background:
+    linear-gradient(135deg, rgba(184, 216, 196, 0.03) 25%, transparent 25% 50%, rgba(184, 216, 196, 0.03) 50% 75%, transparent 75%),
+    #080b0e;
+  background-size: 14px 14px;
+}
+.plate.empty {
+  border: 1px dashed var(--rule-soft);
+  padding: 18px;
+}
+.plate-stamp {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 3px 3px;
+  color: var(--paper-dim);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.plate-stamp .callsign { color: var(--paper); }
+.plate-stamp b { color: var(--confirm); font: 600 15px/1 var(--mono); }
+.plate-data {
+  padding: 0 3px;
+  color: var(--paper-faint);
+  font: 8px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--rule-soft);
+  border: 1px solid var(--rule-soft);
+}
+.stat {
+  background: var(--ink);
+  padding: 12px 10px;
+}
+.stat .k {
+  font-size: 10px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.stat .v {
+  font-size: clamp(17px, 2vw, 26px);
+  letter-spacing: 0.08em;
+  color: var(--paper);
+  margin-top: 5px;
+}
+
+/* ----------------------------------------------------------- leaderboard */
+
+/* Ranked times, on the record card and nowhere else. Set in the mono face and
+   sized well under the stats grid: this is a footnote to the sortie, not the
+   headline, and it must never compete with the contact sheet above it. */
+.board {
+  border-top: 1px solid var(--rule-soft);
+  padding-top: 1.1rem;
+  /* Narrower than the contact sheet on purpose. A ten-row list stretched to the
+     width of five photographs turns into a spreadsheet, and the columns drift
+     so far apart the eye cannot carry a rank across to its time. */
+  max-width: 460px;
+  margin-inline: auto;
+  width: 100%;
+}
+.board-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  margin-bottom: 0.85rem;
+}
+
+.board-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+.board-label {
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+}
+.board-name {
+  flex: 0 1 11ch;
+  min-width: 8ch;
+  appearance: none;
+  background: var(--ink-soft);
+  border: 1px solid var(--rule-soft);
+  color: var(--paper);
+  font: 13px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 8px 9px;
+}
+.board-name:focus-visible {
+  outline: none;
+  border-color: var(--rule);
+}
+.board-name::placeholder {
+  color: var(--paper-faint);
+}
+.board-save {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--rule-soft);
+  color: var(--paper-dim);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  padding: 9px 13px;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.board-save:hover,
+.board-save:focus-visible {
+  color: var(--paper);
+  border-color: var(--rule);
+}
+
+.board-note {
+  font: 10px/1.5 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--instrument-dim);
+  margin: 0 0 0.75rem;
+  min-height: 1.5em;
+}
+
+.board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.board-row {
+  display: grid;
+  /* Every column is a fixed track except the callsign. Each row is its own
+     grid, so an `auto` grade column sizes itself per row — EXCELLENT is wider
+     than GOOD — which changes the 1fr and walks the time column left and right
+     down the list. Measured three different right edges before this was fixed.
+     The callsign takes what is left; the grade drops off a narrow viewport. */
+  grid-template-columns: 2.5ch 1fr 6ch 9ch;
+  gap: 10px;
+  align-items: baseline;
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.1em;
+  color: var(--paper-dim);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  /* The card centres its children; these columns must not inherit that or the
+     callsign floats away from its rank. */
+  text-align: left;
+}
+.board-row:last-child {
+  border-bottom: 0;
+}
+.board-row.mine {
+  color: var(--paper);
+}
+.board-rank {
+  color: var(--paper-faint);
+  text-align: right;
+}
+.board-row.mine .board-rank {
+  color: var(--instrument);
+}
+.board-who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-time {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.board-grade {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--paper-faint);
+}
+.board-empty {
+  font: 11px/1.5 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--paper-faint);
+}
+
+@media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
+  .board-row {
+    grid-template-columns: 2.5ch 1fr 6ch;
+    font-size: 11px;
+  }
+  .board-grade {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------- loading */
+
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  transition: opacity 800ms ease;
+}
+#loading.done {
+  opacity: 0;
+  pointer-events: none;
+}
+.load-bar {
+  width: min(300px, 50vw);
+  height: 1px;
+  background: var(--rule-soft);
+  margin-top: 26px;
+  position: relative;
+  overflow: hidden;
+}
+.load-bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--instrument);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 400ms ease;
+}
+.load-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  width: min(300px, 50vw);
+  margin-top: 10px;
+  color: var(--paper-faint);
+  font: 9px/1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.load-legend b { color: var(--instrument); font-weight: 400; }
+
+/* ---------------------------------------------------------------- pause */
+
+.menu {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  pointer-events: auto;
+}
+.menu button {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--paper);
+  font-family: var(--font);
+  font-size: 13px;
+  letter-spacing: 0.28em;
+  text-indent: 0.28em;
+  text-transform: uppercase;
+  padding: 11px 30px;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease,
+    box-shadow 160ms ease, transform 160ms ease;
+  min-width: 260px;
+}
+.menu button:hover,
+.menu button:focus-visible {
+  background: rgba(184, 216, 196, 0.1);
+  border-color: var(--instrument);
+  color: var(--instrument);
+  outline: none;
+}
+.menu button.primary {
+  color: var(--ink);
+  background: var(--instrument);
+  border-color: var(--instrument);
+  font-weight: 700;
+}
+/* The primary action is the only thing on the screen the player must click, so
+   it answers the pointer with more than a colour swap: a one-pixel lift and a
+   short throw of its own colour under it. Both are cheap compositor-only
+   properties, and both are dropped under reduced motion. */
+.menu button.primary:hover,
+.menu button.primary:focus-visible {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--paper);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px -14px var(--instrument);
+}
+.menu button.primary:active {
+  transform: none;
+  box-shadow: none;
+}
+.options {
+  width: min(430px, calc(100vw - 36px));
+  margin: 8px 0;
+  border-top: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+}
+.option {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(184, 216, 196, 0.11);
+}
+.option:last-child { border-bottom: 0; }
+.option .panel-title { margin: 0 0 8px; }
+.flying-options {
+  display: grid;
+  gap: 10px;
+}
+.flying-options .panel-title { margin-bottom: 0; }
+.control-choice {
+  display: grid;
+  gap: 6px;
+}
+.option-label {
+  color: var(--paper-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--rule-soft);
+  border: 1px solid var(--rule-soft);
+}
+.control-choice .segmented {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+}
+.menu .segmented button {
+  min-width: 0;
+  border: 0;
+  background: var(--ink);
+  padding: 8px 10px;
+  font-size: 10px;
+}
+.menu .segmented button[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--instrument);
+}
+.slider-row,
+.toggle-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 34px;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  color: var(--paper-dim);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.slider-row input[type='range'] {
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slider-row input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--rule);
+}
+.slider-row input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 18px;
+  margin-top: -8px;
+  border: 1px solid var(--instrument);
+  border-radius: 0;
+  background: var(--ink);
+}
+.slider-row input[type='range']::-moz-range-track { height: 2px; background: var(--rule); }
+.slider-row input[type='range']::-moz-range-thumb {
+  width: 9px;
+  height: 17px;
+  border: 1px solid var(--instrument);
+  border-radius: 0;
+  background: var(--ink);
+}
+.slider-row b { color: var(--paper); font: 10px/1 var(--mono); text-align: right; }
+.toggle-row { grid-template-columns: 1fr auto; }
+.menu button.toggle {
+  min-width: 72px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.menu button.toggle[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--instrument);
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 3px;
+}
+.menu .quality-row {
+  display: flex;
+  gap: 8px;
+}
+.menu .quality-row button {
+  min-width: 96px;
+  padding: 8px 12px;
+  font-size: 11px;
+}
+.menu .quality-row button[aria-pressed='true'] {
+  border-color: var(--instrument);
+  color: var(--instrument);
+  background: rgba(184, 216, 196, 0.12);
+}
+
+/* ----------------------------------------------------------------- debug */
+
+#debug {
+  position: fixed;
+  left: 10px;
+  bottom: 10px;
+  z-index: 100;
+  font: 11px/1.5 var(--mono);
+  color: rgba(159, 232, 176, 0.85);
+  background: rgba(0, 0, 0, 0.5);
+  padding: 7px 9px;
+  border: 1px solid rgba(159, 232, 176, 0.2);
+  white-space: pre;
+  pointer-events: none;
+  display: none;
+}
+#debug.show {
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer,
+  #hud,
+  #recon,
+  .photo-pop,
+  #loading {
+    transition-duration: 120ms;
+  }
+  .prompt,
+  .warn.show,
+  .veil.run i,
+  .layer.show .brief-col > * {
+    animation: none;
+  }
+  .menu button.primary:hover,
+  .menu button.primary:focus-visible { transform: none; }
+  .hud-plate { transform: none !important; }
+  .navigation-cue,
+  .target-bearing-caret { transition: none; }
+  * { scroll-behavior: auto !important; }
+}
+
+/* Flight controls are appended after the modal layers. A visible dialog owns
+   the interaction surface, so the coarse-pointer flight zones must neither
+   paint over it nor intercept its buttons. */
+.layer.show ~ #touch {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.layer.show ~ #touch .touch-zone,
+.layer.show ~ #touch .touch-btn { pointer-events: none; }
+
+/* Recon is its own instrument. The flight symbology remains in the DOM so its
+   cached values stay warm, but does not compete through the optical gate. */
+#hud.recon-open .tape,
+#hud.recon-open .heading-strip,
+#hud.recon-open .heading-readout,
+#hud.recon-open .throttle,
+#hud.recon-open .objectives,
+#hud.recon-open .target-block,
+#hud.recon-open .warnings,
+#hud.recon-open .agl-readout,
+#hud.recon-open .reticle {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Portrait and narrow-window composition. This applies independently of input
+   type so a 390px desktop emulator and a real touch device get the same safe,
+   non-overlapping hierarchy. */
+@media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
+  .layer.show { overflow-y: auto; overscroll-behavior: contain; }
+  /* The scrim has to stay put while the copy scrolls over it.
+     It is `position: absolute; inset: 0`, which sizes to the scroll container's
+     *client* box and scrolls with the content — so on a phone, where the layer
+     is a scroller, scrolling the briefing dragged the scrim up and left every
+     row below the first screenful sitting unreadably on bare sunlit terrain.
+     Fixed rather than stretched: this is a full-viewport darkening, and pinning
+     it is both correct and cheaper than sizing it to the scroll height. */
+  .layer.show > .scrim { position: fixed; }
+  /* And the letterbox bars, for the same reason. Absolutely positioned inside a
+     scroller they travel with the content, so scrolling the debrief left a black
+     bar stranded across the middle of the contact sheet instead of framing the
+     screen. */
+  .layer.show.letterbox::before,
+  .layer.show.letterbox::after { position: fixed; }
+  .centre {
+    position: relative;
+    min-height: 100%;
+    inset: auto;
+    padding:
+      max(42px, calc(env(safe-area-inset-top) + 28px))
+      max(20px, calc(env(safe-area-inset-right) + 18px))
+      max(96px, calc(env(safe-area-inset-bottom) + 76px))
+      max(20px, calc(env(safe-area-inset-left) + 18px));
+  }
+  .letterbox::before,
+  .letterbox::after { height: 42px; }
+  .title {
+    font-size: clamp(38px, 14vw, 62px);
+    letter-spacing: 0.15em;
+    text-indent: 0.15em;
+  }
+  .subtitle { letter-spacing: 0.28em; text-indent: 0.28em; line-height: 1.55; }
+  .eyebrow { letter-spacing: 0.38em; text-indent: 0.38em; }
+  .dedication { font-size: 13px; line-height: 1.65; }
+  .disclaimer {
+    position: absolute;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    padding: 0 max(18px, env(safe-area-inset-left)) 0 max(18px, env(safe-area-inset-right));
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    line-height: 1.45;
+  }
+  .layer:not(.letterbox) > .disclaimer {
+    position: relative;
+    bottom: auto;
+    padding:
+      14px max(18px, calc(env(safe-area-inset-right) + 14px))
+      max(18px, calc(env(safe-area-inset-bottom) + 12px))
+      max(18px, calc(env(safe-area-inset-left) + 14px));
+  }
+  .briefing {
+    grid-template-columns: 1fr;
+    width: 100%;
+    gap: 18px;
+  }
+  .brief-heading { font-size: 30px; }
+  .brief-body { font-size: 13px; line-height: 1.55; }
+  .panel { padding: 12px 14px; }
+  .controls-grid { grid-template-columns: minmax(58px, auto) 1fr; font-size: 10px; }
+  .menu { width: 100%; }
+  .menu button { width: 100%; min-width: 0; }
+
+  /* Keep the action that moves the game on within reach.
+     The briefing and both debriefs are taller than a phone screen, so the layer
+     scrolls — and "Begin Sortie" and "Fly Again" were landing below the fold
+     with nothing on screen to say the page had any more to it. Measured on a
+     390x844 viewport the briefing runs about 1,130 px against 896 px of glass,
+     which puts the button roughly a screen-quarter out of sight.
+     Pinned to the viewport rather than sticky: .menu is the last child of its
+     column, so a sticky bottom has no travel left and would never engage. */
+  .layer:not(.letterbox) .briefing .menu,
+  .layer .record-card .menu,
+  .layer .ending-card .menu {
+    position: fixed;
+    left: max(20px, calc(env(safe-area-inset-left) + 18px));
+    right: max(20px, calc(env(safe-area-inset-right) + 18px));
+    bottom: max(14px, calc(env(safe-area-inset-bottom) + 10px));
+    width: auto;
+    z-index: 6;
+  }
+  /* The scrolling copy passes underneath, so it needs something to pass under. */
+  .layer:not(.letterbox) .briefing .menu::before,
+  .layer .record-card .menu::before,
+  .layer .ending-card .menu::before {
+    content: '';
+    position: absolute;
+    inset: -22px -24px -26px;
+    background: linear-gradient(to top, var(--ink) 58%, transparent);
+    z-index: -1;
+    pointer-events: none;
+  }
+  /* Room for the pinned bar.
+     The clearance goes on the scrolling column *and* on the disclaimer, because
+     the disclaimer is a sibling that follows .centre — padding on .centre alone
+     left the fiction notice sitting underneath the bar, which is the one piece
+     of copy on this screen that must stay readable. Scoped to the screens that
+     actually pin something: the pause screen has a .menu too, and giving it
+     132px of dead space for a bar it never pins just pushes its own options up. */
+  .layer:not(.letterbox) .centre:has(.briefing) {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
+  .layer:not(.letterbox) > .disclaimer {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
+  /* Its own rule, not grouped with the above: a selector list is not forgiving,
+     so a browser without :has() would drop the whole block — including the
+     clearance for screens that do not need :has() to be identified. */
+  .layer:has(.record-card) .centre,
+  .layer:has(.ending-card) .centre {
+    padding-bottom: max(132px, calc(env(safe-area-inset-bottom) + 112px));
+  }
+  .options { width: 100%; }
+  .flying-options {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .flying-options .segmented button { padding-inline: 5px; font-size: 9px; }
+  .contact-sheet { grid-template-columns: 1fr; gap: 10px; }
+  .debrief { width: 100%; }
+  .result-title { font-size: 34px; letter-spacing: 0.16em; text-indent: 0.16em; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat { padding: 9px 5px; }
+  .plate:nth-child(even) { transform: none; }
+  .load-bar,
+  .load-legend { width: min(290px, 74vw); }
+  .notice { align-items: flex-start; gap: 10px; }
+  .notice::before { display: none; }
+
+  .heading-strip { top: max(16px, calc(env(safe-area-inset-top) + 8px)); width: 48vw; }
+  .heading-readout { top: max(56px, calc(env(safe-area-inset-top) + 48px)); }
+  /* Content-sized now, so the phone override tightens the type rather than
+     pinning a box the label was never going to fit inside. */
+  .navigation-cue { gap: 5px; }
+  .nav-direction { font-size: 9px; letter-spacing: 0.08em; }
+  .nav-edge-chevron { font-size: 16px; }
+  #hud { --tape-inset: max(5px, env(safe-area-inset-left)); }
+  .tape { width: 60px; height: 35vh; min-height: 190px; }
+  .tape-readout { min-width: 54px; padding: 4px; font-size: 14px; }
+  .throttle { left: max(6px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); width: 60px; }
+  .objectives { right: max(6px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); }
+  .target-block { bottom: max(14px, env(safe-area-inset-bottom)); max-width: 48vw; line-height: 1.5; }
+  .target-block .name { font-size: 11px; letter-spacing: 0.2em; }
+  .target-block .range { font-size: 13px; }
+  .warnings { top: 20vh; }
+
+  #recon {
+    --gate-x: 9%;
+    --gate-y: 20%;
+    --gate-head-gap: 38px;
+    --gate-foot-gap: 38px;
+    --gate-exposure-gap: 58px;
+  }
+  /* Drop the instrument's name rather than ellipsising the whole line: the
+     state is the half that changes, and truncation ate it first. */
+  .recon-status { max-width: 62%; white-space: nowrap; letter-spacing: 0.18em; }
+  .recon-status-name { display: none; }
+  /* 0.28em of tracking on an eight-character label needs 68px, and the phone
+     throttle block is 60px wide, so the label was clipped mid-word. */
+  .throttle .block-label { letter-spacing: 0.14em; font-size: 9px; }
+  .recon-optics { gap: 7px; font-size: 8px; }
+  .recon-reticle { width: min(66vw, 270px); height: min(66vw, 270px); }
+  .photo-pop {
+    top: max(72px, calc(env(safe-area-inset-top) + 58px));
+    right: max(8px, env(safe-area-inset-right));
+    width: min(190px, 48vw);
+  }
+}
+
+@media (max-height: 620px) and (min-width: 721px) {
+  .centre { padding-top: 28px; padding-bottom: 44px; }
+  .briefing { gap: 24px; }
+  .brief-body { line-height: 1.45; }
+  .brief-body p { margin: 0 0 7px; }
+  .panel { padding-top: 10px; padding-bottom: 10px; }
+  .target-list li { padding: 4px 0; }
+  .controls-grid { gap: 3px 12px; }
+  .option { padding: 7px 0; }
+  .menu { gap: 6px; }
+}
+
+/* Inline tricolour, used where the platform has no country-flag glyph. */
+.jaihind .flag {
+  display: inline-block;
+  width: 1.15em;
+  height: auto;
+  vertical-align: -0.12em;
+  margin-left: 0.12em;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+/* ---------------------------------------------------------------- touch --
+   Hidden entirely unless a coarse pointer is detected, so a desktop session
+   never pays for the markup. Positions use safe-area insets: on a notched
+   phone in landscape the stick would otherwise sit under the rounded corner,
+   and the throttle strip under the home indicator. */
+#touch {
+  position: fixed;
+  inset: 0;
+  display: none;
+  z-index: 40;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#touch.show { display: block; }
+
+.touch-zone {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stick-zone {
+  left: max(0px, env(safe-area-inset-left));
+  bottom: 0;
+  width: min(42vw, 340px);
+  height: min(46vh, 300px);
+}
+.stick-ring,
+.stick-nub {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+  will-change: transform;
+}
+.stick-ring {
+  width: 128px;
+  height: 128px;
+  margin: -64px 0 0 -64px;
+  border: 1px solid rgba(184, 216, 196, 0.30);
+  background: rgba(8, 14, 20, 0.16);
+}
+.stick-nub {
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border: 1px solid rgba(184, 216, 196, 0.65);
+  background: rgba(184, 216, 196, 0.16);
+}
+
+.throttle-zone {
+  right: var(--act-edge);
+  bottom: max(96px, env(safe-area-inset-bottom));
+  width: var(--throttle-w);
+  height: min(40vh, 260px);
+  border: 1px solid rgba(184, 216, 196, 0.28);
+  background: rgba(8, 14, 20, 0.28);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.throttle-zone > i {
+  position: absolute;
+  inset: 0;
+  transform-origin: bottom;
+  transform: scaleY(0.72);
+  background: linear-gradient(to top, rgba(184, 216, 196, 0.34), rgba(184, 216, 196, 0.14));
+}
+.throttle-label {
+  position: absolute;
+  bottom: 6px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 600 10px/1 var(--mono, monospace);
+  letter-spacing: 0.14em;
+  color: var(--instrument, #b8d8c4);
+  opacity: 0.75;
+}
+
+#touch.assisted .throttle-zone { display: none; }
+#touch:not(.assisted) .boost-btn { display: none; }
+#touch.assisted.recon-open .boost-btn { display: none; }
+/* Direct mode keeps the throttle strip on the bezel, so the action column steps
+   one lane inboard rather than landing on top of it. Overriding the token is
+   enough — every button reads its right edge from here. */
+#touch:not(.assisted) { --act-right: calc(var(--act-edge) + var(--throttle-w) + var(--act-gap)); }
+
+/* Every action button is one cell of the rail: same width, same right edge.
+   Only `bottom` distinguishes them, and it is always a whole number of slots
+   up from --act-bottom, so nothing can drift out of column. */
+.touch-btn {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  right: var(--act-right);
+  width: var(--act-w);
+  height: var(--act-h);
+  font: 600 11px/1 var(--mono, monospace);
+  letter-spacing: 0.14em;
+  color: var(--instrument, #b8d8c4);
+  background: rgba(8, 14, 20, 0.34);
+  border: 1px solid rgba(184, 216, 196, 0.30);
+  border-radius: 3px;
+  padding: 0;
+}
+.touch-btn:active { background: rgba(184, 216, 196, 0.20); }
+
+/* Slot 0 — the thumb's resting place. Boost owns it in flight; Recon inherits
+   it the moment the camera comes up and Boost leaves, so the action the player
+   is about to press is always in the same place. */
+.boost-btn {
+  bottom: var(--act-bottom);
+  color: var(--ink, #05070a);
+  background: rgba(184, 216, 196, 0.82);
+  border-color: rgba(233, 238, 245, 0.82);
+}
+.recon-btn {
+  bottom: var(--act-bottom);
+}
+/* Slot 1 while Boost holds slot 0. */
+#touch.assisted .recon-btn {
+  bottom: calc(var(--act-bottom) + var(--act-pitch));
+}
+#touch.assisted.recon-open .recon-btn {
+  bottom: var(--act-bottom);
+}
+.recon-btn.active {
+  background: rgba(184, 216, 196, 0.26);
+  border-color: rgba(184, 216, 196, 0.72);
+}
+/* Shutter and zoom only matter with the recon camera up, so they stay out of
+   the way until it is. */
+.shutter-btn,
+.zoom-btn { opacity: 0; pointer-events: none; transition: opacity 160ms ease; }
+#touch.recon-open .shutter-btn,
+#touch.recon-open .zoom-btn { opacity: 1; pointer-events: auto; }
+/* Slot 1 — directly above Recon. */
+.shutter-btn {
+  bottom: calc(var(--act-bottom) + var(--act-pitch));
+}
+/* Slot 2 — the pair splits one slot, so zoom sits with the shutter instead of
+   floating halfway up the photograph. */
+.zoom-btn {
+  bottom: calc(var(--act-bottom) + var(--act-pitch) * 2);
+  width: calc((var(--act-w) - var(--act-gap)) / 2);
+  height: 44px;
+  font-size: 16px;
+}
+.zoom-in { right: var(--act-right); }
+.zoom-out { right: calc(var(--act-right) + (var(--act-w) + var(--act-gap)) / 2); }
+
+/* Phone layout.
+   Two things have to give. The tapes are sized for a desktop window and on a
+   390px-tall screen they dominate it, so they shrink and lose their minimum
+   height. And the right-hand tape sits exactly where the throttle strip and
+   recon button live, so it moves inboard — a HUD element under a thumb is
+   both unreadable and un-pressable. */
+@media (pointer: coarse) {
+  #hud { font-size: 0.74em; }
+
+  .menu .segmented button,
+  .menu button.toggle,
+  .menu .quality-row button,
+  .menu input[type='range'] {
+    min-height: 44px;
+  }
+
+  .stick-zone { height: min(38vh, 256px); }
+
+  /* Both tapes step inboard together. The right one has to — the throttle strip
+     and the action rail own that edge — and the left one follows so the pair
+     stays symmetric. They read as one instrument across the middle of the
+     screen; one hugging the bezel while the other sat 92px in read as a
+     mistake, which is exactly what it looked like on a phone. */
+  #hud { --tape-inset: max(var(--hud-lane), env(safe-area-inset-left)); }
+  .tape {
+    width: 60px;
+    height: min(38vh, 300px);
+    min-height: 0;
+  }
+
+  /* Sized to the tape rather than to its own minimum, and centred in it. At
+     min-width 54px against a 56px tape a five-figure altitude overhung the rail
+     it belongs to — on the left that put the readout against the bezel, on the
+     right it jutted into the photograph. */
+  .tape-readout {
+    left: -1px;
+    right: -1px;
+    min-width: 0;
+    padding: 4px 2px;
+    font-size: 14px;
+    text-align: center;
+  }
+  .tape.left .tape-readout,
+  .tape.right .tape-readout { text-align: center; }
+
+  /* The touch throttle already communicates power. Removing the duplicate HUD
+     block leaves the lower-left stick field visually quiet. */
+  #hud .throttle { display: none; }
+
+  /* The steering block lives below the compass, away from the bottom control
+     cluster. Objectives remain in the narrow clear lane left of the throttle. */
+  #hud .target-block {
+    top: max(88px, calc(env(safe-area-inset-top) + 76px));
+    bottom: auto;
+    width: min(220px, 56vw);
+    max-width: none;
+    line-height: 1.45;
+  }
+  #hud .target-block .name { font-size: 11px; letter-spacing: 0.2em; }
+  #hud .target-block .range { font-size: 13px; }
+  /* Directly below the action column and sharing its right edge, so the corner
+     reads as one stack rather than two things that happen to be near each
+     other. */
+  #hud .objectives {
+    right: var(--act-edge);
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  /* The head is the gate's caption, so it keeps the gate's width. It used to be
+     pinned to the viewport at 14px while the gate sat at 9%, which put its rule
+     22px past the corner brackets at each end. */
+  .recon-head { gap: 10px; }
+  .recon-head .recon-status {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    font-size: 9px;
+    line-height: 1.25;
+    letter-spacing: 0.14em;
+  }
+  .recon-optics { gap: 5px; font-size: 8px; }
+  .recon-optics b { font-size: 10px; }
+  .quality-legend { font-size: 8px; letter-spacing: 0.12em; }
+  .recon-reticle { width: min(54vw, 220px); height: min(54vw, 220px); }
+  .photo-pop { right: var(--act-edge); }
+}
+
+/* Portrait phones need the instruments above the stick rather than beside it,
+   and the readouts above the gate rather than below it.
+   The cutoff is 880px rather than the 700px it used to be because the layout
+   this block replaces stops working well before 700: the centred tape is
+   min(38vh, 300px) and the action column reaches 260px up from the bottom, so
+   they meet at about 836px of viewport height. Everything between 700 and 836 —
+   which is most large phones once the browser chrome is hidden, and every one
+   of them installed to the home screen — was getting the layout that assumes
+   room the screen does not have. */
+@media (pointer: coarse) and (max-height: 880px) and (max-aspect-ratio: 3 / 4) {
+  /* Above the control cluster entirely, so the tapes can come back out to a
+     narrow symmetric inset instead of hiding from the thumbs. */
+  #hud { --tape-inset: max(14px, env(safe-area-inset-left), env(safe-area-inset-right)); }
+  .tape {
+    top: max(158px, calc(env(safe-area-inset-top) + 146px));
+    /* 24vh, not 28: on a 568px screen the taller tape ran into the top of the
+       action column. */
+    height: min(24vh, 168px);
+    transform: none;
+  }
+  /* And the Direct-mode throttle strip, which shares the tape's column now that
+     the tape is back on the bezel, is capped so its top stays below it. At
+     min(40vh, 260px) it reached up through the altitude scale on a 568px
+     screen; 200px is still a full-length drag. */
+  .throttle-zone { height: min(29vh, 200px); }
+
+  /* The readouts move above the gate.
+     Below it is not available on a phone: the stick field is the bottom-left
+     256px and the action column the bottom-right 260px, and a gate low enough
+     to leave a clear band under it would have to be about 60px tall. The old
+     layout bought that band by lifting only the gate's *lower* edge, which is
+     what broke concentricity with the reticle. Above the gate the band is free,
+     and nothing there is ever under a hand.
+
+     The three of them are pinned in pixels rather than measured off the gate,
+     because what they have to clear is also in pixels: the acquisition notice
+     runs to y=62 on every phone, and a percentage that cleared it at 691px of
+     height put the header underneath it at 568px. The gate's own inset is then
+     chosen so its top edge stays below the stack on the shortest viewport this
+     block covers. */
+  #recon { --gate-y: 28%; }
+  .recon-head {
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    bottom: auto;
+  }
+  .quality {
+    top: max(112px, calc(env(safe-area-inset-top) + 100px));
+    bottom: auto;
+  }
+  .recon-frame-no {
+    top: max(142px, calc(env(safe-area-inset-top) + 130px));
+    bottom: auto;
+  }
+}
+
+/* Short landscape phones use the same column, retuned. The HUD occupies the
+   centre lane between the stick and that rail, and the gate is narrow enough to
+   stay off the rail entirely. */
+@media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
+  /* 320px of height will not hold three 52px slots above a 96px floor, so the
+     column tightens rather than losing its alignment: same right edge, same
+     width, shorter cells and a shorter reach to the bottom one. */
+  :root {
+    --act-h: 44px;
+    --act-bottom: max(14px, calc(env(safe-area-inset-bottom) + 14px));
+  }
+  #hud { --tape-inset: max(14px, env(safe-area-inset-left), env(safe-area-inset-right)); }
+  .tape {
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    width: 54px;
+    height: min(22vh, 84px);
+    transform: none;
+  }
+  /* Objectives step inboard of the column here, because the column now reaches
+     down to the bottom edge rather than starting 96px up — far enough to clear
+     it in Direct mode too, where the column itself has stepped inboard. */
+  #hud .objectives { right: var(--act-lane-max); }
+
+  /* Direct mode's throttle strip drops to the column's floor and shortens.
+     Left at the shared 96px and min(40vh, 260px) it reached up to y=138 on a
+     390px screen and ran a bordered box straight through the altitude tape and
+     the radar altimeter, both of which are now back on the bezel in the same
+     column. */
+  .throttle-zone {
+    bottom: var(--act-bottom);
+    height: min(36vh, 200px);
+  }
+
+  /* Landscape keeps the readouts under the gate — that band is clear, between
+     the stick field on the left and the action column on the right. Only the
+     quality bar has to dodge; everything else keeps the gate's own edges.
+
+     The header is pinned rather than measured off the gate for the same reason
+     as in portrait: the acquisition notice ends at y=62 and does not scale.
+     Where the screen is tall enough the gate then starts below it; at 320px it
+     does not, and the header reads as an overlay across the top of the frame. */
+  #recon {
+    /* 22% rather than the desktop 16%: the gate has to end before the action
+       column starts, and on a 568px-wide screen 16% leaves only 91px of margin
+       against the column's 110. */
+    --gate-x: 22%;
+    --gate-y: 27%;
+    --gate-foot-gap: 34px;
+    --gate-exposure-gap: 54px;
+  }
+  .recon-head {
+    top: max(70px, calc(env(safe-area-inset-top) + 58px));
+    bottom: auto;
+  }
+  /* The readouts keep the gate's right edge wherever that already clears the
+     action column, and step in to the Direct-mode lane where it does not — at
+     844px wide the gate is the wider constraint, at 568px the column is. */
+  .quality {
+    left: calc(min(42vw, 340px) + 8px);
+    right: max(var(--gate-x), var(--act-lane-max));
+  }
+  .recon-frame-no { right: max(var(--gate-x), var(--act-lane-max)); }
+  .recon-reticle {
+    width: min(44vh, 160px);
+    height: min(44vh, 160px);
+  }
+  .photo-pop { right: var(--act-lane); }
+  #hud { font-size: 0.68em; }
+}
+
+/* Radar altimeter, under the altitude tape.
+   The ALT tape reads sea level; in a Himalayan valley that number is nearly
+   useless for the one threat in the game. This is the height the proximity
+   warning is actually watching, shown before it has anything to shout about. */
+.agl-readout {
+  /* Positioned against the HUD plate, not the tape: .tape is overflow:hidden,
+     so a child below it is clipped away entirely.
+     Above the tape rather than below it, because below is where the navigation
+     edge cue sits — the tape is 40vh tall and centred, so its top edge is at
+     50% - 20vh. */
+  position: absolute;
+  top: calc(50% - 20vh - 20px);
+  right: var(--tape-inset);
+  width: 92px;
+  justify-content: center;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--instrument-dim);
+  background: rgba(3, 6, 10, 0.5);
+  padding: 2px 7px;
+  border-radius: 2px;
+  z-index: 3;
+  transition: color 220ms ease;
+}
+.agl-readout .agl-label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  opacity: 0.8;
+}
+.agl-readout .agl-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--instrument);
+}
+.agl-readout.caution .agl-value { color: var(--caution); }
+.agl-readout.danger .agl-value { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) {
+  .agl-readout { transition: none; }
+}
+
+/* An approximate cue reads as an estimate, not an instrument reading: the
+   position has not been seen yet, and the HUD should not pretend otherwise. */
+.target .range.approximate,
+.target .bearing.approximate {
+  font-style: italic;
+  opacity: 0.82;
+  letter-spacing: 0.14em;
+}
+
+/* The radar altimeter tracks the altitude tape, and on a phone the tape is
+   narrower and shorter (60px / 35vh against 92px / 40vh). It reads --tape-inset
+   from the same place the tape does, so only the vertical anchor is left for a
+   breakpoint to state. This lives at the end of the sheet on purpose: the base
+   .agl-readout rule is declared below the main phone block, so an override
+   placed up there loses on source order at equal specificity.
+   The max() mirrors the tape's own min-height, so the readout stays clear of
+   the tape's top edge on a short viewport too. */
+@media (max-width: 720px), (max-aspect-ratio: 3 / 4) {
+  .agl-readout {
+    top: calc(50% - max(17.5vh, 95px) - 26px);
+    width: 60px;
+    font-size: 11px;
+    padding: 2px 4px;
+  }
+  .agl-readout .agl-label { font-size: 8px; letter-spacing: 0.16em; }
+}
+
+/* On an actual touch device the badge stacks instead of running as one line.
+   "AGL" and a five-figure reading need 56px of text plus padding, against a tape
+   60px wide — so as a row it overflowed its own plate at both ends. Stacked, it
+   sits exactly as wide as the tape it belongs to and reads as that instrument's
+   sub-scale rather than as a label that came loose. */
+@media (pointer: coarse) {
+  .agl-readout {
+    width: 60px;
+    top: calc(50% - min(19vh, 150px) - 32px);
+    display: grid;
+    justify-items: center;
+    gap: 0;
+    padding: 3px 2px;
+    line-height: 1.15;
+  }
+  .agl-readout .agl-label { letter-spacing: 0.2em; }
+}
+/* Portrait drops the tape's vertical centring entirely — it is anchored from
+   the top with transform: none — so the badge has to be anchored the same way
+   rather than measured from the middle of the screen. */
+@media (pointer: coarse) and (max-height: 880px) and (max-aspect-ratio: 3 / 4) {
+  .agl-readout {
+    top: calc(max(158px, calc(env(safe-area-inset-top) + 146px)) - 32px);
+  }
+}
+
+/* Landscape phone: the tape is top-anchored at 70px and only 84px tall. There is
+   no room above it — that is where the heading strip lives — so the badge goes
+   underneath. */
+@media (pointer: coarse) and (max-height: 420px) and (min-aspect-ratio: 4 / 3) {
+  .agl-readout {
+    top: calc(max(70px, calc(env(safe-area-inset-top) + 58px)) + min(22vh, 84px) + 6px);
+    width: 54px;
+    font-size: 10px;
+  }
+}

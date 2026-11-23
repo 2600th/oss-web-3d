@@ -1,0 +1,652 @@
+{
+  "assets": [
+    {
+      "id": "raven",
+      "lods": [
+        {
+          "url": "/assets/bases/raven-lod0.glb",
+          "triangles": 8096,
+          "projectedSize": 0.08,
+          "bytes": 320224
+        },
+        {
+          "url": "/assets/bases/raven-lod1.glb",
+          "triangles": 4854,
+          "projectedSize": 0.025,
+          "bytes": 265752
+        },
+        {
+          "url": "/assets/bases/raven-lod2.glb",
+          "triangles": 2262,
+          "projectedSize": 0,
+          "bytes": 167340
+        }
+      ],
+      "source": "assets/authoring/bases.blend",
+      "license": "MIT",
+      "attribution": "Original Safed Sagar project artwork",
+      "sourceHash": "de7039c5cdf23796ad97ccbbedf93f1b44b0a996091c54ba82a6f5546b38e984",
+      "toolVersions": {
+        "blender": "5.2",
+        "gltfTransform": "4.4.2"
+      },
+      "materials": [
+        "stone",
+        "timber",
+        "metal",
+        "canvas"
+      ],
+      "textures": [
+        {
+          "name": "stone_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        }
+      ],
+      "bounds": {
+        "radius": 58,
+        "height": 22
+      }
+    },
+    {
+      "id": "slate",
+      "lods": [
+        {
+          "url": "/assets/bases/slate-lod0.glb",
+          "triangles": 5376,
+          "projectedSize": 0.08,
+          "bytes": 221268
+        },
+        {
+          "url": "/assets/bases/slate-lod1.glb",
+          "triangles": 3224,
+          "projectedSize": 0.025,
+          "bytes": 183768
+        },
+        {
+          "url": "/assets/bases/slate-lod2.glb",
+          "triangles": 1504,
+          "projectedSize": 0,
+          "bytes": 118284
+        }
+      ],
+      "source": "assets/authoring/bases.blend",
+      "license": "MIT",
+      "attribution": "Original Safed Sagar project artwork",
+      "sourceHash": "de7039c5cdf23796ad97ccbbedf93f1b44b0a996091c54ba82a6f5546b38e984",
+      "toolVersions": {
+        "blender": "5.2",
+        "gltfTransform": "4.4.2"
+      },
+      "materials": [
+        "metal",
+        "stone",
+        "timber"
+      ],
+      "textures": [
+        {
+          "name": "metal_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        }
+      ],
+      "bounds": {
+        "radius": 58,
+        "height": 22
+      }
+    },
+    {
+      "id": "cinder",
+      "lods": [
+        {
+          "url": "/assets/bases/cinder-lod0.glb",
+          "triangles": 4324,
+          "projectedSize": 0.08,
+          "bytes": 202380
+        },
+        {
+          "url": "/assets/bases/cinder-lod1.glb",
+          "triangles": 2590,
+          "projectedSize": 0.025,
+          "bytes": 170292
+        },
+        {
+          "url": "/assets/bases/cinder-lod2.glb",
+          "triangles": 1171,
+          "projectedSize": 0,
+          "bytes": 120544
+        }
+      ],
+      "source": "assets/authoring/bases.blend",
+      "license": "MIT",
+      "attribution": "Original Safed Sagar project artwork",
+      "sourceHash": "de7039c5cdf23796ad97ccbbedf93f1b44b0a996091c54ba82a6f5546b38e984",
+      "toolVersions": {
+        "blender": "5.2",
+        "gltfTransform": "4.4.2"
+      },
+      "materials": [
+        "timber",
+        "metal",
+        "stone",
+        "canvas"
+      ],
+      "textures": [
+        {
+          "name": "timber_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        }
+      ],
+      "bounds": {
+        "radius": 58,
+        "height": 22
+      }
+    },
+    {
+      "id": "hollow",
+      "lods": [
+        {
+          "url": "/assets/bases/hollow-lod0.glb",
+          "triangles": 7172,
+          "projectedSize": 0.08,
+          "bytes": 292676
+        },
+        {
+          "url": "/assets/bases/hollow-lod1.glb",
+          "triangles": 4300,
+          "projectedSize": 0.025,
+          "bytes": 246208
+        },
+        {
+          "url": "/assets/bases/hollow-lod2.glb",
+          "triangles": 1990,
+          "projectedSize": 0,
+          "bytes": 156560
+        }
+      ],
+      "source": "assets/authoring/bases.blend",
+      "license": "MIT",
+      "attribution": "Original Safed Sagar project artwork",
+      "sourceHash": "de7039c5cdf23796ad97ccbbedf93f1b44b0a996091c54ba82a6f5546b38e984",
+      "toolVersions": {
+        "blender": "5.2",
+        "gltfTransform": "4.4.2"
+      },
+      "materials": [
+        "timber",
+        "stone",
+        "metal",
+        "canvas"
+      ],
+      "textures": [
+        {
+          "name": "timber_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "canvas_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        }
+      ],
+      "bounds": {
+        "radius": 58,
+        "height": 22
+      }
+    },
+    {
+      "id": "marble",
+      "lods": [
+        {
+          "url": "/assets/bases/marble-lod0.glb",
+          "triangles": 6240,
+          "projectedSize": 0.08,
+          "bytes": 248580
+        },
+        {
+          "url": "/assets/bases/marble-lod1.glb",
+          "triangles": 3742,
+          "projectedSize": 0.025,
+          "bytes": 199584
+        },
+        {
+          "url": "/assets/bases/marble-lod2.glb",
+          "triangles": 1746,
+          "projectedSize": 0,
+          "bytes": 126220
+        }
+      ],
+      "source": "assets/authoring/bases.blend",
+      "license": "MIT",
+      "attribution": "Original Safed Sagar project artwork",
+      "sourceHash": "de7039c5cdf23796ad97ccbbedf93f1b44b0a996091c54ba82a6f5546b38e984",
+      "toolVersions": {
+        "blender": "5.2",
+        "gltfTransform": "4.4.2"
+      },
+      "materials": [
+        "metal",
+        "stone",
+        "timber"
+      ],
+      "textures": [
+        {
+          "name": "metal_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "metal_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "stone_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_NORMAL",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_AO",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "name": "timber_DIFFUSE",
+          "mimeType": "image/webp",
+          "size": [
+            256,
+            256
+          ]
+        }
+      ],
+      "bounds": {
+        "radius": 58,
+        "height": 22
+      }
+    }
+  ],
+  "externalCandidates": "Not acquired; original Blender authored replacements avoid unverified licenses.",
+  "textureEncoding": "WebP fallback: KTX2 tooling not available in this execution; measured encoded bytes in catalog.",
+  "bakes": "Cycles 8 samples; 256x256 albedo, tangent normal and AO per surface family."
+}

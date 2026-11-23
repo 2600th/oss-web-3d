@@ -1,21 +1,20 @@
 {
   "name": "safed-sagar",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0-dev",
   "type": "module",
-  "description": "Safed Sagar - a browser-based MiG-21 reconnaissance flight experience over procedurally generated Himalayan terrain.",
+  "description": "Safed Sagar - WebGPU arcade air combat over the real Kargil Himalaya.",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "node tools/check-glsl.mjs && vite build",
+    "build": "vite build",
     "preview": "vite preview",
-    "optimize:model": "node tools/optimize-model.mjs",
-    "check": "node tools/check-glsl.mjs"
+    "test": "node --test \"src/**/*.test.mjs\"",
+    "dem": "node tools/terrain/build-dem.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
-    "postprocessing": "^6.39.4",
-    "three": "^0.185.1"
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.2",
