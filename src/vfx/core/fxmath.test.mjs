@@ -170,7 +170,14 @@ test('scorch ring: newest overwrites oldest, packed mirrors the arrays', () => {
   assert.deepEqual([...r.packed.slice(0, 4)], [30, 60, 8, 3]);
   assert.deepEqual([...r.positions.slice(0, 3)], [30, 1, 60]);
   assert.equal(r.age(0, 5), 2);
+  // terrain feed: oldest first, ages from now
+  const l = r.list(5);
+  assert.deepEqual(l.map((s) => s.x), [10, 20, 30]);
+  assert.deepEqual(l.map((s) => s.age), [4, 3, 2]);
+  assert.equal(l[2].radius, 8);
+  assert.equal(l[2].z, 60);
   r.clear();
+  assert.equal(r.list(5).length, 0);
   assert.equal(r.count, 0);
   assert.equal(r.age(1, 5), Infinity);
 });

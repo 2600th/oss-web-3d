@@ -6,7 +6,7 @@
  * Prints every mesh's bounds in runtime model space (metres, nose -Z, +Y up),
  * then slices the meshes under the forward fuselage every 0.1 m from the
  * front so the gun gondola and its barrel ends can be read off. The muzzle
- * (`GUN_MUZZLE` in src/vfx/core/ring.js), used by both combat's bullet origin
+ * (`GUN_MUZZLE` in src/vfx/core/sockets.js), used by both combat's bullet origin
  * and the VFX muzzle flash, takes its value from this.
  */
 import { NodeIO } from '@gltf-transform/core';

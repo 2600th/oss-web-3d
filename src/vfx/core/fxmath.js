@@ -221,6 +221,20 @@ export class ScorchRing {
   /** Seconds since slot `i` was written (Infinity if never). */
   age(i, now) { return this.births[i] < -1e8 ? Infinity : now - this.births[i]; }
 
+  /**
+   * Live marks oldest first as { x, y, z, radius, age } (the shape
+   * Terrain.setScorches takes; it keeps the newest of them).
+   */
+  list(now) {
+    const out = [];
+    const start = this.count < this.capacity ? 0 : this.head;
+    for (let k = 0; k < this.count; k++) {
+      const i = (start + k) % this.capacity;
+      out.push({ x: this.positions[i * 3], y: this.positions[i * 3 + 1], z: this.positions[i * 3 + 2], radius: this.radii[i], age: Math.max(0, now - this.births[i]) });
+    }
+    return out;
+  }
+
   clear() {
     this.births.fill(-1e9);
     for (let i = 0; i < this.capacity; i++) this.packed[i * 4 + 3] = -1e9;

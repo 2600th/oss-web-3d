@@ -249,10 +249,25 @@ class VfxSystem {
     // instanced boxes stand down when this system exists).
     this.tracers.update(game.systems?.combat?.world?.bullets ?? null, dt);
     this.bolts.update(dt, game.env?.weather?.lightning?.intensity ?? 0);
+    this._feedScorches(game.terrain);
     const renderer = game.r.renderer;
     this.lit.update(renderer);
     this.glow.update(renderer);
     if (this._prewarmFrames > 0) { this._prewarmFrames--; this.prewarm(); }
+  }
+
+  /**
+   * Ground blast marks -> the terrain's burn rings (Terrain.setScorches, up
+   * to 16, faded by age). Sent on every new mark and every few seconds after,
+   * so the fade follows the marks' age without a per-frame call.
+   */
+  _feedScorches(terrain) {
+    if (typeof terrain?.setScorches !== 'function') return;
+    const s = this.scorches, now = this.shared.time;
+    if (s.version === this._scorchVersion && Math.abs(now - this._scorchSent) < 4) return;
+    this._scorchVersion = s.version;
+    this._scorchSent = now;
+    terrain.setScorches(s.list(now));
   }
 
   dispose() {
