@@ -7,6 +7,7 @@
 //   ?speed=3     time scale
 //   window.__bot(true|false|'god'), window.__game.dev
 import { Bot } from './Bot.js';
+import { terrainHeight } from '../../world/terrain/heightfield.js';
 
 const fmt = (n, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : '--');
 const clock = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '--:--');
@@ -71,6 +72,74 @@ export function install(game) {
       if (game.flow.state !== 'sortie') break;
     }
     return dev.status();
+  };
+
+  /**
+   * Scripted playthrough for verifying mission scripts end to end. It does
+   * NOT fly: it repositions the aircraft onto a firing solution for the next
+   * objective, then uses the real input actions (lock, missile, optic) and
+   * lets the real simulation resolve it. Lock-on, guidance, damage, AI,
+   * triggers, radio, scoring and flow are all the shipping code; only the
+   * flying in between is skipped (and damage to the player is off).
+   */
+  dev.autoplay = (budget = 1500) => {
+    const combat = game.systems.combat;
+    const f = game.flight;
+    const input = game.input;
+    const log = [];
+    let spent = 0;
+    const run = (s) => { spent += s; return dev.sim(s); };
+    while (spent < budget && game.flow.state === 'sortie') {
+      combat.world.god = true;
+      const list = combat.world.targets.filter((t) => t.alive && t !== combat.player);
+      const t = list.find((x) => x.kind === 'post' && !x.captured)
+        ?? list.find((x) => x.class === 'air' && x.team === 'hostile' && game.systems.ai.hostile && (x.isTarget || !game.hud.objective?.marker))
+        ?? list.filter((x) => x.isTarget).sort((a, b) => a.position.distanceTo(f.position) - b.position.distanceTo(f.position))[0];
+      if (!t) {
+        const mk = game.hud.objective?.marker;
+        if (mk) game.spawnAt({ x: mk.x, z: mk.z, agl: 1500, heading: 90, speed: 240 });
+        run(4);
+        continue;
+      }
+      if (t.class === 'air') {
+        // Saddle up 1.4 km behind it, co-speed.
+        const v = t.velocity, sp = v.length() || 1;
+        const hdg = (Math.atan2(v.x, -v.z) * 180) / Math.PI;
+        const px = t.position.x - (v.x / sp) * 1400, pz = t.position.z - (v.z / sp) * 1400;
+        game.spawnAt({ x: px, z: pz, alt: Math.max(t.position.y - (v.y / sp) * 1400, terrainHeight(px, pz) + 500), heading: hdg, speed: sp });
+      } else {
+        // 3 km out, 550 m above, on the side with a clear line of sight.
+        let best = null;
+        for (let a = 0; a < 360; a += 30) {
+          const r = (a * Math.PI) / 180;
+          const x = t.position.x + Math.sin(r) * 3000, z = t.position.z - Math.cos(r) * 3000, y = t.position.y + 550;
+          let clear = true;
+          for (let k = 1; k < 30 && clear; k++) {
+            const u = k / 30;
+            if (y + (t.position.y + 6 - y) * u < terrainHeight(x + (t.position.x - x) * u, z + (t.position.z - z) * u) + 25) clear = false;
+          }
+          if (clear) { best = { x, z, alt: y, heading: (a + 180) % 360, speed: 200 }; break; }
+        }
+        game.spawnAt(best ?? { x: t.position.x, z: t.position.z + 3000, alt: t.position.y + 1500, heading: 0, speed: 200 });
+      }
+      combat.setTarget(t);
+      const before = t.health;
+      if (t.kind === 'post') {
+        input.setAction('optic', true);
+        run(2.5);
+        input.setAction('optic', false);
+      } else {
+        const wantSp = t.class === 'air' && combat.sp.def.type === 'missile' && combat.sp.ammo > 0;
+        if ((combat.current === 'sp') !== wantSp) combat.switchWeapon();
+        for (let i = 0; i < 12 && combat.lock.state !== 'locked' && t.alive; i++) run(0.25);
+        input.pressAction('fireMissile');
+        run(0.3);
+        input.pressAction('fireMissile');
+        run(t.class === 'air' ? 5 : 6);
+      }
+      log.push(`${t.name}${t.alive ? (t.captured ? ' photographed' : ` ${Math.round(before)}->${Math.round(t.health)}`) : ' destroyed'}`);
+    }
+    return { spent: Math.round(spent), log, status: dev.status() };
   };
 
   if (q.get('debug') !== '0') dev.overlay = createOverlay(game);

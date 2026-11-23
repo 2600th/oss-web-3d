@@ -13,27 +13,35 @@ const _d = new THREE.Vector3();
 const _fwd = new THREE.Vector3(0, 0, -1);
 const _c = new THREE.Color();
 
+const MISSILE_ASSET = { msl: 'aam_ir', hobs: 'aam_hobs', lraam: 'aam_long', rkt: 'rocket', bomb: 'bomb', e_aam: 'aam_ir', e_aam_ace: 'aam_hobs', e_manpads: 'sam', e_sam: 'sam_large' };
 const EXPLOSION_RADIUS = { small: 14, medium: 30, large: 55, huge: 110 };
 
-/** Optional asset catalogue (art area). Absent until that area lands. */
+/**
+ * The art area's loader (src/assets/loadModel.js). Reached through a glob so a
+ * gameplay-only checkout without it still builds and falls back to primitives.
+ */
+const loaderModules = import.meta.glob('../assets/loadModel.js');
 const catalogModules = import.meta.glob('../assets/catalog.js');
-let catalogPromise = null;
-export function loadCatalog() {
-  if (!catalogPromise) {
-    const load = Object.values(catalogModules)[0];
-    catalogPromise = load ? load().catch(() => null) : Promise.resolve(null);
+let apiPromise = null;
+function loadApi() {
+  if (!apiPromise) {
+    const load = Object.values(loaderModules)[0];
+    const cat = Object.values(catalogModules)[0];
+    apiPromise = load && cat
+      ? Promise.all([load(), cat()]).then(([l, c]) => ({ loadModel: l.loadModel, catalog: c.CATALOG ?? {} })).catch(() => null)
+      : Promise.resolve(null);
   }
-  return catalogPromise;
+  return apiPromise;
 }
 
-/** `loadModel(id)` from the asset catalogue, or null when it is not there yet. */
-export async function tryLoadModel(id) {
-  const cat = await loadCatalog();
-  if (!cat?.loadModel) return null;
+/** `loadModel(id, opts)` from the asset catalogue, or null when the id (or the loader) is absent. */
+export async function tryLoadModel(id, opts) {
+  const api = await loadApi();
+  if (!api?.loadModel || !api.catalog[id]) return null;
   try {
-    if (cat.hasModel && !cat.hasModel(id)) return null;
-    return (await cat.loadModel(id)) ?? null;
-  } catch {
+    return (await api.loadModel(id, opts)) ?? null;
+  } catch (e) {
+    console.warn('[assets] failed to load', id, e);
     return null;
   }
 }
@@ -77,11 +85,11 @@ export class CombatVisuals {
   get placeholders() { return !this.game.systems.vfx; }
 
   async init() {
-    for (const id of ['aam_ir', 'sam', 'rocket', 'bomb']) this.models[id] = await tryLoadModel(id);
+    for (const id of ['aam_ir', 'aam_hobs', 'aam_long', 'sam', 'sam_large', 'rocket', 'bomb']) this.models[id] = await tryLoadModel(id);
   }
 
   _addMissile(m) {
-    const assetId = m.kind === 'bomb' ? 'bomb' : m.kind === 'rocket' ? 'rocket' : m.kind === 'sam' ? 'sam' : 'aam_ir';
+    const assetId = MISSILE_ASSET[m.weapon.id] ?? (m.kind === 'bomb' ? 'bomb' : m.kind === 'rocket' ? 'rocket' : m.kind === 'sam' ? 'sam' : 'aam_ir');
     const root = new THREE.Group();
     const src = this.models[assetId];
     if (src) root.add(src.clone());

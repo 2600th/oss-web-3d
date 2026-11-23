@@ -104,9 +104,10 @@ export class AiSystem {
 
   spawnGround(type, x, z, def = {}) {
     const u = new GroundUnit(type, x, z, def, this.rng);
+    u.wreckId = def.wreckId ?? null;
     const e = u.entity;
     this.root.add(e.object3d);
-    if (def.model !== false) groundModel(type).then((m) => { u.model = m; e.object3d.add(m); if (!e.alive) wreck(e.object3d); });
+    if (def.model !== false) groundModel(type).then((m) => { u.model = m; e.object3d.add(m); if (!e.alive) wreck(e.object3d, type); });
     this.combat.addTarget(e);
     this.ground.push(u);
     return u;
@@ -125,14 +126,14 @@ export class AiSystem {
     const tags = def.tags ?? [];
     if (def.kit) {
       // The kit is the bunker: one hard target at the centre whose model is the GLB.
-      const u = this.spawnGround('bunker', site.x, site.z, { tags: [...tags], isTarget: def.isTarget, group, model: false, name: def.name ?? 'STRONGPOINT', health: def.kitHealth ?? 300 });
+      const u = this.spawnGround('bunker', site.x, site.z, { wreckId: `base_${def.kit}`, tags: [...tags], isTarget: def.isTarget, group, model: false, name: def.name ?? 'STRONGPOINT', health: def.kitHealth ?? 300 });
       u.entity.radius = 22;
       u.entity.object3d.rotation.y = 0;
       loadBaseKit(def.kit).then((m) => {
         if (!m) return groundModel('bunker').then((b) => u.entity.object3d.add(b));
         m.position.y = -0.6;
         u.entity.object3d.add(m);
-        if (!u.entity.alive) wreck(u.entity.object3d, 0.85);
+        if (!u.entity.alive) wreck(u.entity.object3d, `base_${def.kit}`, 0.85);
       });
       out.push(u.entity);
     }
@@ -169,7 +170,7 @@ export class AiSystem {
       this.game.events.emit('aircraft:despawn', { entity: target });
     } else if (target.unit) {
       if (target.armor === 'soft' && target.kind !== 'truck') target.object3d.visible = false;
-      else wreck(target.object3d);
+      else wreck(target.object3d, target.unit.wreckId ?? target.kind);
       target.unit._setFiring?.(false, this.ctx);
       target.velocity.set(0, 0, 0);
     }
@@ -230,7 +231,7 @@ export class AiSystem {
       u.update(dt, ctx);
       if (u.locking) locking++;
       const spin = u.model?.userData.spin;
-      if (spin) spin.rotation.z += dt * 1.6;
+      if (spin) spin.rotation[spin.name === 'dish' ? 'y' : 'z'] += dt * 1.6;
     }
     this.combat.lockedBy = locking;
   }

@@ -123,7 +123,7 @@ export class GroundUnit {
       const s = this.pending[i];
       s.t -= dt;
       if (s.t <= 0) {
-        ctx.world.flak(s.position, 60, 11, this.entity);
+        ctx.world.flak(s.position, 60, 8, this.entity);
         this.pending.splice(i, 1);
       }
     }

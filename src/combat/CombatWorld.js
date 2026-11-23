@@ -297,7 +297,9 @@ export class CombatWorld {
           }
         }
         if (tgt) {
-          pnAcceleration(_a, m.position, m.velocity, tgt.position, tgt.velocity, w.nav);
+          // Aim a little above a ground target so the last metres are not spent in the slope.
+          if (tgt.class !== 'air' && !tgt.isFlare) { _n.copy(tgt.position); _n.y += 5; pnAcceleration(_a, m.position, m.velocity, _n, tgt.velocity, w.nav); }
+          else pnAcceleration(_a, m.position, m.velocity, tgt.position, tgt.velocity, w.nav);
           _a.y += G; // hold altitude against gravity
           pulled = steerVelocity(m.velocity, _a, w.maxG * Math.min(1, 0.25 + m.age * 2.5), dt);
         } else {
@@ -345,6 +347,9 @@ export class CombatWorld {
 
     if (m.position.y <= this.terrainHeight(m.position.x, m.position.z)) {
       m.position.y = this.terrainHeight(m.position.x, m.position.z);
+      // Struck the ground at the foot of its (ground) target: that is a hit.
+      const t = m.target;
+      if (t && t.alive && !t.isFlare && t.class !== 'air' && m.position.distanceTo(t.position) < t.radius + w.fuse + 9) return this._detonate(m, 'hit', t);
       return this._detonate(m, 'ground');
     }
   }

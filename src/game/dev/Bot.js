@@ -44,7 +44,7 @@ export class Bot {
   _hold(f, bearing, altitude) {
     const heading = Math.atan2(f.forward.x, -f.forward.z);
     this.intent.turn = clamp(wrapPi(bearing - heading) * 1.4, -1, 1);
-    this.intent.climb = clamp((altitude - f.position.y) / 600 - f.velocity.y / 250, -0.4, 0.7);
+    this.intent.climb = clamp((altitude - f.position.y) / 600 - f.velocity.y / 250, -0.65, 0.7);
   }
 
   _terrainGuard(f) {
@@ -52,7 +52,7 @@ export class Bot {
     const look = 5;
     const ridge = maxHeightAlong(p.x, p.z, p.x + v.x * look, p.z + v.z * look, 8);
     const predicted = Math.min(p.y, p.y + v.y * look);
-    if (predicted < ridge + 230 || f.agl < 260) { this.intent.climb = 0.95; this.intent.brake = 0; return true; }
+    if (predicted < ridge + 200 || f.agl < 240) { this.intent.climb = Math.max(this.intent.climb, 0.6); this.intent.brake = 0; return true; }
     return false;
   }
 
@@ -99,7 +99,7 @@ export class Bot {
     if (threats.length) {
       if (this.flareTimer <= 0) { input.pressAction('flares'); this.flareTimer = 1.4; }
       const near = threats.reduce((a, b) => (a.distance < b.distance ? a : b));
-      if (near.distance < 2200) {
+      if (near.distance < 2200 && !this.god) {
         intent.turn = near.bearing >= 0 ? -1 : 1; // put it on the beam, turning away from its side
         intent.climb = -0.1;
         intent.brake = near.distance < 900 ? 1 : 0;
@@ -108,7 +108,12 @@ export class Bot {
       }
     }
 
-    const t = this._chooseTarget(combat, f);
+    // Stay on a ground target through the pass (re-choosing every frame would
+    // keep resetting the lock); aircraft and dead targets always re-evaluate.
+    let t = this.current;
+    const best = this._chooseTarget(combat, f);
+    if (!t || !t.alive || t.captured || t.class === 'air' || best?.class === 'air' || this.state !== 'attack' || t.position.distanceTo(f.position) > 7000) t = best;
+    this.current = t;
     if (t && combat.target !== t) combat.setTarget(t);
 
     if (!breaking) {
@@ -163,15 +168,33 @@ export class Bot {
     // Guided missiles do the bot's ground work (they only need the target in
     // the lock cone); rockets want a steadier hand than this pilot has.
     const rockets = false;
-    if ((combat.current === 'sp') !== rockets) combat.switchWeapon();
-
-    if (this.state === 'egress') {
-      this._hold(f, this.egressBearing, t.position.y + 1700);
-      this.intent.throttle = f.airspeed > 300 ? 0.6 : 1;
-      if (this.timer <= 0 || horiz > 5000) this.state = 'attack';
+    // Bombs on hard targets: a level pass straight over the top, release when
+    // the CCIP pipper crosses the target.
+    const bombs = this.useBombs && combat.sp.def.type === 'bomb' && combat.sp.ammo > 0 && t.armor === 'hard';
+    if ((combat.current === 'sp') !== (rockets || bombs)) combat.switchWeapon();
+    if (bombs && this.state !== 'egress') {
+      this._hold(f, Math.atan2(dx, -dz), t.position.y + 850);
+      this.intent.throttle = f.airspeed > 260 ? 0.4 : 0.8;
+      const ccip = hud.weapon?.ccip;
+      if (ccip && horiz < 4000 && this.fireTimer <= 0) {
+        const miss = Math.hypot(ccip.x - t.position.x, ccip.z - t.position.z);
+        if (miss < 38) { input.pressAction('fireMissile'); this.fireTimer = 0.5; this.dropped = true; }
+      }
+      if (horiz < 500 && (this.dropped || horiz < 150)) {
+        this.dropped = false;
+        this.state = 'egress'; this.timer = 16; this.egressBearing = Math.atan2(f.forward.x, -f.forward.z);
+      }
       return;
     }
-    if (horiz > 4600 || f.position.y < t.position.y + 500) {
+
+    if (this.state === 'egress') {
+      this._hold(f, this.egressBearing, t.position.y + 1500);
+      this.intent.throttle = f.airspeed > 300 ? 0.6 : 1;
+      const dyNow = f.position.y - t.position.y;
+      if (this.timer <= 0 || (horiz > 4300 && dyNow < 2300)) this.state = 'attack';
+      return;
+    }
+    if (horiz > 6200 || f.position.y < t.position.y + 500) {
       // Set up: get above it and point at it.
       this._hold(f, Math.atan2(dx, -dz), t.position.y + 1500);
       this.intent.throttle = f.airspeed > 290 ? 0.5 : 0.9;
@@ -180,7 +203,7 @@ export class Bot {
     }
     // Too steep to make a pass from here: go out and come back.
     if ((f.position.y - t.position.y) / Math.max(horiz, 1) > 0.8) {
-      this.state = 'egress'; this.timer = 26; this.egressBearing = Math.atan2(f.forward.x, -f.forward.z);
+      this.state = 'egress'; this.timer = 40; this.egressBearing = Math.atan2(f.forward.x, -f.forward.z);
       return;
     }
     // Run in: slow enough to aim.
@@ -195,7 +218,7 @@ export class Bot {
       }
     } else {
       this._aim(f, t.position, 0.0);
-      if (combat.lock.state === 'locked' && this.fireTimer <= 0) { input.pressAction('fireMissile'); this.fireTimer = 0.7; }
+      if (combat.lock.state === 'locked' && this.fireTimer <= 0) { input.pressAction('fireMissile'); this.fireTimer = 0.45; }
     }
     _v.subVectors(t.position, f.position).normalize();
     if (d < 1500 && Math.acos(clamp(_v.dot(f.forward), -1, 1)) < 0.035) input.setAction('fireGun', true);

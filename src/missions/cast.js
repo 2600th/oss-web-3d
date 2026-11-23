@@ -34,7 +34,7 @@ export const ACES = {
   },
   verglas: {
     id: 'verglas', callsign: 'IRBIS 3', name: 'Verglas', health: 170, score: 2000,
-    skillOverrides: { flareChance: 1, flares: 44, jink: 1.3, aggression: 0.7, lockTime: 1.6 },
+    skillOverrides: { flareChance: 0.85, flares: 44, jink: 1.3, aggression: 0.7, lockTime: 1.6 },
     airframeOverrides: { roll: 5.6, turnRate: 0.55 },
     lines: {
       engage: ['Irbis Three, dragging. Follow me if you can.'],

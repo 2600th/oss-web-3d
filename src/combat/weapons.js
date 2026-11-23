@@ -20,7 +20,7 @@ export const WEAPONS = {
     lockRange: 4800, lockCone: 17 * D, lockTime: 1.1, groundLock: true,
     seekerCone: 48 * D, nav: 4, maxG: 30,
     launchBoost: 40, accel: 320, maxSpeed: 980, burn: 2.6, coastDrag: 0.085, life: 11,
-    fuse: 13, blast: 26, damage: 62, flareChance: 0.5,
+    fuse: 13, blast: 26, damage: 62, flareChance: 0.4,
   },
   /** High-off-boresight dogfight missile: look at it, lock it, snap-turn onto it. */
   hobs: {
@@ -29,7 +29,7 @@ export const WEAPONS = {
     lockRange: 3400, lockCone: 56 * D, lockTime: 0.45, groundLock: false,
     seekerCone: 80 * D, nav: 5, maxG: 48,
     launchBoost: 30, accel: 380, maxSpeed: 900, burn: 2.2, coastDrag: 0.11, life: 8,
-    fuse: 14, blast: 24, damage: 72, flareChance: 0.25,
+    fuse: 14, blast: 24, damage: 72, flareChance: 0.15,
     description: 'Dogfight missile. Locks almost anything in front of the wing line.',
   },
   /** Long-range radar missile: reach out before the merge. Flares do nothing. */
@@ -75,7 +75,7 @@ export const WEAPONS = {
     id: 'e_manpads', name: 'shoulder SAM', type: 'missile', guidance: 'ir', kind: 'sam',
     seekerCone: 38 * D, nav: 3.5, maxG: 16,
     launchBoost: 30, accel: 230, maxSpeed: 600, burn: 3.0, coastDrag: 0.12, life: 9,
-    fuse: 10, blast: 16, damage: 26, flareChance: 0.72,
+    fuse: 10, blast: 16, damage: 22, flareChance: 0.72,
   },
   /** Radar SAM: ignores flares, but needs its radar alive and line of sight. */
   e_sam: {
@@ -85,7 +85,7 @@ export const WEAPONS = {
     fuse: 20, blast: 40, damage: 42, flareChance: 0,
   },
   e_gun: { id: 'e_gun', name: 'hostile gun', type: 'gun', muzzle: 900, life: 1.6, damage: 4, spread: 0.012, rate: 14 },
-  e_aaa: { id: 'e_aaa', name: 'AAA', type: 'gun', muzzle: 960, life: 3.0, damage: 3, spread: 0.012, rate: 12 },
+  e_aaa: { id: 'e_aaa', name: 'AAA', type: 'gun', muzzle: 960, life: 3.0, damage: 2, spread: 0.012, rate: 12 },
 };
 
 export const SPECIALS = ['hobs', 'lraam', 'rkt', 'bomb'];

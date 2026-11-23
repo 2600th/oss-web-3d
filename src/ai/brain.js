@@ -27,21 +27,21 @@ export const SKILLS = {
     reaction: 0.55, detect: 13000, engage: 9000,
     mslRange: 3000, mslMin: 700, mslCone: 14 * D, lockTime: 2.6, mslCooldown: 13, missiles: 2, weapon: 'e_aam',
     gunRange: 650, gunCone: 4 * D, gunError: 0.02,
-    flareChance: 0.35, flares: 6, breakG: 0.85, minFight: 175, extendTime: 7,
+    flareChance: 0.2, flares: 6, breakG: 0.85, minFight: 175, extendTime: 7,
     vertical: 0, jink: 0, aggression: 0.5,
   },
   veteran: {
     reaction: 0.35, detect: 16000, engage: 10000,
     mslRange: 3400, mslMin: 650, mslCone: 17 * D, lockTime: 2.0, mslCooldown: 10, missiles: 4, weapon: 'e_aam',
     gunRange: 750, gunCone: 4.5 * D, gunError: 0.014,
-    flareChance: 0.6, flares: 10, breakG: 0.95, minFight: 170, extendTime: 6,
+    flareChance: 0.4, flares: 10, breakG: 0.95, minFight: 170, extendTime: 6,
     vertical: 0.25, jink: 0.3, aggression: 0.7,
   },
   ace: {
     reaction: 0.18, detect: 22000, engage: 12000,
     mslRange: 3800, mslMin: 550, mslCone: 24 * D, lockTime: 1.3, mslCooldown: 7, missiles: 8, weapon: 'e_aam_ace',
     gunRange: 850, gunCone: 5 * D, gunError: 0.009,
-    flareChance: 0.9, flares: 24, breakG: 1, minFight: 160, extendTime: 4.5,
+    flareChance: 0.6, flares: 24, breakG: 1, minFight: 160, extendTime: 4.5,
     vertical: 0.6, jink: 0.8, aggression: 1,
   },
 };
@@ -255,7 +255,7 @@ export function employ(s, m, k, dt, rng = Math.random) {
 
   // Defensive flares: a roll per second while something is tracking.
   if (s.missile && m.flares > 0 && m.flareCooldown <= 0) {
-    m.flareCooldown = 0.9;
+    m.flareCooldown = 1.5;
     if (rng() < k.flareChance) { m.flares--; out.flare = true; }
   }
 

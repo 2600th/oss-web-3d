@@ -259,7 +259,7 @@ export class FlightModel {
     // Load-limited pitch rate. Below ~100 m/s the aerodynamic cap bites first;
     // above it, G does.
     const gLimitedRate =
-      (AIRCRAFT.gLimit * (1 + AIRCRAFT.highGLoadBonus * this.highG) * GRAVITY) / Math.max(speed, 60);
+      (AIRCRAFT.gLimit * (1 + AIRCRAFT.highGLoadBonus * this.highG) * (1 - damageLoss) * GRAVITY) / Math.max(speed, 60);
     const pitchCap = Math.min(
       AIRCRAFT.maxPitchRate * (1 + AIRCRAFT.highGRateBonus * this.highG) * authority * highSpeedStiffen,
       gLimitedRate,
@@ -281,6 +281,8 @@ export class FlightModel {
     // the wings drift level. Nothing here is punishing; it just makes low speed
     // feel dangerous, which is the point.
     this.stallFactor = 1 - smoothstep(AIRCRAFT.stallSpeed * 0.72, AIRCRAFT.stallSpeed * 1.5, speed);
+    // A destroyed airframe is no longer flying: the nose falls through.
+    if (this.destroyed) this.stallFactor = Math.max(this.stallFactor, 0.95);
     this.stalling = this.stallFactor > 0.25;
 
     // ---- integrate attitude ------------------------------------------------

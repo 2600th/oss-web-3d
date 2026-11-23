@@ -3,8 +3,6 @@
 // to a primitive placeholder so gameplay never waits on art. Hostile units are
 // unmarked: plain grey / dust / olive, no insignia.
 import * as THREE from 'three/webgpu';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Aircraft } from '../flight/Aircraft.js';
 import { tryLoadModel } from '../combat/visuals.js';
 
@@ -127,43 +125,50 @@ const PLACEHOLDERS = {
 };
 
 const ASSET_IDS = {
-  aaa: 'aaa_gun', flak: 'aaa_gun', sam: 'sam_launcher', radar: 'radar', truck: 'truck',
-  bunker: 'bunker', sangar: 'bunker', tent: 'tent', supply: 'supply_dump',
+  aaa: 'aaa_gun', flak: 'artillery', sam: 'sam_launcher', radar: 'radar', manpads: 'manpads_team', truck: 'truck_covered',
+  bunker: 'bunker', sangar: 'sangar', tent: 'tent', supply: 'supply_dump',
 };
+const DESTROYED_IDS = { aaa: 'aaa_gun_destroyed', flak: 'artillery_destroyed', sam: 'sam_launcher_destroyed', radar: 'radar_destroyed', truck: 'truck_destroyed', bunker: 'bunker_destroyed' };
 
-const cache = new Map();
 
 /** A fresh Object3D for a ground unit type. */
 export async function groundModel(type) {
-  if (!cache.has(type)) {
-    const id = ASSET_IDS[type];
-    cache.set(type, id ? tryLoadModel(id) : Promise.resolve(null));
-  }
-  const src = await cache.get(type);
-  if (src) return src.clone();
-  return (PLACEHOLDERS[type] ?? PLACEHOLDERS.bunker)();
+  const id = ASSET_IDS[type];
+  const model = (id ? await tryLoadModel(id) : null) ?? (PLACEHOLDERS[type] ?? PLACEHOLDERS.bunker)();
+  model.userData.isUnitModel = true;
+  if (!model.userData.spin) model.userData.spin = model.getObjectByName('dish') ?? null;
+  return model;
 }
 
-/** Blacken a destroyed unit in place (the wreck stays as a landmark). */
-export function wreck(object3d, flatten = 0.7) {
-  object3d.traverse((o) => { if (o.isMesh) o.material = M.wreck; });
-  object3d.scale.y *= flatten;
+/**
+ * Turn a destroyed unit into its wreck (which stays as a landmark): the art
+ * area's `_destroyed` model where one exists, its burned material recipe
+ * otherwise, and a blackened placeholder as the last resort.
+ */
+export function wreck(object3d, type = null, flatten = 0.7) {
+  const blacken = () => {
+    object3d.traverse((o) => { if (o.isMesh) o.material = M.wreck; });
+    object3d.scale.y *= flatten;
+  };
+  const id = DESTROYED_IDS[type] ?? null;
+  const base = ASSET_IDS[type] ?? (typeof type === 'string' && type.startsWith('base_') ? type : null);
+  if (!id && !base) return blacken();
+  (id ? tryLoadModel(id) : tryLoadModel(base, { burned: true })).then((m) => {
+    if (!m) return blacken();
+    const keep = object3d.children.find((c) => c.userData.isUnitModel);
+    if (keep) { m.position.copy(keep.position); object3d.remove(keep); }
+    m.userData.isUnitModel = true;
+    object3d.add(m);
+  });
 }
 
 // ---- base kit (public/assets/bases) ----------------------------------------
 
-let gltfLoader = null;
-const baseCache = new Map();
-export function loadBaseKit(id, lod = 1) {
-  const url = `./assets/bases/${id}-lod${lod}.glb`;
-  if (!baseCache.has(url)) {
-    gltfLoader ??= new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-    baseCache.set(url, gltfLoader.loadAsync(url).then((g) => {
-      g.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      return g.scene;
-    }).catch((e) => { console.warn('[ai] base kit failed', url, e); return null; }));
-  }
-  return baseCache.get(url).then((s) => s?.clone() ?? null);
+/** A base layout ("raven", "slate", ...) from the catalogue, or null. */
+export async function loadBaseKit(id) {
+  const m = await tryLoadModel(`base_${id}`, { lod: 1 });
+  if (m) m.userData.isUnitModel = true;
+  return m;
 }
 
 // ---- hostile fighter --------------------------------------------------------
@@ -177,8 +182,8 @@ let hostileTemplate = null;
  * placeholder carries no insignia at all.
  */
 async function buildHostileTemplate() {
-  const fromCatalog = await tryLoadModel('mig21_hostile');
-  if (fromCatalog) return fromCatalog;
+  // loadModel hands out clones itself; only the fallback needs a template.
+  if (await tryLoadModel('mig21_hostile')) return { isTemplate: false, object: new THREE.Group() };
   const ac = new Aircraft();
   await ac.load();
   const greys = [0x7d8388, 0x6b7076, 0x868b86];
@@ -198,7 +203,7 @@ async function buildHostileTemplate() {
     }
     o.material = repainted.get(src);
   });
-  return ac.model;
+  return { isTemplate: true, object: ac.model };
 }
 
 export async function hostileFighterModel() {
@@ -206,7 +211,7 @@ export async function hostileFighterModel() {
   const src = await hostileTemplate;
   const g = new THREE.Group();
   g.name = 'hostile-aircraft';
-  g.add(src.clone());
+  g.add(src.isTemplate ? src.object.clone() : await tryLoadModel('mig21_hostile') ?? src.object.clone());
   return g;
 }
 
