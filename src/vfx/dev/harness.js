@@ -40,6 +40,7 @@ export function installHarness(vfx, game) {
     if (held) {
       const f = game.flight;
       f.position.y = held.y; f.velocity.y = 0;
+      if (held.speed) f.velocity.setLength(held.speed);
     }
     if (!camSpec) return;
     const from = camSpec.from ? V(...camSpec.from) : rel(...camSpec.rel);
@@ -70,7 +71,7 @@ export function installHarness(vfx, game) {
   const lateUpdate = vfx.lateUpdate.bind(vfx);
   vfx.lateUpdate = (dt, g) => { if (dt > 0) tick(dt); lateUpdate(dt, g); };
 
-  function missile({ from, dir, target = null, kind = 'aam', speed = 320, maxSpeed = 850, life = 9, turn = 0.5, explode = true, wander = 0.35 }) {
+  function missile({ from, dir, target = null, kind = 'aam', speed = 320, maxSpeed = 850, life = 9, turn = 0.5, explode = true, wander = 0.16 }) {
     const m = {
       id: `m${nextId++}`, kind, team: 'player', alive: true, age: 0, maxAge: life, owner: null, motor: true,
       position: from.clone(), velocity: dir.clone().normalize().multiplyScalar(speed), quaternion: new THREE.Quaternion(),
@@ -83,7 +84,7 @@ export function installHarness(vfx, game) {
       if (target) want.copy(target.position ?? target).sub(e.position).normalize();
       else {
         // weave: a slowly rotating lateral pull, like a missile chasing a jinking target
-        side.set(Math.sin(e.age * 0.9 + e.seed), Math.cos(e.age * 0.7 + e.seed * 1.3) * 0.6, Math.cos(e.age * 0.8 + e.seed)).multiplyScalar(wander);
+        side.set(Math.sin(e.age * 0.9 + e.seed), Math.cos(e.age * 0.7 + e.seed * 1.3) * 0.5, Math.cos(e.age * 0.8 + e.seed)).multiplyScalar(wander * Math.min(1, e.age * 0.6));
         want.copy(fwd).add(side).normalize();
       }
       fwd.lerp(want, Math.min(1, turn * dt * 3)).normalize();
@@ -181,7 +182,7 @@ export function installHarness(vfx, game) {
       const out = [];
       for (let i = 0; i < (o.count ?? 6); i++) {
         const dir = f.fwd.clone().addScaledVector(f.right, (i - 2.5) * 0.09).addScaledVector(f.up, ((i % 3) - 1) * 0.07);
-        out.push(missile({ from: rel((i - 2.5) * 1.6, -1, -4), dir, life: 8 + i * 0.6, wander: 0.3 + i * 0.05, ...o }));
+        out.push(missile({ from: rel((i - 2.5) * 1.6, -1, -4), dir, life: 8 + i * 0.6, wander: 0.1 + i * 0.03, ...o }));
       }
       return out;
     },
@@ -300,7 +301,7 @@ export function installHarness(vfx, game) {
   run.cam = (spec) => { camSpec = spec; if (game.paused) refresh(); };
   run.freeze = () => { game.paused = true; };
   run.resume = () => { game.paused = false; game.timeScale = 1; };
-  run.hold = (on = true, y = 6800) => { held = on ? { y } : null; if (on) game.flight.position.y = y; };
+  run.hold = (on = true, y = 6800, speed = 250) => { held = on ? { y, speed } : null; if (on) game.flight.position.y = y; };
   run.step = async (seconds, fps = 60) => {
     manual(() => {
       game.timeScale = 1;
@@ -380,7 +381,11 @@ export function installHarness(vfx, game) {
     // crop the source to the tile's aspect around the centre
     const sa = src.width / src.height, ta = w / h;
     const sw = sa > ta ? src.height * ta : src.width, shh = sa > ta ? src.height : src.width / ta;
-    ctx.drawImage(snapCanvas, (src.width - sw) / 2, (src.height - shh) / 2, sw, shh, x, y, w, h);
+    if (game.r.backend !== 'webgpu') { // GL reads back bottom-up
+      ctx.save(); ctx.translate(0, 2 * y + h); ctx.scale(1, -1);
+      ctx.drawImage(snapCanvas, (src.width - sw) / 2, (src.height - shh) / 2, sw, shh, x, y, w, h);
+      ctx.restore();
+    } else ctx.drawImage(snapCanvas, (src.width - sw) / 2, (src.height - shh) / 2, sw, shh, x, y, w, h);
     if (label) { ctx.font = `${Math.round(h * 0.05)}px sans-serif`; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.strokeText(label, x + 8, y + h - 10); ctx.fillText(label, x + 8, y + h - 10); }
     sheet.i++;
   };

@@ -9,6 +9,10 @@ import { fireRamp } from './shared.js';
 
 const MAX_TYPES = 24;
 const TYPE_STRIDE = 3; // vec4 rows per type
+// The type index rides in the life channel (type * LIFE_SPAN + life) so the
+// compute pass needs only four buffers: three's WebGL2 fallback runs compute as
+// transform feedback, which allows at most four separate outputs.
+const LIFE_SPAN = 64;
 
 /**
  * GPU particle pool.
@@ -66,7 +70,7 @@ export class ParticlePool {
    * Register a particle type. Common: drag (1/s), gravity (m/s², +up = buoyant),
    * turbulence (m/s²), turbScale (1/m), wind (0..1 coupling), sizePow, fadeIn,
    * fadeOut (fractions of life). lit: heatDecay (1/s), soft (depth-fade scale),
-   * spin (rad/s). glow: shape (0 dot, 1 spark, 2 ring, 3 flash, 4 flame),
+   * spin (rad/s), thin (0 = self-shadowed smoke, 1 = bright vapour). glow: shape (0 dot, 1 spark, 2 ring, 3 flash, 4 flame),
    * stretch (s of motion blur), minPixels, flicker.
    */
   type(p = {}) {
@@ -76,7 +80,7 @@ export class ParticlePool {
     const r = i * TYPE_STRIDE;
     this._table[r].set(p.drag ?? 0.5, p.gravity ?? 0, p.turbulence ?? 0, p.turbScale ?? 0.05);
     this._table[r + 1].set(p.wind ?? 0, p.sizePow ?? 0.5, p.fadeIn ?? 0.05, p.fadeOut ?? 0.5);
-    if (this.flavour === 'lit') this._table[r + 2].set(p.heatDecay ?? 2, p.soft ?? 0.35, p.spin ?? 0.3, p.shadow ?? 1);
+    if (this.flavour === 'lit') this._table[r + 2].set(p.heatDecay ?? 2, p.soft ?? 0.35, p.spin ?? 0.3, p.thin ?? 0);
     else this._table[r + 2].set(p.shape ?? 0, p.stretch ?? 0, p.minPixels ?? 0, p.flicker ?? 0);
     return i;
   }
@@ -87,7 +91,7 @@ export class ParticlePool {
     const o = i * 4;
     const A = this.aData, B = this.bData, C = this.cData, D = this.dData;
     A[o] = x; A[o + 1] = y; A[o + 2] = z; A[o + 3] = this.shared.time - age0;
-    B[o] = vx; B[o + 1] = vy; B[o + 2] = vz; B[o + 3] = life;
+    B[o] = vx; B[o + 1] = vy; B[o + 2] = vz; B[o + 3] = type * LIFE_SPAN + Math.min(life, LIFE_SPAN - 0.1);
     C[o] = size0; C[o + 1] = size1; C[o + 2] = extra; C[o + 3] = type;
     D[o] = r; D[o + 1] = g; D[o + 2] = b; D[o + 3] = a;
     this.dirty.mark(i);
@@ -99,13 +103,24 @@ export class ParticlePool {
   update(renderer) {
     if (!this.dirty.empty) {
       const ranges = this.dirty.flush();
-      for (const node of [this.spawnA, this.spawnB, this.spawnC, this.spawnD]) {
-        // The backend clears ranges when it uploads. The colour buffer is only
-        // uploaded on draw, so ranges must accumulate across undrawn updates.
+      // A and B are bound by the compute pass below: uploaded (and their ranges
+      // cleared by the backend) right now.
+      for (const node of [this.spawnA, this.spawnB]) {
         const attr = node.value;
         for (const [s, c] of ranges) attr.addUpdateRange(s * 4, c * 4);
-        if (attr.updateRanges.length > 64) attr.clearUpdateRanges(); // empty list = full upload
         attr.needsUpdate = true;
+      }
+      // C and D are only read when drawing, so their ranges must accumulate
+      // until a draw has actually consumed them (fast-forward, hidden tab).
+      if (this._drawn) { this._full = false; this._drawn = false; }
+      for (const node of [this.spawnC, this.spawnD]) {
+        const attr = node.value;
+        if (!this._full) for (const [s, c] of ranges) attr.addUpdateRange(s * 4, c * 4);
+        attr.needsUpdate = true;
+      }
+      if (!this._full && this.spawnC.value.updateRanges.length > 64) {
+        this.spawnC.value.clearUpdateRanges(); this.spawnD.value.clearUpdateRanges(); // empty list = full upload
+        this._full = true;
       }
     }
     renderer.compute(this.computeNode);
@@ -113,21 +128,22 @@ export class ParticlePool {
 
   _buildCompute() {
     const { time, dt, wind } = this.shared.u;
-    const { spawnA, spawnB, spawnC, statePos, stateVel, table } = this;
+    const { spawnA, spawnB, statePos, stateVel, table } = this;
     this.computeNode = Fn(() => {
       const sA = spawnA.element(instanceIndex);
       const sB = spawnB.element(instanceIndex);
-      const sC = spawnC.element(instanceIndex);
       const p = statePos.element(instanceIndex);
       const v = stateVel.element(instanceIndex);
       const birth = sA.w;
       const age = time.sub(birth);
+      const typeF = floor(sB.w.div(LIFE_SPAN));
+      const life = sB.w.sub(typeF.mul(LIFE_SPAN));
       If(p.w.notEqual(birth), () => {
         // (re)born: start from the spawn record, advanced by the sub-frame age
         v.assign(vec4(sB.xyz, 0));
         p.assign(vec4(sA.xyz.add(sB.xyz.mul(age.clamp(0, 0.05))), birth));
-      }).ElseIf(age.greaterThanEqual(0).and(age.lessThan(sB.w)), () => {
-        const ti = int(sC.w.add(0.5)).mul(TYPE_STRIDE);
+      }).ElseIf(age.greaterThanEqual(0).and(age.lessThan(life)), () => {
+        const ti = int(typeF.add(0.5)).mul(TYPE_STRIDE);
         const t0 = table.element(ti);
         const t1 = table.element(ti.add(1));
         const vel = v.xyz.toVar();
@@ -158,6 +174,7 @@ export class ParticlePool {
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false;
     mesh.name = `vfx-${this.flavour}`;
+    mesh.onBeforeRender = () => { this._drawn = true; };
     return mesh;
   }
 
@@ -171,11 +188,12 @@ export class ParticlePool {
     const P = this.statePos.toAttribute();
     const V = this.stateVel.toAttribute();
     const age = u.time.sub(A.w);
-    const life = B.w.max(1e-4);
+    const typeF = floor(B.w.div(LIFE_SPAN));
+    const life = B.w.sub(typeF.mul(LIFE_SPAN)).max(1e-4);
     const t = age.div(life).clamp(0, 1);
     // a slot is drawable once the compute pass has adopted its spawn record
     const alive = age.greaterThanEqual(0).and(age.lessThan(life)).and(P.w.equal(A.w));
-    const ti = int(C.w.add(0.5)).mul(TYPE_STRIDE);
+    const ti = int(typeF.add(0.5)).mul(TYPE_STRIDE);
     const T1 = this.table.element(ti.add(1));
     const T2 = this.table.element(ti.add(2));
     const seed = hash(float(instanceIndex).add(A.w.mul(61.7)));
@@ -230,6 +248,7 @@ export class ParticlePool {
     const vCell = varying(floor(c.seed2.mul(15.999)));
     const vSoft = varying(c.size.mul(c.T2.y).max(0.25));
     const vT = varying(c.t);
+    const vThin = varying(c.T2.w);
 
     material.fragmentNode = Fn(() => {
       const cell = vCell.add(0.5).floor();
@@ -245,9 +264,11 @@ export class ParticlePool {
       const gain = shaped.div(ta.a.max(1e-3));
       const L = vLight;
       const wp = max(L, 0), wn = max(L.negate(), 0);
-      const sunLit = ta.r.mul(wp.x.mul(wp.x)).add(tb.r.mul(wn.x.mul(wn.x)))
+      const shadowed = ta.r.mul(wp.x.mul(wp.x)).add(tb.r.mul(wn.x.mul(wn.x)))
         .add(ta.g.mul(wp.y.mul(wp.y))).add(tb.g.mul(wn.y.mul(wn.y)))
         .add(ta.b.mul(wp.z.mul(wp.z))).add(tb.b.mul(wn.z.mul(wn.z)));
+      // thin media (vapour, light smoke) barely shadow themselves
+      const sunLit = mix(shadowed, ta.a.mul(0.8), vThin);
       const side = ta.r.add(tb.r).add(ta.b).add(tb.b).mul(0.25);
       const amb = u.skyColor.mul(ta.g.mul(0.55).add(side.mul(0.45)))
         .add(u.groundColor.mul(tb.g.mul(0.55).add(side.mul(0.2))));

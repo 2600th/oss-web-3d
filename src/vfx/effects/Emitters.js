@@ -134,8 +134,9 @@ export class Emitters {
       const { position: p, velocity: vel } = item.pose;
       const k = saturate((item.burn - item.age) / 0.8) * saturate(item.age / 0.08 + 0.3);
       const life = Math.max(dt * 2.5, 0.04);
-      glow.spawn(G.flare, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 1.2, 1.2, 1, 0.94, 0.82, 1, 60 * k);
-      glow.spawn(G.halo, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 11, 11, 1, 0.78, 0.5, 1, 1.5 * k);
+      glow.spawn(G.glow, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 2.2, 2.2, 1, 0.95, 0.85, 1, 160 * k);
+      glow.spawn(G.flare, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 12, 12, 1, 0.9, 0.72, 1, 16 * k);
+      glow.spawn(G.beacon, p.x, p.y, p.z, vel.x, vel.y, vel.z, life, 34, 34, 1, 0.72, 0.42, 1, 1.3 * k);
       const n = emitCount(item, '_spark', 45 * v.cfg.rate, dt);
       for (let i = 0; i < n; i++) {
         randDir(_d);
@@ -186,7 +187,7 @@ export class Emitters {
         for (let j = 0; j < n; j++) {
           const a = rnd(Math.PI * 2), r = rnd(s * 0.75);
           lit.spawn(L.flame, p.x + Math.cos(a) * r, p.y + s * 0.2, p.z + Math.sin(a) * r, rnd(-1.5, 1.5), rnd(2, 5) + s * 0.5, rnd(-1.5, 1.5),
-            rnd(0.5, 1.1), s * rnd(0.8, 1.3), s * rnd(1.0, 1.7), 0.09, 0.085, 0.08, 0.75, rnd(3, 5.6) * burn);
+            rnd(0.5, 1.1), s * rnd(0.6, 1.1), s * rnd(0.9, 1.5), 0.09, 0.085, 0.08, 0.8, rnd(1.2, 2.5) * burn);
         }
         n = emitCount(f, '_em', 5 * lod, dt);
         for (let j = 0; j < n; j++) {
@@ -232,18 +233,20 @@ export class Emitters {
       item.trail.push(_t);
       if (tier === 2) {
         const heat = saturate((item.level - 0.65) / 0.3);
-        let n = emitCount(item, '_fl', (22 + 30 * heat) * v.cfg.rate, dt);
+        // burning fuel: hot puffs that roll into black smoke as they cool
+        let n = emitCount(item, '_fl', (26 + 22 * heat) * v.cfg.rate, dt);
         for (let i = 0; i < n; i++) {
           randDir(_d);
           const s = Math.random() * dt;
-          lit.spawn(L.shed, _t.x - vel.x * s, _t.y - vel.y * s, _t.z - vel.z * s, vel.x * 0.55 + _d.x * 3, vel.y * 0.55 + _d.y * 3, vel.z * 0.55 + _d.z * 3,
-            rnd(0.35, 0.8), rnd(0.9, 1.5), rnd(2.2, 3.4), 0.07, 0.065, 0.06, 0.8, rnd(3, 5.5));
+          lit.spawn(L.burn, _t.x - vel.x * s, _t.y - vel.y * s, _t.z - vel.z * s, vel.x * 0.5 + _d.x * 3, vel.y * 0.5 + _d.y * 3, vel.z * 0.5 + _d.z * 3,
+            rnd(1.3, 2.6), rnd(1.4, 2.0), rnd(5, 8), 0.06, 0.057, 0.055, 0.9, rnd(1.5, 2.4));
         }
-        n = emitCount(item, '_sm', 16 * v.cfg.rate, dt);
+        n = emitCount(item, '_fc', 70 * v.cfg.rate, dt);
         for (let i = 0; i < n; i++) {
           randDir(_d);
-          lit.spawn(L.shed, _t.x, _t.y, _t.z, vel.x * 0.2 + _d.x * 4, vel.y * 0.2 + _d.y * 4, vel.z * 0.2 + _d.z * 4,
-            rnd(2, 3.6), 1.4, rnd(6, 9), 0.06, 0.057, 0.055, 0.7, 0.6);
+          const s = Math.random() * dt;
+          glow.spawn(G.flame, _t.x - vel.x * s, _t.y - vel.y * s, _t.z - vel.z * s, vel.x * 0.75 + _d.x * 4, vel.y * 0.75 + _d.y * 4, vel.z * 0.75 + _d.z * 4,
+            rnd(0.15, 0.35), rnd(1.0, 1.8), rnd(2.0, 3.2), 1, 0.5, 0.16, 1, rnd(1.2, 2.4));
         }
         glow.spawn(G.glow, _t.x, _t.y, _t.z, vel.x, vel.y, vel.z, Math.max(dt * 2.5, 0.04), 2.6, 2.6, 1, 0.5, 0.15, 1, 4 + 5 * heat);
         v.lights.request(_t.x, _t.y, _t.z, 1, 0.55, 0.22, 1400, 90);
@@ -283,18 +286,19 @@ export class Emitters {
       }
       const s = w.scale, p = w.pos, vel = w.vel;
       w.trail.push(p);
-      let n = emitCount(w, '_fl', 34 * v.cfg.rate, dt);
+      let n = emitCount(w, '_fl', 30 * v.cfg.rate, dt);
       for (let j = 0; j < n; j++) {
         randDir(_d);
         const b = Math.random() * dt;
-        lit.spawn(L.shed, p.x - vel.x * b, p.y - vel.y * b, p.z - vel.z * b, vel.x * 0.6 + _d.x * 4, vel.y * 0.6 + _d.y * 4, vel.z * 0.6 + _d.z * 4,
-          rnd(0.5, 1.1), rnd(1.6, 2.4) * s, rnd(3.4, 5) * s, 0.07, 0.065, 0.06, 0.85, rnd(3.5, 6));
+        lit.spawn(L.burn, p.x - vel.x * b, p.y - vel.y * b, p.z - vel.z * b, vel.x * 0.5 + _d.x * 4, vel.y * 0.5 + _d.y * 4, vel.z * 0.5 + _d.z * 4,
+          rnd(1.6, 3.2), rnd(2.0, 2.8) * s, rnd(7, 11) * s, 0.06, 0.057, 0.055, 0.92, rnd(1.6, 2.6));
       }
-      n = emitCount(w, '_sm', 12 * v.cfg.rate, dt);
+      n = emitCount(w, '_fc', 80 * v.cfg.rate, dt);
       for (let j = 0; j < n; j++) {
         randDir(_d);
-        lit.spawn(L.shed, p.x, p.y, p.z, vel.x * 0.15 + _d.x * 5, vel.y * 0.15 + _d.y * 5, vel.z * 0.15 + _d.z * 5,
-          rnd(3, 5.5), 2.2 * s, rnd(9, 14) * s, 0.055, 0.052, 0.05, 0.75, 0.8);
+        const b = Math.random() * dt;
+        glow.spawn(G.flame, p.x - vel.x * b, p.y - vel.y * b, p.z - vel.z * b, vel.x * 0.75 + _d.x * 5, vel.y * 0.75 + _d.y * 5, vel.z * 0.75 + _d.z * 5,
+          rnd(0.2, 0.45), rnd(1.6, 2.6) * s, rnd(3, 4.6) * s, 1, 0.5, 0.16, 1, rnd(1.2, 2.4));
       }
       n = emitCount(w, '_sp', 10 * v.cfg.rate, dt);
       for (let j = 0; j < n; j++) {

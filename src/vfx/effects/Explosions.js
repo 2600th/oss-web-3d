@@ -28,6 +28,7 @@ export class Explosions {
     const mat = new THREE.MeshStandardNodeMaterial({ color: 0x191817, roughness: 0.85, metalness: 0.4 });
     this.debrisMesh = new THREE.InstancedMesh(geo, mat, n);
     this.debrisMesh.count = 0;
+    this.debrisMesh.visible = false;
     this.debrisMesh.frustumCulled = false;
     this.debrisMesh.name = 'vfx-debris';
     this.debrisMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -224,6 +225,7 @@ export class Explosions {
       _m.compose(d.pos, d.quat, _s.setScalar(d.scale));
       mesh.setMatrixAt(n++, _m);
     }
+    mesh.visible = n > 0;
     if (n > 0 || mesh.count !== 0) {
       mesh.count = n;
       mesh.instanceMatrix.needsUpdate = true;

@@ -101,12 +101,12 @@ export class Shells {
       const isInner = vQ.w;
       const body = exp(vZ.mul(mix(float(3.2), float(2.0), isInner)).negate()).mul(n.mul(0.9).add(0.55));
       const shape = pow(facing, mix(float(0.9), float(2.2), isInner));
-      const inten = body.mul(mix(float(0.35), float(1), isInner)).add(dia.mul(isInner).mul(3.2)).mul(shape).mul(vQ.x);
-      const hot = mix(vec3(0.6, 0.74, 1.0), vec3(1.0, 0.6, 0.22), smoothstep(0.02, 0.3, vZ));
-      const col = mix(hot, vec3(1.0, 0.3, 0.07), smoothstep(0.45, 1, vZ));
+      const inten = body.mul(mix(float(0.3), float(0.55), isInner)).add(dia.mul(isInner).mul(2.6)).mul(shape).mul(vQ.x);
+      const hot = mix(vec3(0.5, 0.66, 1.0), vec3(1.0, 0.5, 0.14), smoothstep(0.0, 0.22, vZ));
+      const col = mix(hot, vec3(1.0, 0.24, 0.04), smoothstep(0.4, 1, vZ)).add(vec3(1, 0.85, 0.6).mul(dia.mul(isInner).mul(0.6)));
       const ends = smoothstep(0, 0.03, vZ).mul(pow(float(1).sub(vZ), 1.3));
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(0.35));
-      return vec4(col.mul(inten).mul(ends).mul(depthFade).mul(7).mul(u.fade), 0);
+      return vec4(col.mul(inten).mul(ends).mul(depthFade).mul(3.2).mul(u.fade), 0);
     })();
     return m;
   }
@@ -118,7 +118,7 @@ export class Shells {
     const rad = mix(sQ.y, sQ.z, pow(z, 0.6));
     const world = sO.xyz.add(axis.mul(z.mul(sO.w))).add(radial.mul(rad));
     m.positionNode = world;
-    const vRad = varying(radial), vWorld = varying(world), vZ = varying(z), vQ = varying(sQ);
+    const vRad = varying(radial), vWorld = varying(world), vZ = varying(z), vQ = varying(sQ), vAxis = varying(axis);
     m.fragmentNode = Fn(() => {
       const nrm = normalize(vRad);
       const facing = abs(dot(nrm, normalize(u.camPos.sub(vWorld))));
@@ -127,7 +127,8 @@ export class Shells {
       const shell = pow(float(1).sub(facing), 0.7).mul(0.75).add(0.25);
       const along = smoothstep(0, 0.1, vZ).mul(smoothstep(0.35, 1, vZ).oneMinus());
       const depthFade = saturate(sh.sceneViewZ().sub(positionView.z.negate()).div(0.6));
-      const a = saturate(vQ.x.mul(shell).mul(along).mul(smoothstep(0.2, 0.7, n.mul(0.65).add(n2.mul(0.35)))).mul(0.75)).mul(depthFade).mul(u.fade);
+      const axial = float(1).sub(abs(dot(normalize(vAxis), normalize(u.camPos.sub(vWorld)))).pow(2).mul(0.8));
+      const a = saturate(vQ.x.mul(shell).mul(along).mul(axial).mul(smoothstep(0.2, 0.7, n.mul(0.65).add(n2.mul(0.35)))).mul(0.8)).mul(depthFade).mul(u.fade);
       const ndl = dot(nrm, u.sunDir).mul(0.35).add(0.65);
       const col = u.sunColor.mul(0.5).mul(ndl).add(u.skyColor.mul(0.34));
       return vec4(col.mul(a), a);

@@ -36,8 +36,9 @@ export class Ribbons {
     this.owner = new Array(capacity).fill(null);
     this.data = new Float32Array(capacity * STRIDE);
     for (let i = 0; i < capacity; i++) { this.data[i * STRIDE + 7] = -1e6; this.data[i * STRIDE + 11] = -1e6; }
+    // Static usage on purpose: three re-uploads a DynamicDraw buffer in full on
+    // every draw; with static usage only the ranges touched this frame go up.
     this.buffer = new THREE.InstancedInterleavedBuffer(this.data, STRIDE, 1);
-    this.buffer.setUsage(THREE.DynamicDrawUsage);
 
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, -1, 0, 0, 1, 0, 1, -1, 0, 1, 1, 0]), 3));
@@ -89,9 +90,11 @@ export class Ribbons {
     const ranges = this.dirty.flush();
     // Ranges are consumed when the mesh is next drawn. If several updates
     // happen between draws (fast-forward, hidden tab) they must accumulate.
-    if (this._drawn) { this.buffer.clearUpdateRanges(); this._drawn = false; }
-    for (const [s, c] of ranges) this.buffer.addUpdateRange(s * STRIDE, c * STRIDE);
-    if (this.buffer.updateRanges.length > 96) this.buffer.clearUpdateRanges(); // empty list = full upload
+    if (this._drawn) { this._full = false; this._drawn = false; } // the backend cleared the ranges on upload
+    if (!this._full) {
+      for (const [s, c] of ranges) this.buffer.addUpdateRange(s * STRIDE, c * STRIDE);
+      if (this.buffer.updateRanges.length > 96) { this.buffer.clearUpdateRanges(); this._full = true; } // empty list = full upload
+    }
     this.buffer.needsUpdate = true;
   }
 
@@ -152,9 +155,12 @@ export class Ribbons {
     const tanA = normalize(bv.sub(pv).add(vec3(1e-5, 0, 0)));
     const tanB = normalize(nv.sub(av).add(vec3(1e-5, 0, 0)));
 
-    const seg = bv.xy.sub(av.xy);
+    // Screen-space direction of the segment. It has to come from the projected
+    // end points: for a segment running away from the camera the view-space xy
+    // delta points somewhere else entirely and the quad collapses to a sliver.
+    const seg = bv.xy.div(bv.z.negate().max(0.05)).sub(av.xy.div(av.z.negate().max(0.05)));
     const segLen = length(seg);
-    const dir2 = select(segLen.greaterThan(1e-4), seg.div(segLen.max(1e-4)), vec2(1, 0));
+    const dir2 = select(segLen.greaterThan(1e-6), seg.div(segLen.max(1e-6)), vec2(1, 0));
     const perp = vec2(dir2.y.negate(), dir2.x);
     const e = positionGeometry.x, side = positionGeometry.y;
     const c = mix(av, bv, e);
@@ -233,7 +239,7 @@ export class Ribbons {
       // fade when the camera itself is inside the tube (the quad cannot cover the screen)
       const camSeg = a.add(ax.mul(wu.clamp(0, L)));
       const inside = smoothstep(r.mul(0.6), r.mul(1.9), length(camSeg));
-      const tau = sigma.mul(chord).mul(pow(prof, 0.7)).mul(erosion).mul(fadeLife).mul(inside);
+      const tau = sigma.mul(chord).mul(pow(prof, 0.5)).mul(erosion).mul(fadeLife).mul(inside).mul(1.5);
       const alpha = float(1).sub(exp(tau.negate())).mul(u.fade);
 
       // shading: tube normal at the entry point, roughened by the noise
@@ -248,8 +254,8 @@ export class Ribbons {
       const fwd = pow(saturate(dot(D, u.sunDirView)), 8).mul(float(1).sub(alpha)).mul(0.9);
       const col = v5.rgb.mul(u.sunColor.mul(diffuse.mul(0.62).add(fwd)).add(amb.mul(0.38))).toVar();
       // rocket motor lighting the first metres of smoke
-      const hot = v6.x.mul(exp(age.mul(-5))).mul(prof.mul(0.8).add(0.2));
-      col.addAssign(fireRamp(hot.mul(1.8)));
+      const hot = v6.x.mul(exp(age.mul(-9))).mul(prof.mul(0.8).add(0.2));
+      col.addAssign(fireRamp(hot.mul(1.2)));
       return vec4(col.mul(alpha), alpha);
     })();
     return material;

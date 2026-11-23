@@ -103,7 +103,7 @@ export class AircraftFx {
     const { glow, lit, G, L, lights } = this.vfx;
     const vx = vel?.x ?? 0, vy = vel?.y ?? 0, vz = vel?.z ?? 0;
     glow.spawn(G.flash, pos.x + dir.x * 0.5 * scale, pos.y + dir.y * 0.5 * scale, pos.z + dir.z * 0.5 * scale, vx, vy, vz,
-      0.035, rnd(1.0, 1.7) * scale, rnd(1.6, 2.4) * scale, 1, 0.82, 0.5, 1, rnd(4, 8));
+      0.035, rnd(1.2, 2.0) * scale, rnd(1.8, 2.8) * scale, 1, 0.82, 0.5, 1, rnd(14, 26));
     glow.spawn(G.jet, pos.x + dir.x * scale, pos.y + dir.y * scale, pos.z + dir.z * scale, vx + dir.x * 30, vy + dir.y * 30, vz + dir.z * 30,
       0.05, 0.9 * scale, 0.4 * scale, 1, 0.7, 0.3, 1, 5);
     if (Math.random() < 0.5) {
@@ -114,7 +114,7 @@ export class AircraftFx {
 
   tracer(pos, vel) {
     const { glow, G } = this.vfx;
-    glow.spawn(G.tracer, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, 1.6, 0.2, 0.16, 1, 0.76, 0.34, 1, 15);
+    glow.spawn(G.tracer, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, 1.6, 0.34, 0.26, 1, 0.74, 0.3, 1, 48);
   }
 
   update(dt) {
@@ -191,14 +191,14 @@ export class AircraftFx {
       }
 
       if (amount > 0.3 && dist < 2500) {
-        const n = Math.floor(150 * amount * v.cfg.rate * dt + Math.random());
+        const n = Math.floor(320 * amount * v.cfg.rate * dt + Math.random());
         const span = Math.abs(socket(entity, 'wingtipR').x);
         for (let i = 0; i < n; i++) {
           const side = Math.random() < 0.5 ? -1 : 1;
-          _p2.set(side * rnd(0.8, span * 0.95), 0.3, rnd(-0.4, 1.8)).applyQuaternion(q).add(pos);
+          _p2.set(side * rnd(0.7, span * 0.9), 0.32, rnd(0.2, 2.2)).applyQuaternion(q).add(pos);
           const s = Math.random() * dt;
           lit.spawn(L.wisp, _p2.x - vel.x * s, _p2.y - vel.y * s, _p2.z - vel.z * s, vel.x * 0.9 + _up.x * 3, vel.y * 0.9 + _up.y * 3, vel.z * 0.9 + _up.z * 3,
-            rnd(0.16, 0.32), rnd(0.8, 1.2), rnd(2.2, 3.4), 1, 1, 1, 0.2 * amount);
+            rnd(0.1, 0.2), rnd(0.4, 0.7), rnd(1.2, 2.0), 1.25, 1.25, 1.3, 0.2 * amount);
         }
       }
 
@@ -225,7 +225,7 @@ export class AircraftFx {
           const s = Math.random() * dt;
           randDir(_d);
           _v.copy(_fwd).multiplyScalar(880).add(vel).addScaledVector(_d, 3);
-          glow.spawn(G.tracer, _p2.x + _v.x * s, _p2.y + _v.y * s, _p2.z + _v.z * s, _v.x, _v.y, _v.z, 1.6, 0.2, 0.16, 1, 0.76, 0.34, 1, 15);
+          glow.spawn(G.tracer, _p2.x + _v.x * s, _p2.y + _v.y * s, _p2.z + _v.z * s, _v.x, _v.y, _v.z, 1.6, 0.34, 0.26, 1, 0.74, 0.3, 1, 48);
         }
         if (Math.random() < 0.8) this.muzzleFlash(_p2, _fwd, vel, 1);
       }

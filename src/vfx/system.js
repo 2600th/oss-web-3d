@@ -15,7 +15,7 @@ import { AircraftFx } from './effects/AircraftFx.js';
 export const order = 70;
 
 const TIERS = {
-  low: { segments: 3000, lights: 2, heat: false, debris: 12, rate: 0.5, spacing: 1.8, fires: 6 },
+  low: { segments: 5000, lights: 2, heat: false, debris: 12, rate: 0.5, spacing: 1.8, fires: 6 },
   medium: { segments: 8000, lights: 3, heat: true, debris: 24, rate: 0.75, spacing: 1.3, fires: 10 },
   high: { segments: 16000, lights: 4, heat: true, debris: 40, rate: 1, spacing: 1, fires: 14 },
   ultra: { segments: 26000, lights: 6, heat: true, debris: 56, rate: 1.3, spacing: 0.8, fires: 18 },
@@ -71,8 +71,8 @@ class VfxSystem {
     const tier = game.r.tier;
     const cfg = this.cfg = { ...(TIERS[tier.name] ?? TIERS.high) };
     const max = tier.particlesMax ?? 60000;
-    cfg.lit = Math.floor(max * 0.28);
-    cfg.glow = Math.floor(max * 0.16);
+    cfg.lit = Math.max(6000, Math.floor(max * 0.28));
+    cfg.glow = Math.max(6000, Math.floor(max * 0.16));
     cfg.backend = game.r.backend;
 
     const shared = this.shared = new Shared(game);
