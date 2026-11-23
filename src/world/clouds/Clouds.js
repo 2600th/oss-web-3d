@@ -112,8 +112,10 @@ export class Clouds {
       hSize: uniform(new THREE.Vector2(2, 2)),
       reset: uniform(1),
       maxDist: uniform(230000),
-      stepMin: uniform(55),
-      stepGrow: uniform(0.013),
+      // Step length scales inversely with the tier step budget, so every tier
+      // reaches the same distance (fewer steps = coarser, not shorter-sighted).
+      stepMin: uniform(55 * Math.min(2.5, Math.max(0.7, 64 / steps))),
+      stepGrow: uniform(0.013 * Math.min(2.5, Math.max(0.7, 64 / steps))),
       shadowCentre: uniform(new THREE.Vector2()),
       shadowStrength: uniform(0.45),
       probePos: uniform(new THREE.Vector3()),
@@ -123,7 +125,9 @@ export class Clouds {
     };
 
     // --- static inputs -----------------------------------------------------
-    this.shapeTarget = generateShapeNoise(renderer, low ? 64 : 128);
+    // Always 128^3: the density thresholds are calibrated on this volume's
+    // statistics, and a 64^3 one (aliased top octaves) grows visibly fewer clouds.
+    this.shapeTarget = generateShapeNoise(renderer, 128);
     this.detailTarget = generateDetailNoise(renderer, 32);
     this.cirrusTarget = generateCirrusNoise(renderer, low ? 256 : 512);
     this.ridgeTexture = makeRidgeTexture();
