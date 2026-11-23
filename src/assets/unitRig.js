@@ -7,9 +7,16 @@ const D = Math.PI / 180;
 
 /**
  * Per unit type (src/ai/ground.js `type`):
- *   align       follow the slope (vehicles, towed guns); else stay level on a foundation
+ *   align       follow the slope (vehicles, towed guns); else stay near level on a foundation
  *   maxTilt     clamp on the slope-following tilt
- *   bury        level units: base height between the lowest (0) and highest (1) footprint corner
+ *   maxBury     how far (m) the uphill edge may go into the ground before the unit is
+ *               lifted instead (and an earth berm fills under the downhill edge).
+ *               Kept well under the model height so nothing is visibly swallowed.
+ *   sink        how far (m) the lowest edge is set into the ground (no daylight under it)
+ *   clear       ground clearance (m) the interior of the footprint may rise into
+ *               (between the wheels / inside a wall ring) before it counts as a poke-through
+ *   maxHang     berm height (m) past which the unit leans further with the slope ...
+ *   steepTilt   ... up to this tilt (default: twice maxTilt, at most maxTilt + 10 deg)
  *   yawRate / pitchRate   slew rates, rad/s
  *   pitch       [min, max] elevation of the barrels / launcher
  *   lead        projectile speed (m/s) for a lead solution, 0 = aim at the target
@@ -19,23 +26,29 @@ const D = Math.PI / 180;
  *   launcherYaws the `launcher` node is the only pivot and takes yaw as well (MANPADS)
  */
 export const UNIT_RIGS = {
-  aaa: { align: true, maxTilt: 12 * D, yawRate: 75 * D, pitchRate: 55 * D, pitch: [-4 * D, 85 * D], lead: 950, scan: 55 * D, restPitch: 22 * D },
-  flak: { align: true, maxTilt: 10 * D, yawRate: 14 * D, pitchRate: 9 * D, pitch: [2 * D, 70 * D], lead: 0, scan: 0, restPitch: 18 * D },
-  sam: { align: true, maxTilt: 14 * D, yawRate: 40 * D, pitchRate: 20 * D, pitch: [0, 65 * D], lead: 0, scan: 0, restPitch: 0, raiseOnLock: true, minLaunch: 24 * D },
-  manpads: { align: false, maxTilt: 8 * D, bury: 0.35, yawRate: 70 * D, pitchRate: 45 * D, pitch: [0, 70 * D], lead: 0, scan: 0, restPitch: 0, raiseOnLock: true, minLaunch: 12 * D, launcherYaws: true },
-  radar: { align: true, maxTilt: 10 * D },
-  truck: { align: true, maxTilt: 18 * D },
+  // vehicles and towed guns follow the ground; the footprint is wheels / outriggers,
+  // the interior is chassis clearance
+  aaa: { align: true, maxTilt: 16 * D, maxBury: 0.22, sink: 0.04, clear: 0.25, yawRate: 75 * D, pitchRate: 55 * D, pitch: [-4 * D, 85 * D], lead: 950, scan: 55 * D, restPitch: 22 * D },
+  flak: { align: true, maxTilt: 13 * D, maxBury: 0.25, sink: 0.04, clear: 0.3, yawRate: 14 * D, pitchRate: 9 * D, pitch: [2 * D, 70 * D], lead: 0, scan: 0, restPitch: 18 * D },
+  sam: { align: true, maxTilt: 16 * D, maxBury: 0.25, sink: 0.04, clear: 0.35, yawRate: 40 * D, pitchRate: 20 * D, pitch: [0, 65 * D], lead: 0, scan: 0, restPitch: 0, raiseOnLock: true, minLaunch: 24 * D },
+  manpads: { align: false, maxTilt: 10 * D, maxBury: 0.3, sink: 0.06, clear: 0.2, yawRate: 70 * D, pitchRate: 45 * D, pitch: [0, 70 * D], lead: 0, scan: 0, restPitch: 0, raiseOnLock: true, minLaunch: 12 * D, launcherYaws: true },
+  radar: { align: true, maxTilt: 13 * D, maxBury: 0.25, sink: 0.04, clear: 0.35 },
+  truck: { align: true, maxTilt: 26 * D, maxBury: 0.2, sink: 0.04, clear: 0.45 },
   // emplacements: mostly level (a few degrees with the ground, as dry-stone and
-  // canvas would), part dug into the uphill side, a spoil berm on the downhill side
-  bunker: { align: false, maxTilt: 3 * D, bury: 0.5 },
-  sangar: { align: false, maxTilt: 7 * D, bury: 0.45 },
-  supply: { align: false, maxTilt: 6 * D, bury: 0.35 },
-  tent: { align: false, maxTilt: 9 * D, bury: 0.3 },
-  post: { align: false, maxTilt: 4 * D, bury: 0.4 },
-  default: { align: false, maxTilt: 4 * D, bury: 0.4 },
+  // canvas would), dug into the uphill side as far as `maxBury`, a spoil berm on
+  // the downhill side for whatever is left. Solid models ignore their interior.
+  bunker: { align: false, maxTilt: 4 * D, maxBury: 0.75, sink: 0.08, clear: Infinity },
+  sangar: { align: false, maxTilt: 10 * D, maxBury: 0.3, sink: 0.06, clear: 0.15 },
+  supply: { align: false, maxTilt: 7 * D, maxBury: 0.35, sink: 0.06, clear: 0.6 },
+  tent: { align: false, maxTilt: 10 * D, maxBury: 0.25, sink: 0.05, clear: Infinity },
+  post: { align: false, maxTilt: 4 * D, maxBury: 0.5, sink: 0.06, clear: Infinity },
+  default: { align: false, maxTilt: 4 * D, maxBury: 0.4, sink: 0.05, clear: Infinity },
 };
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+/** Grid samples across a footprint: about one per 2 m, 3 to 7 per side. */
+const gridCount = (len) => clamp(Math.ceil(len / 2) + 1, 3, 7);
 
 /**
  * Seat a unit on the terrain.
@@ -45,7 +58,18 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
  * @param {{min:number[], max:number[]}} bounds model-space footprint
  * @param {object} spec   UNIT_RIGS entry
  * @param {number} [baseY] holder y (the model offset is relative to it); defaults to height(x, z)
- * @returns {{offset, pitch, roll, foundation: null|{minX,maxX,minZ,maxZ,depth,flare}, relief}}
+ * @returns {{offset, pitch, roll, foundation: null|{minX,maxX,minZ,maxZ,depth,flare}, relief, hang, bury}}
+ *   relief  height range of the ground under the footprint (m)
+ *   hang    how far the lowest footprint edge sits above the ground (m; covered by the berm)
+ *   bury    how far the highest footprint edge sits below the ground (m; at most maxBury)
+ *
+ * The footprint is sampled on a grid (about every 2 m). The tilt is the
+ * least-squares plane through those samples (the ground's mean normal under
+ * the unit), clamped to `maxTilt`. The base then goes down until the lowest
+ * edge sample is `sink` into the ground, so no edge shows daylight, unless
+ * that would put the highest edge more than `maxBury` under: then the base
+ * stops there and the downhill gap gets a berm. Interior samples only count
+ * where they rise more than `clear` into the model (a crest under a truck).
  */
 export function seatUnit(height, x, z, yaw, bounds, spec, baseY = height(x, z)) {
   const [x0, , z0] = bounds.min;
@@ -54,35 +78,71 @@ export function seatUnit(height, x, z, yaw, bounds, spec, baseY = height(x, z)) 
   const s = Math.sin(yaw);
   // model-local (lx, lz) -> world, three's rotation about +Y
   const h = (lx, lz) => height(x + lx * c + lz * s, z - lx * s + lz * c);
-  const fl = h(x0, z0); // front-left (front = -Z)
-  const fr = h(x1, z0);
-  const br = h(x1, z1);
-  const bl = h(x0, z1);
-  const hc = height(x, z);
-  const lo = Math.min(fl, fr, br, bl);
-  const hi = Math.max(fl, fr, br, bl);
-  const out = { offset: 0, pitch: 0, roll: 0, foundation: null, relief: hi - lo };
   const len = Math.max(0.5, z1 - z0);
   const wid = Math.max(0.5, x1 - x0);
-  // 1. follow the slope up to maxTilt (vehicles a lot, emplacements a few degrees)
+  const nx = gridCount(wid);
+  const nz = gridCount(len);
+  const mx = (x0 + x1) / 2;
+  const mz = (z0 + z1) / 2;
+  // 1. sample the ground under the footprint; least-squares plane h = a + bx (lx - mx) + bz (lz - mz)
+  const pts = [];
+  let sh = 0, sxh = 0, szh = 0, sxx = 0, szz = 0;
+  for (let j = 0; j < nz; j++) {
+    const lz = z0 + (len * j) / (nz - 1);
+    for (let i = 0; i < nx; i++) {
+      const lx = x0 + (wid * i) / (nx - 1);
+      const hv = h(lx, lz);
+      const edge = i === 0 || j === 0 || i === nx - 1 || j === nz - 1;
+      pts.push(lx, lz, hv, edge ? 1 : 0);
+      const dx = lx - mx, dz = lz - mz;
+      sh += hv; sxh += dx * hv; szh += dz * hv; sxx += dx * dx; szz += dz * dz;
+    }
+  }
+  const bx = sxh / sxx;
+  const bz = szh / szz;
+  const out = { offset: 0, pitch: 0, roll: 0, foundation: null, relief: 0, hang: 0, bury: 0 };
+  const clear = spec.clear ?? 0;
+  const sink = spec.sink ?? 0.05;
+  const maxBury = spec.maxBury ?? (spec.align ? 0.2 : 0.4);
+  // Seat with the tilt clamped to `lim`; fills `out` and returns the hang.
+  const seat = (lim) => {
+    // 2. follow the slope up to the limit (vehicles a lot, emplacements a few degrees)
+    // + pitch raises the front (-Z); + roll raises the right (+X)
+    // (model rotation order 'YXZ': the base plane is y = tan(roll) / cos(pitch) lx - tan(pitch) lz)
+    out.pitch = clamp(Math.atan(-bz), -lim, lim);
+    out.roll = clamp(Math.atan(bx * Math.cos(out.pitch)), -lim, lim);
+    const A = Math.tan(out.roll) / Math.cos(out.pitch);
+    const B = -Math.tan(out.pitch);
+    // 3. what the tilt leaves over: each sample's height relative to the tilted base plane
+    let lo = Infinity, hi = -Infinity, glo = Infinity, ghi = -Infinity;
+    for (let k = 0; k < pts.length; k += 4) {
+      const e = pts[k + 2] - (A * pts[k] + B * pts[k + 1]);
+      if (e < glo) glo = e;
+      if (e > ghi) ghi = e;
+      if (pts[k + 3]) {
+        if (e < lo) lo = e;
+        if (e > hi) hi = e;
+      } else if (e - clear > hi) hi = e - clear;
+    }
+    out.relief = ghi - glo;
+    // 4. down to the lowest edge (plus `sink`), but never more than maxBury into the high side
+    const base = Math.max(lo - sink, hi - maxBury);
+    out.offset = base - baseY;
+    out.hang = Math.max(0, base - lo);
+    out.bury = Math.max(0, hi - base);
+    return out.hang;
+  };
   const max = spec.maxTilt ?? (spec.align ? 15 * D : 0);
-  // + pitch raises the front (-Z); + roll raises the right (+X)
-  out.pitch = clamp(Math.atan2((fl + fr) / 2 - (bl + br) / 2, len), -max, max);
-  out.roll = clamp(Math.atan2((fr + br) / 2 - (fl + bl) / 2, wid), -max, max);
-  const tp = Math.tan(out.pitch);
-  const tr = Math.tan(out.roll);
-  // 2. what the tilt leaves over: each corner's height relative to the tilted base plane
-  const rel = (h0, lx, lz) => h0 - (tp * -lz + tr * lx);
-  const e = [rel(fl, x0, z0), rel(fr, x1, z0), rel(br, x1, z1), rel(bl, x0, z1)];
-  const elo = Math.min(...e);
-  const ehi = Math.max(...e);
-  // 3. base between the lowest (0) and highest (1) corner: vehicles sit high so
-  //    the wheels/trails touch, dug-in positions sit low (uphill side in the slope)
-  let base = elo + (spec.bury ?? (spec.align ? 0.65 : 0.4)) * (ehi - elo);
-  if (spec.align) base = Math.max(base, hc - 0.2) - 0.04; // a crest never pokes through the floor
-  out.offset = base - baseY;
-  // 4. the downhill side would hang in the air: an earth berm under it
-  if (base - elo > 0.15) out.foundation = foundation(x0, x1, z0, z1, base - elo + 0.35);
+  // On ground too steep for maxTilt the berm would grow into a plinth: past
+  // `maxHang` the unit leans further with the slope, up to `steepTilt`, as far
+  // as it takes to bring the berm back down to maxHang.
+  const maxHang = spec.maxHang ?? (spec.align ? 0.35 : 0.6);
+  const steep = Math.max(max, spec.steepTilt ?? Math.min(max * 2, max + 10 * D));
+  if (seat(max) > maxHang && steep > max) {
+    for (let i = 1; i <= 6 && seat(max + ((steep - max) * i) / 6) > maxHang; i++);
+  }
+  // 5. the downhill side would show daylight: an earth berm under it
+  if (out.hang > (spec.align ? 0.1 : 0.04)) out.foundation = foundation(x0, x1, z0, z1, out.hang + 0.35);
   return out;
 }
 

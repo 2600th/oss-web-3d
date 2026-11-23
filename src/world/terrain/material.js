@@ -515,7 +515,8 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
 
     // ---------------------------------------------------------- long shadows
     // Heightfield sweep (shadowSweep.js): metres below the shadow boundary.
-    const sweep = texture(uniforms.shadowTex, innerUV(p)).r.mul(255 * uniforms.shadowStep).add(uniforms.shadowMin);
+    // [ground polish] R16F metres (shadowConst.js); it was an 8-bit code to decode.
+    const sweep = texture(uniforms.shadowTex, innerUV(p)).r;
     oLit.assign(mix(float(1), smoothstep(uniforms.shadowSoft, uniforms.shadowSoft.negate(), sweep), tI.mul(uniforms.shadowOn)));
 
     return vec4(albedo, 1);

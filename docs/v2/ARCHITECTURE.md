@@ -1030,3 +1030,52 @@ Evidence, references and GPU costs: `docs/v2/evidence/polish-realism/README.md`.
   INTERIOR branch sets `aoNode = 0.42` above the low tier. This is the
   canopy-tub occlusion of sky and indirect light. Direct sun is unaffected.
 - **Debug views (new):** `post.debugView = 'ao' | 'rays'`.
+
+### Ground polish (seating, ground LOD, terrain shadow reach, WebGL2 thin casters, cloud pass guard, river roads)
+Details and evidence in `docs/v2/evidence/polish-ground/README.md`.
+- **`seatUnit` (`src/assets/unitRig.js`):**
+  - Returns `{ offset, pitch, roll, foundation, relief, hang, bury }`. `hang` and `bury` are new.
+  - `UNIT_RIGS` entries take `maxBury`, `sink` and `clear`, plus optional `maxHang` and `steepTilt`. `bury` is gone.
+  - Pitch and roll are exact for the `'YXZ'` order used in `assets/system.js`.
+- **Sites (`src/ai/sites.js`):**
+  - New exports: `padSlope(x, z, r, height)`, `bankPenalty(edge, bank)` and `ROAD_BANK` (25 m).
+  - `findSite` has a `'pad'` mode, and its `valley`, `flat` and `pad` modes pay `bankPenalty`. It takes an `edge` option (default `riverEdge`).
+  - `scatterSites` uses `'pad'`, rejects sites within 6 m of water, and takes `edge`.
+  - `traceValleyRoad` takes `edge`, `bank`, `spacing` (40) and `reach` (200). It returns a polyline at about 40 m spacing (was 160 m), laid on the dry bank beside the traced valley axis.
+- **Ground LOD (`src/ai/models.js`):**
+  - `UnitLOD` (a `THREE.LOD`) is new. `groundModel()` and `wreck()` return one when a `*_lod1.glb` exists.
+  - `userData` is copied from LOD0. Aim nodes are driven on LOD0 (`getObjectByName` finds them first) and copied to the other levels in `update()`.
+  - Shadow cameras keep the main view's level.
+  - The hostile fighter LOD is a `UnitLOD` too.
+- **Terrain shadow sweep:**
+  - The texture is R16F in metres, clamped to `[SHADOW_MIN, SHADOW_MAX]` = `[-64, 8000]`. Before, it was R8 with `byte * SHADOW_STEP + SHADOW_MIN`.
+  - New in `shadowConst.js`: `toHalfBits`, `fromHalfBits` and `encodeShadow`. `SHADOW_STEP` remains only as a deprecated export.
+  - `env.terrainShadow` (`makeShadowFn`) applies at every height. The 36-46 m fade is gone, so `SWEEP_REACH` in `world/shadows/shadowMath.js` is stale.
+  - The penumbra grows with height (`PENUMBRA_PER_M`).
+  - Terrain uniforms `shadowStep` and `shadowMin` were removed.
+- **Sun shadows (`src/world/shadows/SunShadows.js`):**
+  - The disc PCF used by WebGL2 and the low tier has a second, far slab. The controller exposes the `farSlab` and `farRadius` uniforms.
+  - With neither uniform set, the filter is unchanged.
+- **Clouds:**
+  - `renderPasses` and `update` always restore the renderer state.
+  - A failing cloud pass is reported once through `PassGuard` (`src/world/clouds/passGuard.js`, with `brokenRenderables(root)`) and then backs off. Before, it threw every frame.
+- **Terrain:** `Terrain.update` ignores a non-finite camera position and keeps the last layout.
+
+- **Models polish 3 (pilot realism, truck cab, thin shells):**
+  - `pilot.glb` / `pilot_lod1.glb` have a new child node `pilot_visor` under
+    `pilot_head` (so hiding `pilot_head` hides it). It is the only unbaked
+    part: an alpha-blended, clearcoat glass material
+    (`KHR_materials_clearcoat`, `KHR_materials_specular`). `pilot`,
+    `pilot_body`, `pilot_head` and `pilot_eye` are unchanged.
+  - `src/assets/materials.js` `upgradeGroundMaterials`: a GLB material that
+    arrives as a physical material with clearcoat stays a
+    `MeshPhysicalNodeMaterial` (clearcoat copied, no ground detail). All other
+    materials take the same path as before, including `shadowSide =
+    DoubleSide`.
+  - `tools/blender/kit.py` `Part.sheet(thick=...)`: the back skin now sits
+    behind the front skin (it used to sit in front, so the two skins faced
+    each other), and `rim=True` closes the edge so canvas, nets, wings and
+    flaps have a visible thickness edge-on. Every ground unit was rebuilt.
+  - `src/assets/catalog.test.mjs` budgets: `vehicle` 12000 (was 8000),
+    `pilot` 18000 (was 15000), as in the task brief.
+  - Evidence: `docs/v2/evidence/polish-models-3/README.md`.
