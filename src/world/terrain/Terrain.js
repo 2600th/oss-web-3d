@@ -48,6 +48,13 @@ const TIERS = {
 };
 const LEVELS = 11; // radius of the last level: 384 m * 2^10 = 393 km (camera far plane is 260 km)
 const SHADOW_CAST_CELL = 24; // levels with cells up to this size go into the sun shadow map
+// [engine perf] Render layers for the terrain blocks: the main camera sees
+// VIEW_LAYER, the sun's shadow camera SHADOW_LAYER (plus layer 0, where every
+// other object stays). A block is on one, both or neither (see update()).
+export const VIEW_LAYER = 1;
+export const SHADOW_LAYER = 2;
+const VIEW_MASK = 1 << VIEW_LAYER;
+const SHADOW_MASK = 1 << SHADOW_LAYER;
 
 export class Terrain {
   /**
@@ -75,6 +82,18 @@ export class Terrain {
     this.textures = buildTerrainTextures(DEM, { aniso });
     this.nodes = makeTerrainNodes(DEM, this.textures);
     this.layers = new TerrainLayers({ size: this.tier.layerSize, aniso });
+    // [engine perf] These textures never change after their (last) upload, but
+    // three keeps the source arrays: ~170 MB of JS heap at 3073^2 (height,
+    // surf, river at 36 MB each, the two layer arrays at 24 MB). Drop them once
+    // the GPU has its copy. The layer arrays are rewritten by layers.load(), so
+    // only after the loaded upload. (Device loss restarts the page, so nothing
+    // ever needs to re-upload them; the shadow texture is dynamic and kept.)
+    const release = (tex, ready = () => true) => {
+      tex.onUpdate = () => { if (ready() && tex.image?.data) tex.image.data = null; };
+    };
+    for (const k of ['height', 'outer', 'amp', 'tile', 'surf', 'river', 'outerSurf']) if (this.textures[k]) release(this.textures[k]);
+    release(this.layers.albedo, () => this.layers.loaded);
+    release(this.layers.nrm, () => this.layers.loaded);
     this.shadow = new ShadowSweep(DEM);
 
     this.uniforms = {
@@ -176,6 +195,7 @@ export class Terrain {
         mesh.matrixAutoUpdate = false;
         mesh.receiveShadow = true;
         mesh.castShadow = c <= SHADOW_CAST_CELL;
+        mesh.layers.mask = VIEW_MASK; // [engine perf] see update()
         mesh.renderOrder = l; // finest first: near terrain fills depth before far terrain shades
         mesh.userData.level = data;
         mesh.userData.bounds = bounds;
@@ -284,6 +304,21 @@ export class Terrain {
     this._pv.multiplyMatrices(camera.projectionMatrix, this._inv);
     this._frustum.setFromProjectionMatrix(this._pv, camera.coordinateSystem, camera.reversedDepth);
 
+    // [engine perf] layer setup + the sun's shadow frustum for caster culling
+    // (Game updates env before terrain, so the sun already sits on the focus).
+    camera.layers.enable(VIEW_LAYER);
+    const sun = this.env?.sun;
+    let shadowFrustum = null;
+    if (sun?.castShadow && sun.shadow) {
+      // A shadow camera mask with any bit above layer 0 is used as-is by three
+      // (ShadowNode); otherwise it would copy the main camera's mask.
+      sun.shadow.camera.layers.mask = 1 | SHADOW_MASK;
+      sun.updateMatrixWorld();
+      sun.target.updateMatrixWorld();
+      sun.shadow.updateMatrices(sun);
+      shadowFrustum = sun.shadow.getFrustum();
+    }
+
     let visible = 0;
     let total = 0;
     for (let l = 0; l < this.levels; l++) {
@@ -303,28 +338,31 @@ export class Terrain {
         const oz = Math.round((fz - cz) / L.cell);
         L.trim.geometry = L.trimGeo[oz * 2 + ox];
       }
-      // Levels in the shadow map are not frustum-culled: what is behind the
-      // camera still casts into view.
-      const cull = !L.blocks[0].castShadow || l > finest + 2;
+      // [engine perf] Each block is tested twice: against the view frustum
+      // (layer VIEW_LAYER, main camera) and, for shadow casters, against the
+      // sun's shadow frustum (layer SHADOW_LAYER, shadow camera). Before, the
+      // caster levels were never culled at all, so the shadow pass and the
+      // main pass drew every block of the four finest levels, including the
+      // ones behind the camera and kilometres outside the 120 m shadow box.
+      const caster = L.blocks[0].castShadow && shadowFrustum !== null;
       const test = (mesh, on) => {
         if (!on) { mesh.visible = false; return; }
         total++;
-        if (cull) {
-          const b = mesh.userData.bounds;
-          // one cell of slack: morphing slides border vertices onto the parent lattice
-          const x0 = cx + (b.x0 - 1) * L.cell;
-          const x1 = cx + (b.x1 + 1) * L.cell;
-          const z0 = cz + (b.z0 - 1) * L.cell;
-          const z1 = cz + (b.z1 + 1) * L.cell;
-          let r = L.yRange.get(mesh);
-          if (!r) { r = this._yRange(x0, z0, x1, z1, [0, 0]); L.yRange.set(mesh, r); }
-          this._box.min.set(x0, r[0], z0);
-          this._box.max.set(x1, r[1], z1);
-          mesh.visible = this._frustum.intersectsBox(this._box);
-        } else {
-          mesh.visible = true;
-        }
-        if (mesh.visible) visible++;
+        const b = mesh.userData.bounds;
+        // one cell of slack: morphing slides border vertices onto the parent lattice
+        const x0 = cx + (b.x0 - 1) * L.cell;
+        const x1 = cx + (b.x1 + 1) * L.cell;
+        const z0 = cz + (b.z0 - 1) * L.cell;
+        const z1 = cz + (b.z1 + 1) * L.cell;
+        let r = L.yRange.get(mesh);
+        if (!r) { r = this._yRange(x0, z0, x1, z1, [0, 0]); L.yRange.set(mesh, r); }
+        this._box.min.set(x0, r[0], z0);
+        this._box.max.set(x1, r[1], z1);
+        const inView = this._frustum.intersectsBox(this._box);
+        const inShadow = caster && shadowFrustum.intersectsBox(this._box);
+        mesh.layers.mask = (inView ? VIEW_MASK : 0) | (inShadow ? SHADOW_MASK : 0);
+        mesh.visible = inView || inShadow;
+        if (inView) visible++;
       };
       for (const b of L.blocks) test(b, active);
       test(L.trim, active && !isFinest);
@@ -567,14 +605,14 @@ export class Terrain {
       this._clear = null;
       this.update(cam);
       const before = [];
-      this.group.traverse((o) => { if (o.isMesh) before.push([o, o.visible]); });
+      this.group.traverse((o) => { if (o.isMesh) before.push([o, o.visible, o.layers.mask]); });
       const finest = this.stats.finest;
       for (let l = finest; l < this.levels; l++) {
         const L = this._levels[l];
-        for (const b of L.blocks) b.visible = true;
+        for (const b of L.blocks) { b.visible = true; b.layers.enable(VIEW_LAYER); }
       }
       const all = await shoot();
-      for (const [o, vis] of before) o.visible = vis;
+      for (const [o, vis, mask] of before) { o.visible = vis; o.layers.mask = mask; }
       let d = 0;
       for (let i = 0; i < px.length; i += 4) if (px[i] !== all[i] || px[i + 1] !== all[i + 1] || px[i + 2] !== all[i + 2]) d++;
       if (d) worst.push({ x: Math.round(x), z: Math.round(z), agl: Math.round(agl), culledPixels: d });

@@ -17,6 +17,8 @@ import { EXPOSURE_DEFAULTS, targetExposureEV, adaptLog2, evToMultiplier } from '
 import { createLensDirtTexture, createDropletTexture } from '../fx/post/textures.js';
 
 const _v = new THREE.Vector3();
+/** Auto-exposure metering interval in frames (15 Hz at 60 fps). */
+const METER_EVERY = 4;
 const _m = new THREE.Matrix4();
 
 /**
@@ -217,6 +219,12 @@ export class PostFX {
       return vec4(acc.x.div(max(acc.y, 1e-4)), 0, 0, 1);
     })(), 1, 1, { type: THREE.FloatType });
     meter2.name = 'ExposureMeterReduce';
+    // [engine perf] The meters only feed a CPU readback that adapts over
+    // seconds: render them every METER_EVERY frames (render() flags them), not
+    // every frame. Saves two passes, and most readback copies/submits.
+    meter1.autoUpdate = false;
+    meter2.autoUpdate = false;
+    this._meter1 = meter1;
     this._meter = meter2;
 
     const visNode = rtt(sunVisibility({
@@ -407,7 +415,6 @@ export class PostFX {
   }
 
   _readMeters() {
-    if (this._reading) return;
     const renderer = this.r.renderer;
     if (!renderer.readRenderTargetPixelsAsync) return;
     this._reading = true;
@@ -415,7 +422,7 @@ export class PostFX {
     const v = this._vis.renderTarget;
     Promise.all([
       renderer.readRenderTargetPixelsAsync(m, 0, 0, 1, 1),
-      this._frameNo % 4 === 0 ? renderer.readRenderTargetPixelsAsync(v, 0, 0, 1, 1) : null,
+      renderer.readRenderTargetPixelsAsync(v, 0, 0, 1, 1),
     ]).then(([a, b]) => {
       if (a && Number.isFinite(a[0])) this.stats.avgLog2 = a[0];
       if (b) { this.stats.sunVisibility = b[0]; this.stats.sunPeak = b[1]; this.stats.sunCloud = b[2]; }
@@ -433,8 +440,12 @@ export class PostFX {
     this._updateExposure(dt);
     this._updateMotion(dt);
     this._applyScreen();
+    // [engine perf] meter (and read back) on every METER_EVERY-th frame only,
+    // and never while the previous readback is still in flight
+    const meter = this.options.autoExposure && !this._reading && this._frameNo % METER_EVERY === 0;
+    if (meter) { this._meter1.textureNeedsUpdate = true; this._meter.textureNeedsUpdate = true; }
     this.pipeline.render();
-    if (this.options.autoExposure) this._readMeters();
+    if (meter) this._readMeters();
   }
 
   dispose() {
