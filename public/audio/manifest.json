@@ -1,0 +1,305 @@
+{
+ "version": 1,
+ "sampleRate": 48000,
+ "formats": [
+  "webm",
+  "m4a"
+ ],
+ "sfx": {
+  "jet_whine": {
+   "files": [
+    "sfx/jet_whine"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 4.2
+  },
+  "jet_intake": {
+   "files": [
+    "sfx/jet_intake"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 4.2
+  },
+  "jet_roar": {
+   "files": [
+    "sfx/jet_roar"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 6.2
+  },
+  "jet_rumble": {
+   "files": [
+    "sfx/jet_rumble"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 5.2
+  },
+  "ab_roar": {
+   "files": [
+    "sfx/ab_roar"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 6.2
+  },
+  "ab_lightoff": {
+   "files": [
+    "sfx/ab_lightoff_1",
+    "sfx/ab_lightoff_2"
+   ]
+  },
+  "wind": {
+   "files": [
+    "sfx/wind"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 8.2
+  },
+  "buffet": {
+   "files": [
+    "sfx/buffet"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 4.2
+  },
+  "g_breath": {
+   "files": [
+    "sfx/g_breath_1",
+    "sfx/g_breath_2",
+    "sfx/g_breath_3"
+   ]
+  },
+  "gun_loop": {
+   "files": [
+    "sfx/gun_loop"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 1.047
+  },
+  "gun_start": {
+   "files": [
+    "sfx/gun_start"
+   ]
+  },
+  "gun_tail": {
+   "files": [
+    "sfx/gun_tail_1",
+    "sfx/gun_tail_2"
+   ]
+  },
+  "gun_crack": {
+   "files": [
+    "sfx/gun_crack_1",
+    "sfx/gun_crack_2",
+    "sfx/gun_crack_3"
+   ]
+  },
+  "aaa_burst": {
+   "files": [
+    "sfx/aaa_burst_1",
+    "sfx/aaa_burst_2",
+    "sfx/aaa_burst_3"
+   ]
+  },
+  "flak_burst": {
+   "files": [
+    "sfx/flak_burst_1",
+    "sfx/flak_burst_2",
+    "sfx/flak_burst_3"
+   ]
+  },
+  "missile_launch": {
+   "files": [
+    "sfx/missile_launch_1",
+    "sfx/missile_launch_2"
+   ]
+  },
+  "missile_motor": {
+   "files": [
+    "sfx/missile_motor"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 3.2
+  },
+  "missile_pass": {
+   "files": [
+    "sfx/missile_pass_1",
+    "sfx/missile_pass_2"
+   ]
+  },
+  "sam_launch": {
+   "files": [
+    "sfx/sam_launch_1",
+    "sfx/sam_launch_2"
+   ]
+  },
+  "flare_pop": {
+   "files": [
+    "sfx/flare_pop_1",
+    "sfx/flare_pop_2",
+    "sfx/flare_pop_3"
+   ]
+  },
+  "hit_airframe": {
+   "files": [
+    "sfx/hit_airframe_1",
+    "sfx/hit_airframe_2",
+    "sfx/hit_airframe_3",
+    "sfx/hit_airframe_4"
+   ]
+  },
+  "impact_metal": {
+   "files": [
+    "sfx/impact_metal_1",
+    "sfx/impact_metal_2",
+    "sfx/impact_metal_3",
+    "sfx/impact_metal_4"
+   ]
+  },
+  "impact_dirt": {
+   "files": [
+    "sfx/impact_dirt_1",
+    "sfx/impact_dirt_2",
+    "sfx/impact_dirt_3"
+   ]
+  },
+  "exp_transient": {
+   "files": [
+    "sfx/exp_transient_1",
+    "sfx/exp_transient_2",
+    "sfx/exp_transient_3"
+   ]
+  },
+  "exp_body": {
+   "files": [
+    "sfx/exp_body_1",
+    "sfx/exp_body_2",
+    "sfx/exp_body_3"
+   ]
+  },
+  "exp_body_small": {
+   "files": [
+    "sfx/exp_body_small_1",
+    "sfx/exp_body_small_2"
+   ]
+  },
+  "exp_tail": {
+   "files": [
+    "sfx/exp_tail_1",
+    "sfx/exp_tail_2"
+   ]
+  },
+  "exp_debris": {
+   "files": [
+    "sfx/exp_debris_1",
+    "sfx/exp_debris_2"
+   ]
+  },
+  "exp_far": {
+   "files": [
+    "sfx/exp_far_1",
+    "sfx/exp_far_2"
+   ]
+  },
+  "exp_fireball": {
+   "files": [
+    "sfx/exp_fireball"
+   ]
+  },
+  "enemy_jet": {
+   "files": [
+    "sfx/enemy_jet"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 4.2
+  },
+  "jet_flyby": {
+   "files": [
+    "sfx/jet_flyby_1",
+    "sfx/jet_flyby_2",
+    "sfx/jet_flyby_3"
+   ]
+  },
+  "radio_open": {
+   "files": [
+    "sfx/radio_open_1",
+    "sfx/radio_open_2"
+   ]
+  },
+  "radio_close": {
+   "files": [
+    "sfx/radio_close_1",
+    "sfx/radio_close_2"
+   ]
+  },
+  "radio_static": {
+   "files": [
+    "sfx/radio_static"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 3.6
+  },
+  "ui_click": {
+   "files": [
+    "sfx/ui_click"
+   ]
+  },
+  "ui_hover": {
+   "files": [
+    "sfx/ui_hover"
+   ]
+  },
+  "ui_confirm": {
+   "files": [
+    "sfx/ui_confirm"
+   ]
+  },
+  "ui_back": {
+   "files": [
+    "sfx/ui_back"
+   ]
+  },
+  "ui_error": {
+   "files": [
+    "sfx/ui_error"
+   ]
+  },
+  "ui_kill": {
+   "files": [
+    "sfx/ui_kill"
+   ]
+  },
+  "ui_hit": {
+   "files": [
+    "sfx/ui_hit"
+   ]
+  },
+  "amb_wind": {
+   "files": [
+    "sfx/amb_wind"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 12.2
+  },
+  "cloud_rush": {
+   "files": [
+    "sfx/cloud_rush"
+   ],
+   "loop": true,
+   "loopStart": 0.2,
+   "loopEnd": 6.2
+  }
+ },
+ "music": {}
+}
