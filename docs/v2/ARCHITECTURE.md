@@ -193,3 +193,52 @@ when unavoidable; say so in your report.
 ## Contract changes
 
 (append here)
+
+- **post + camera (additive).** `game.post.useStaticVelocity(material)` gives a
+  material whose vertices are placed by a `positionNode` (terrain clipmap, water)
+  correct camera-only velocity: three's VelocityNode reprojects the undisplaced
+  `positionGeometry`, which breaks TRAA and motion blur. The camera system applies
+  it to `game.terrain` materials. `useTransparentVelocity(material)`: blended
+  surfaces keep the velocity behind them (the scene MRT velocity target now uses
+  material blending). `post.setFrameState({sunDirection, sunIntensity, airspeed,
+  reheat, screen})`, `post.notifyCut()`, `post.options` (`autoExposure`,
+  `exposureCompensation`, `motionBlur`, `reducedMotion`, `flare`), `post.stats`.
+  `uniforms.exposure` is now written every frame by auto-exposure.
+  Camera: `cameraRig.view` (effective view), `setMode/cycleMode`, `lockHeld`,
+  `look`, `followMissile(m)`, `killCam(target, pos)`, `deathCam(pos, vel)`,
+  `playCinematic(name, opts) -> Promise`, `stopCinematic()`, `options`
+  (`shake`, `killCam`, `missileCam`, `reducedMotion`, `fovEffects`), `rumble`.
+  New event `camera:cinematic` `{name, state: 'start'|'end'}`; `camera:mode`
+  also carries `base`. Input actions read if present: `camera`, `lookTarget`,
+  `missileCam` (fallback keys C / V / B). URL flags: `?gputime`,
+  `?reducedMotion`, `?nokillcam`, `?cinematic=<name>`, `?aa=traa|fxaa|smaa|none`.
+
+- **audio (additive, optional):** `game.systems.audio` exposes `setVolume(bus, v)` /
+  `getVolume(bus)` (bus `master|music|sfx|radio|ui|ambience`, 0..1, persisted in
+  localStorage `safedSagar.audio.v1`), `setMuted`, `ui(name)`, `setMusic(state, level)`,
+  `stinger('complete'|'failed')`, `say(radioMsg)`, `play(id, opts)`, `unlock()`.
+  Extra accepted inputs: `music:intensity.state` may also be `briefing`, `ace`,
+  `memorial`, `silence`; `explosion.kind` may be `flak`; `weapon:gun` from an entity
+  with `kind: 'aaa'|'flak'` plays AAA bursts; new optional event `ui:sound {name}`
+  (`click|hover|confirm|back|error|kill|hit`). Any DOM `button`/`[role=button]` click
+  plays `ui_click` unless it has `data-sound="none"` (or `data-sound="confirm"` etc.).
+  `ui:screen` values `title|menu|main|hangar` → menu theme, `briefing`, `memorial`,
+  `game|hud|flight` → in-flight score. The player is recognised in payload entities by
+  `isPlayer === true`, `kind/team === 'player'`, `=== game.player`, the string
+  `'player'`, or (for `weapon:gun` only) a missing entity.
+
+- **atmosphere + clouds (additive).** `game.env` keeps `sunDirection`, `sun`,
+  `ambient`, `cloudShadow`, `inCloud`, `setSun(elevationDeg, azimuthDeg)`,
+  `update(dt, camera, focus)`. New: `setPreset(name, overrides?)` with
+  `'default' | 'morning' | 'noon' | 'golden' | 'overcast' | 'storm'` (`env.preset`,
+  `env.presets`), `setCoverage(0..1)`, `applyCloudShadow(material)` (idempotent;
+  multiplies cloud shadow into `material.receivedShadowNode`; the atmosphere
+  system applies it to `game.terrain` materials, other owners call it for their
+  own lit materials), `sunVisibility` (0..1, sun reaching the camera through
+  cloud, async readback), `exposureScale` (preset hint), `sunIrradiance` /
+  `skyAmbient` (uniform nodes), `atmosphere`, `clouds` (null with `?noclouds`).
+  Scene stages: aerial perspective at order 20, clouds at order 30. The system
+  `game.systems.atmosphere` sets `post.options.exposure.baseEV/refLog` and
+  `post.uniforms.sunRefLum` (about 399 = sun irradiance 4.6 x disc gain 260 / 3)
+  for this sky. `sun.intensity` is now about 4.4 at late morning, 2.9 at golden
+  hour. URL flags: `?noclouds`, `?preset=<name>`.
