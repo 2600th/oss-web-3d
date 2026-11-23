@@ -28,6 +28,8 @@ const OUTRO_SECONDS = { complete: 6, failed: 3.5 };
 // Sight the top of the post, not its footing: a grazing line to a point on
 // the ground clips the ridge the post stands on.
 const _top = { x: 0, y: 0, z: 0 };
+/** 'S-8 ROCKETS' -> 'S-8 Rockets', 'R-73 ARCHER' -> 'R-73 Archer' (designations keep their capitals). */
+const sentenceName = (n) => n?.split(' ').map((w) => (/[0-9-]/.test(w) ? w : w[0] + w.slice(1).toLowerCase())).join(' ');
 const los = (a, b) => { _top.x = b.x; _top.y = b.y + 12; _top.z = b.z; return clearLine(a, _top); };
 
 export class MissionSystem {
@@ -401,7 +403,7 @@ export class MissionSystem {
       lockable: !!t && t.lockable === true && t.team === 'hostile', lockState: hud.lock?.state ?? 'none',
       targetDistance: t?.distance ?? Infinity, gunSolution: !!hud.gun?.lead,
       kills: this.combat.world.stats.kills, spAmmo: this.combat.sp.ammo, current: this.combat.current,
-      specialName: this.combat.sp.def.name?.toLowerCase(), targets: hud.targets?.length ?? 0,
+      specialName: sentenceName(this.combat.sp.def.name), targets: hud.targets?.length ?? 0,
     }, (action) => controlLabel(input.bindings, action, input.modality));
     if (!hint) return;
     const payload = { ...hint, handled: false };

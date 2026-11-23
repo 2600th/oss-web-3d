@@ -58,7 +58,7 @@ export class Bot {
     this.egressBearing = 0;
     this.runs = 0;
     /** Counters for the run report. */
-    this.stats = { flares: 0, breaks: 0, passes: 0, terrainSaves: 0, gunBursts: 0 };
+    this.stats = { flares: 0, breaks: 0, passes: 0, terrainSaves: 0, gunBursts: 0, jinks: 0 };
   }
 
   // ------------------------------------------------------------ helpers --
@@ -261,9 +261,44 @@ export class Bot {
   }
 
   /** Missile defence. Returns true while it owns the stick. */
+  /**
+   * Guns defence: a fighter saddled up inside gun range, nose on, is answered
+   * the way a pilot answers it: a hard break into him with the airbrake out,
+   * which spoils his lead and forces the overshoot.
+   */
+  _gunsDefence(f) {
+    if (!this.opts.evade || this.god) return false;
+    const targets = this.game.systems.combat.world.targets;
+    let who = null;
+    for (const t of targets) {
+      if (!t.alive || t.class !== 'air' || t.team !== 'hostile' || !t.fighter) continue;
+      const dx = f.position.x - t.position.x, dy = f.position.y - t.position.y, dz = f.position.z - t.position.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > 950 || d < 1) continue;
+      const fw = t.fighter.flight?.forward;
+      if (!fw) continue;
+      // His nose within ~14 degrees of us, and he is behind our wing line.
+      const on = (fw.x * dx + fw.y * dy + fw.z * dz) / d;
+      const behind = -(f.forward.x * dx + f.forward.y * dy + f.forward.z * dz) / d;
+      if (on > 0.97 && behind < 0.25 && (!who || d < who.d)) who = { t, d, dx, dz };
+    }
+    if (!who) { this._jinking = false; return false; }
+    const i = this.intent;
+    // Which side is he on? Break towards him.
+    const side = f.right.x * -who.dx + f.right.z * -who.dz;
+    i.turn = side >= 0 ? 1 : -1;
+    i.climb = -0.1;
+    i.throttle = 1;
+    i.brake = 1;
+    if (!this._jinking) this.stats.jinks++;
+    this._jinking = true;
+    this.state = 'defend';
+    return true;
+  }
+
   _defend(dt, f, hud, input) {
     const threats = hud.threats ?? [];
-    if (!threats.length) { this.threatAge = 0; return false; }
+    if (!threats.length) { this.threatAge = 0; return this._gunsDefence(f); }
     this.threatAge += dt;
     if (this.threatAge < this.opts.reaction) return false;
     let near = threats[0];

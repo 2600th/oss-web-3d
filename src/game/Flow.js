@@ -70,7 +70,7 @@ export class Flow {
    * Applies to the next free-flight launch; emits `flow:conditions`.
    */
   setConditions({ time, weather } = {}) {
-    const cur = this.freeConditions ?? { time: 10, weather: 'scattered' };
+    const cur = this.freeConditions ?? { time: 9.5, weather: 'scattered' };
     const named = TIMES.find((t) => t.id === time);
     const next = {
       time: named ? named.time : Number.isFinite(time) ? ((time % 24) + 24) % 24 : cur.time,

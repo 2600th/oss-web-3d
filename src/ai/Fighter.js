@@ -217,7 +217,9 @@ export class Fighter {
         leadPoint(_lead, f.position, f.velocity, ctx.player.position, ctx.player.velocity, w.muzzle);
         _v.subVectors(_lead, f.position).normalize();
         const r = this.rng;
-        const err = k.gunError;
+        // Rough air spoils a gun solution for them exactly as it does for the
+        // player (storm: twice the scatter).
+        const err = k.gunError * (1 + (ctx.conditions?.turbulence ?? 0));
         _v.x += (r() - 0.5) * 2 * err; _v.y += (r() - 0.5) * 2 * err; _v.z += (r() - 0.5) * 2 * err;
         _v.normalize().multiplyScalar(w.muzzle).add(f.velocity);
         _v2.copy(f.position).addScaledVector(f.forward, 8);

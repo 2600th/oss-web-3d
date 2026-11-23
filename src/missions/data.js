@@ -325,7 +325,6 @@ export const MISSIONS = [
       {
         id: 'second', name: 'Second group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
-          { maxAttackers: 3 },
           { spawn: 'raid2' },
           { radio: ['control', 'Second group, four more, from the east. These are better. They will try to drag you up into the weather.', 2] },
         ],
@@ -335,7 +334,7 @@ export const MISSIONS = [
         id: 'third', name: 'Last group', objective: { text: 'Intercept the fighter sweep', track: { destroyed: 'storm_air', total: 11 } },
         enter: [
           { music: { state: 'danger', level: 0.95 } },
-          { maxAttackers: 4 },
+          { maxAttackers: 3 },
           { spawn: 'raid3' },
           { radio: ['control', 'Shikhar: last group, four, north, fast. That is everything they have in this weather. Hold them.', 2] },
         ],
@@ -429,11 +428,11 @@ export const MISSIONS = [
     briefing: [
       'The sector is yours. Unarmed drones orbit above the valley; trucks and tents are laid out on the range near the river.',
       'Nothing here shoots back. Learn the aircraft: corner speed, the airbrake turn, the gun lead.',
-      'Choose the hour and the weather below: fly it at dawn, at night, or through a storm.',
+      'Choose the hour and the weather above: fly it at dawn, at night, or through a storm.',
     ],
     start: { x: -15500, z: 9300, alt: 5200, heading: 268, speed: 250 },
     // The player picks both in the briefing (flow.setConditions).
-    conditions: { time: 10, weather: 'scattered', choose: true },
+    conditions: { time: 9.5, weather: 'scattered', choose: true },
     specials: ['hobs', 'lraam', 'rkt', 'bomb'], special: 'hobs',
     timeLimit: 0, parTime: 0, rank: null,
     groups: {
