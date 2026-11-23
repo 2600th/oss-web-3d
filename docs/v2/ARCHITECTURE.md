@@ -1060,3 +1060,27 @@ Details and evidence in `docs/v2/evidence/polish-ground/README.md`.
   - `renderPasses` and `update` always restore the renderer state.
   - A failing cloud pass is reported once through `PassGuard` (`src/world/clouds/passGuard.js`, with `brokenRenderables(root)`) and then backs off. Before, it threw every frame.
 - **Terrain:** `Terrain.update` ignores a non-finite camera position and keeps the last layout.
+
+### Terrain and sky polish 2: ground cover, close-range detail, terrain AO, clouds (additive unless marked)
+Details and evidence are in `docs/v2/evidence/polish-terrain-2/README.md`.
+
+- **Terrain textures (changed):**
+  - `tex.surf` and `tex.river` are gone. They are now layers of `tex.land`, a 3-layer RGBA8 `DataArrayTexture`.
+  - Index the layers with `LAND = { surf: 0, river: 1, ground: 2 }` from `terrain/textures.js` (`texture(tex.land, uv).depth(int(LAND.surf))`).
+  - The ground layer is R near-sky visibility, G debris fan, B moisture and A irrigable field. It is computed off-thread by `groundData.js` in `groundWorker.js`, then written by `fillGround(land, data)`. Until then it is `GROUND_NEUTRAL`.
+  - This frees two fragment sampler slots: the terrain uses 14 of 16.
+- **Terrain API (additive):**
+  - `terrain.groundReady` is a promise for when the ground layer is filled.
+  - `terrain.bindNearAO(ao)`: the terrain samples `post.ao` (GTAO) itself, using the same same-surface test as the scene-pass context. `world/system.js` calls it every frame.
+  - `terrain.setScorches(items, { life })` takes `items` of `{x, z, radius, age}`, up to `SCORCH_MAX` = 16, exported from `terrain/material.js`. It is ready for `vfx.scorches`.
+  - New uniforms: `aoTex`, `aoStrength`, `nearAO`, `scorch`, `scorchCount`.
+  - The detail amplitude moved to a vertex varying (`nodes.ampFrag`).
+- **Snow line (shared):**
+  - The constants and pure functions are in `terrain/snow.js`: `SNOW`, `snowLine(...)` and `snowCover(...)`. The shader and `assets/system.js` `siteSnow` both use them.
+  - `heightfield.js` adds `tileLayerHeight(L, x, z)` and `streakAt(x, y, z, gx, gz)`.
+  - `detail.js` adds `DETAIL.SNOW_PATCH`.
+- **`SWEEP_REACH` (changed):** in `world/shadows/shadowMath.js` it is now `{ full: SHADOW_MAX - 500, none: SHADOW_MAX }`, following the R16F sweep.
+- **Clouds (additive):**
+  - New uniforms on `clouds.u`: `silverG`, `phaseCap`, `glowSoft`, `glowHistory`, `anvilDir`, `anvilReach`, `windShear` and `rainShaft`.
+  - New render target `clouds.anvilTarget`. Its pass runs only while `storm > 0`.
+  - The erosion is now the Nubis remap. The silver lobe is HG(0.9), capped. Rain shafts are gated to wet cores.
