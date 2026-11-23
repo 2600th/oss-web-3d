@@ -18,8 +18,8 @@
  * lateUpdate, after ai has moved convoys and updated line of sight.
  */
 import * as THREE from 'three/webgpu';
-import { smoothstep, positionWorld, normalWorld, mix, vec3, float, texture, triplanarTexture } from 'three/tsl';
-import { terrainHeight } from '../world/terrain/heightfield.js';
+import { smoothstep, positionWorld, normalWorld, mix, vec3, float, texture, triplanarTexture, attribute } from 'three/tsl';
+import { terrainHeight, detailHeight, demInset, DEM } from '../world/terrain/heightfield.js';
 import { configureAssets, loadModel } from './loadModel.js';
 import { PilotRig } from './pilot.js';
 import { CATALOG } from './catalog.js';
@@ -157,10 +157,12 @@ class AssetsSystem {
         const tri = triplanarTexture(texture(tex), null, null, float(0.3), positionWorld, normalWorld);
         fm.colorNode = tri.rgb.mul(vec3(0.95, 0.92, 0.88));
       }
-      // Snow lies on the berm where it lies on the ground around it (the terrain
-      // whitens upward-facing slopes above ~5000 m); a bare brown mound on a
-      // snowfield read as a hole.
-      const snow = smoothstep(4700, 4950, positionWorld.y).mul(smoothstep(0.35, 0.75, normalWorld.y));
+      // Snow lies on the berm where it lies on the ground around it; a bare brown
+      // mound on a snowfield read as a hole. [models polish] A fixed 4700-4950 m
+      // band put snow on berms over bare ground (and the reverse): the terrain's
+      // line moves hundreds of metres with aspect and curvature. Each berm now
+      // carries its site's cover in `siteSnow` (see siteSnow()).
+      const snow = attribute('siteSnow', 'float').mul(smoothstep(0.35, 0.75, normalWorld.y));
       fm.colorNode = mix(fm.colorNode ?? vec3(0.48, 0.43, 0.38), vec3(0.78, 0.8, 0.83), snow.mul(0.92));
       this.foundationMat = fm;
     }
@@ -257,6 +259,9 @@ class AssetsSystem {
     if (!seat.foundation) return;
     const f = seat.foundation;
     const geo = foundationGeometry(f.minX, f.maxX, f.minZ, f.maxZ, f.depth, f.flare, model.id);
+    const pos = model.parent?.position ?? model.position;
+    const cover = siteSnow(terrainHeight, pos.x, pos.z);
+    geo.setAttribute('siteSnow', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count).fill(cover), 1));
     const mesh = new THREE.Mesh(geo, this._foundationMaterial());
     mesh.name = 'foundation';
     mesh.castShadow = false;
@@ -273,6 +278,45 @@ function boxOf(model) {
   const inv = model.parent ? new THREE.Matrix4().copy(model.parent.matrixWorld).invert() : null;
   if (inv) b.applyMatrix4(inv);
   return { min: b.min.toArray(), max: b.max.toArray() };
+}
+
+const smooth01 = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/** DEM-only height (no sub-DEM detail), bilinear like the GPU sampler. */
+function demHeight(x, z) {
+  const n = DEM.res;
+  const gx = Math.min(n - 1.001, Math.max(0, (x - DEM.minX) / DEM.cellX));
+  const gz = Math.min(n - 1.001, Math.max(0, (z - DEM.minZ) / DEM.cellZ));
+  const i = Math.floor(gx), j = Math.floor(gz), tx = gx - i, tz = gz - j, d = DEM.data;
+  const top = d[j * n + i] + (d[j * n + i + 1] - d[j * n + i]) * tx;
+  const bot = d[(j + 1) * n + i] + (d[(j + 1) * n + i + 1] - d[(j + 1) * n + i]) * tx;
+  return top + (bot - top) * tz;
+}
+
+/**
+ * How much snow the terrain material puts on the ground at a site (0..1), from
+ * the same inputs it uses (src/world/terrain/material.js, `snowLine` / `snowRaw`):
+ * altitude against a 4760 m line moved by aspect (+-380 m), DEM curvature
+ * (ridges shed, hollows hold: the 3-cell ring the `surf` texture stores) and the
+ * sub-DEM detail height, then steep slopes shed it. Not reproduced: the macro
+ * mask and fall-line streak terms, so it can be off near the line.
+ */
+export function siteSnow(heightAt, x, z) {
+  const e = 4;
+  const gx = (heightAt(x + e, z) - heightAt(x - e, z)) / (2 * e);
+  const gz = (heightAt(x, z + e) - heightAt(x, z - e)) / (2 * e);
+  const tan = Math.hypot(gx, gz);
+  const nz = -gz / Math.sqrt(1 + tan * tan);
+  let curv = 0;
+  if (DEM.ready && DEM.data && demInset(x, z) > 4 * DEM.cellX) {
+    const r = 3 * DEM.cellX;
+    const ring = (demHeight(x + r, z) + demHeight(x - r, z) + demHeight(x, z + r) + demHeight(x, z - r)) * 0.25;
+    curv = Math.max(-0.35, Math.min(0.35, (ring - demHeight(x, z)) / r));
+  }
+  const hDet = detailHeight(x, z);
+  const line = 4760 + nz * 380 - Math.max(-0.12, Math.min(0.2, curv)) * 1500 + hDet * 55;
+  const raw = smooth01(-90, 90, heightAt(x, z) - line) * (1 - smooth01(0.8, 1.35, tan + hDet * 0.22)) - smooth01(0.45, 0.95, tan) * 0.3;
+  return smooth01(0.32, 0.68, raw);
 }
 
 /**

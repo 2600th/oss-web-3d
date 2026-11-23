@@ -228,22 +228,26 @@ def rocket_pod():
 
 
 def bomb():
-    A = Asset('bomb', 'bomb', '500 kg low-drag general-purpose bomb (FAB-500 M-62-like). Socket `tail` at the fin box.')
-    L, D = 2.47, 0.40
+    # [models polish] the game fires a FAB-250; the model was FAB-500 sized
+    # (2.47 x 0.40 m, ring tail). FAB-250 M-62: 1.92 m long, 0.30 m body,
+    # low-drag ogive and four swept fins with no ring.
+    A = Asset('bomb', 'bomb', '250 kg low-drag general-purpose bomb (FAB-250 M-62-like). Socket `tail` at the fin root.')
+    L, D = 1.92, 0.30
     R = D / 2
     p = Part()
-    prof = [(0.0, L / 2), (R * 0.25, L / 2 - 0.01), (R * 0.55, L / 2 - 0.12), (R * 0.82, L / 2 - 0.35), (R * 0.97, L / 2 - 0.62),
-            (R, L / 2 - 0.85), (R, -0.25), (R * 0.85, -0.65), (R * 0.55, -L / 2 + 0.22), (R * 0.45, -L / 2 + 0.05), (0.0, -L / 2 + 0.05)]
+    prof = [(0.0, L / 2), (R * 0.22, L / 2 - 0.008), (R * 0.52, L / 2 - 0.09), (R * 0.80, L / 2 - 0.26), (R * 0.96, L / 2 - 0.46),
+            (R, L / 2 - 0.62), (R, -0.18), (R * 0.88, -0.45), (R * 0.62, -L / 2 + 0.20), (R * 0.42, -L / 2 + 0.04),
+            (R * 0.30, -L / 2), (0.0, -L / 2)]
     p.lathe(prof, mat('olive'), seg=20)
-    p.cyl(0.035, 0.06, mat('steel'), loc=(0, L / 2 + 0.02, 0), rot=(-90, 0, 0), seg=8)  # nose fuze
-    bands(p, prof, [0.45], ['band_yellow'], 0.06, seg=20)
-    # fin box: 4 fins + a ring around them
+    p.cyl(0.028, 0.05, mat('steel'), loc=(0, L / 2 + 0.018, 0), rot=(-90, 0, 0), seg=8)  # nose fuze
+    p.cyl(0.03, 0.03, mat('steel'), loc=(0, -L / 2 - 0.012, 0), rot=(-90, 0, 0), seg=8)  # tail fuze
+    bands(p, prof, [0.35], ['band_yellow'], 0.05, seg=20)
+    # four swept fins on the boat-tail, X pattern; root 0.42 m, tip chord 0.16 m
     for k in range(4):
-        p.fin(0.48, 0.48, 0.17, 0.008, mat('olive'), loc=(0, -L / 2 + 0.28, 0), rot=(0, 45 + k * 90, 0), x0=R * 0.45)
-    p.cyl(R * 0.45 + 0.175, 0.20, mat('olive'), loc=(0, -L / 2 + 0.16, 0), rot=(-90, 0, 0), seg=20, cap=False)
-    p.cyl(R * 0.45 + 0.168, 0.20, mat('olive'), loc=(0, -L / 2 + 0.16, 0), rot=(90, 0, 0), seg=20, cap=False)
-    for y in (0.25, -0.25):
-        p.torus(0.035, 0.008, mat('steel'), loc=(0, y, R + 0.03), rot=(0, 90, 0), seg=10, rseg=4)
+        p.fin(0.42, 0.16, 0.15, 0.007, mat('olive'), loc=(0, -L / 2 + 0.24, 0), rot=(0, 45 + k * 90, 0), x0=R * 0.55)
+    for y in (0.2, -0.2):  # suspension lugs (250 mm spacing)
+        p.box((0.03, 0.05, 0.03), mat('steel'), loc=(0, y * 0.625, R + 0.012))
+        p.torus(0.022, 0.006, mat('steel'), loc=(0, y * 0.625, R + 0.035), rot=(0, 90, 0), seg=10, rseg=4)
     A.mesh('body', p)
     A.socket('tail', (0, -L / 2, 0))
     A.socket('fuze', (0, L / 2, 0))

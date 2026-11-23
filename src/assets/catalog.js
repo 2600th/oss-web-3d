@@ -74,6 +74,164 @@ export const CATALOG = {
     license: "MIT",
     notes: "First-person overlay for the player MiG: emissive MFD/aux display faces, canopy periscope, `eye` and `hud` sockets. Parent to aircraft.model (identity transform). The interior itself is part of mig21.glb. Use camera near <= 0.05 m in cockpit view."
   },
+  aaa_gun: {
+    url: "models/aaa_gun.glb",
+    lods: [
+      {
+        url: "models/aaa_gun.glb",
+        triangles: 2900,
+        bytes: 266740,
+        distance: 0
+      },
+      {
+        url: "models/aaa_gun_lod1.glb",
+        triangles: 1450,
+        bytes: 133664,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["muzzle_L", "muzzle_R"],
+    pivots: ["barrels", "turret"],
+    kind: "aaa",
+    bounds: {
+      min: [-1.13, 0, -2.995],
+      max: [1.13, 1.266, 1.192]
+    },
+    license: "MIT",
+    notes: "Twin 23 mm towed AA gun (ZU-23-2-like) in firing position. turret = yaw, barrels = pitch; muzzle_L/R on the barrels.",
+    destroyed: "aaa_gun_destroyed"
+  },
+  aaa_gun_destroyed: {
+    url: "models/aaa_gun_destroyed.glb",
+    lods: [
+      {
+        url: "models/aaa_gun_destroyed.glb",
+        triangles: 2824,
+        bytes: 185056,
+        distance: 0
+      },
+      {
+        url: "models/aaa_gun_destroyed_lod1.glb",
+        triangles: 1412,
+        bytes: 91560,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["muzzle_L", "muzzle_R"],
+    pivots: ["barrels", "turret"],
+    kind: "aaa",
+    bounds: {
+      min: [-1.933, -0.082, -2.606],
+      max: [1.872, 1.266, 1.281]
+    },
+    license: "MIT",
+    notes: "Twin 23 mm towed AA gun (ZU-23-2-like) in firing position. turret = yaw, barrels = pitch; muzzle_L/R on the barrels."
+  },
+  artillery: {
+    url: "models/artillery.glb",
+    lods: [
+      {
+        url: "models/artillery.glb",
+        triangles: 2372,
+        bytes: 254776,
+        distance: 0
+      },
+      {
+        url: "models/artillery_lod1.glb",
+        triangles: 1186,
+        bytes: 124876,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["muzzle"],
+    pivots: ["barrel", "turret"],
+    kind: "artillery",
+    bounds: {
+      min: [-3.01, -0.002, -4.752],
+      max: [3.01, 2.334, 3.375]
+    },
+    license: "MIT",
+    notes: "Towed 122 mm howitzer (D-30 class, generic) emplaced on three trails. turret = yaw, barrel = pitch, socket `muzzle`.",
+    destroyed: "artillery_destroyed"
+  },
+  artillery_destroyed: {
+    url: "models/artillery_destroyed.glb",
+    lods: [
+      {
+        url: "models/artillery_destroyed.glb",
+        triangles: 1688,
+        bytes: 146300,
+        distance: 0
+      },
+      {
+        url: "models/artillery_destroyed_lod1.glb",
+        triangles: 844,
+        bytes: 71764,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["muzzle"],
+    pivots: ["barrel", "turret"],
+    kind: "artillery",
+    bounds: {
+      min: [-3.01, -0.064, -4.422],
+      max: [2.65, 1.758, 3.375]
+    },
+    license: "MIT",
+    notes: "Towed 122 mm howitzer (D-30 class, generic) emplaced on three trails. turret = yaw, barrel = pitch, socket `muzzle`."
+  },
+  bomb: {
+    url: "models/bomb.glb",
+    lods: [
+      {
+        url: "models/bomb.glb",
+        triangles: 764,
+        bytes: 54080,
+        distance: 0
+      }
+    ],
+    scale: 1,
+    sockets: ["tail", "fuze"],
+    pivots: [],
+    kind: "bomb",
+    bounds: {
+      min: [-0.165, -0.165, -1.003],
+      max: [0.165, 0.213, 0.987]
+    },
+    license: "MIT",
+    notes: "250 kg low-drag general-purpose bomb (FAB-250 M-62-like). Socket `tail` at the fin root."
+  },
+  helicopter: {
+    url: "models/helicopter.glb",
+    lods: [
+      {
+        url: "models/helicopter.glb",
+        triangles: 2966,
+        bytes: 244756,
+        distance: 0
+      },
+      {
+        url: "models/helicopter_lod1.glb",
+        triangles: 1490,
+        bytes: 118824,
+        distance: 400
+      }
+    ],
+    scale: 1,
+    sockets: ["exhaust_L", "exhaust_R"],
+    pivots: ["rotor", "tail_rotor"],
+    kind: "helicopter",
+    bounds: {
+      min: [-8.769, -0.005, -11.209],
+      max: [10.655, 7.98, 10.575]
+    },
+    license: "MIT",
+    notes: "Medium transport helicopter (Mi-8 class, generic). `rotor` spins about +Y, `tail_rotor` about +X."
+  },
   pilot: {
     url: "models/pilot.glb",
     lods: [
@@ -101,60 +259,224 @@ export const CATALOG = {
     license: "MIT",
     notes: "Seated jet pilot in aircraft model space: parent to the MiG model with an identity transform (eye at (0, 0.22, -2.95)). pilot_head pivots at the top of the neck (rotation.y = look, +x = nod down); hide pilot_head in the cockpit view. Sage flight suit, no insignia. LOD1 is for hostile jets. Built by tools/blender/build_pilot.py."
   },
-  aaa_gun: {
-    url: "models/aaa_gun.glb",
+  radar: {
+    url: "models/radar.glb",
     lods: [
       {
-        url: "models/aaa_gun.glb",
-        triangles: 1844,
-        bytes: 203152,
+        url: "models/radar.glb",
+        triangles: 4600,
+        bytes: 351036,
         distance: 0
       },
       {
-        url: "models/aaa_gun_lod1.glb",
-        triangles: 922,
-        bytes: 100088,
-        distance: 260
+        url: "models/radar_lod1.glb",
+        triangles: 2300,
+        bytes: 176072,
+        distance: 300
       }
     ],
     scale: 1,
-    sockets: ["muzzle_L", "muzzle_R"],
-    pivots: ["barrels", "turret"],
-    kind: "aaa",
+    sockets: ["feed"],
+    pivots: ["dish"],
+    kind: "radar",
     bounds: {
-      min: [-1.183, 0, -2.995],
-      max: [1.183, 1.266, 1.192]
+      min: [-1.75, -0.019, -3.8],
+      max: [1.75, 4.173, 2.292]
     },
     license: "MIT",
-    notes: "Twin 23 mm towed AA gun (ZU-23-2-like) in firing position. turret = yaw, barrels = pitch; muzzle_L/R on the barrels.",
-    destroyed: "aaa_gun_destroyed"
+    notes: "Towed surveillance/fire-control radar trailer: `dish` yaws (spin it), socket `feed` at the horn.",
+    destroyed: "radar_destroyed"
   },
-  aaa_gun_destroyed: {
-    url: "models/aaa_gun_destroyed.glb",
+  radar_destroyed: {
+    url: "models/radar_destroyed.glb",
     lods: [
       {
-        url: "models/aaa_gun_destroyed.glb",
-        triangles: 1768,
-        bytes: 145892,
+        url: "models/radar_destroyed.glb",
+        triangles: 4744,
+        bytes: 213108,
         distance: 0
       },
       {
-        url: "models/aaa_gun_destroyed_lod1.glb",
-        triangles: 884,
-        bytes: 74072,
+        url: "models/radar_destroyed_lod1.glb",
+        triangles: 2372,
+        bytes: 111412,
+        distance: 300
+      }
+    ],
+    scale: 1,
+    sockets: ["feed"],
+    pivots: ["dish"],
+    kind: "radar",
+    bounds: {
+      min: [-3.145, -0.283, -4.306],
+      max: [3.425, 3.001, 2.673]
+    },
+    license: "MIT",
+    notes: "Towed surveillance/fire-control radar trailer: `dish` yaws (spin it), socket `feed` at the horn."
+  },
+  sam_launcher: {
+    url: "models/sam_launcher.glb",
+    lods: [
+      {
+        url: "models/sam_launcher.glb",
+        triangles: 6624,
+        bytes: 309124,
+        distance: 0
+      },
+      {
+        url: "models/sam_launcher_lod1.glb",
+        triangles: 3312,
+        bytes: 167352,
         distance: 260
       }
     ],
     scale: 1,
-    sockets: ["muzzle_L", "muzzle_R"],
-    pivots: ["barrels", "turret"],
-    kind: "aaa",
+    sockets: ["rail_1", "rail_2", "rail_3", "rail_4", "exhaust"],
+    pivots: ["launcher", "turret"],
+    kind: "sam_site",
     bounds: {
-      min: [-1.933, -0.082, -2.606],
-      max: [1.872, 1.266, 1.281]
+      min: [-1.396, 0.01, -3.2],
+      max: [1.396, 3.013, 3.2]
     },
     license: "MIT",
-    notes: "Twin 23 mm towed AA gun (ZU-23-2-like) in firing position. turret = yaw, barrels = pitch; muzzle_L/R on the barrels."
+    notes: "Tracked short-range SAM launcher (SA-13 class, generic): turret = yaw, launcher = pitch; rail_1..4 at the container mouths.",
+    destroyed: "sam_launcher_destroyed"
+  },
+  sam_launcher_destroyed: {
+    url: "models/sam_launcher_destroyed.glb",
+    lods: [
+      {
+        url: "models/sam_launcher_destroyed.glb",
+        triangles: 6712,
+        bytes: 230812,
+        distance: 0
+      },
+      {
+        url: "models/sam_launcher_destroyed_lod1.glb",
+        triangles: 3356,
+        bytes: 121656,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["rail_1", "rail_2", "rail_3", "exhaust"],
+    pivots: ["launcher", "turret"],
+    kind: "sam_site",
+    bounds: {
+      min: [-1.826, -0.182, -3.901],
+      max: [3.354, 2.791, 3.402]
+    },
+    license: "MIT",
+    notes: "Tracked short-range SAM launcher (SA-13 class, generic): turret = yaw, launcher = pitch; rail_1..4 at the container mouths."
+  },
+  sangar: {
+    url: "models/sangar.glb",
+    lods: [
+      {
+        url: "models/sangar.glb",
+        triangles: 5660,
+        bytes: 411172,
+        distance: 0
+      },
+      {
+        url: "models/sangar_lod1.glb",
+        triangles: 2830,
+        bytes: 223412,
+        distance: 220
+      }
+    ],
+    scale: 1,
+    sockets: ["gunner"],
+    pivots: [],
+    kind: "position",
+    bounds: {
+      min: [-2.399, -0.019, -2.44],
+      max: [2.377, 1.01, 1.508]
+    },
+    license: "MIT",
+    notes: "Dry-stone sangar (C-shaped fighting position, open to the rear) with sandbag topping."
+  },
+  truck: {
+    url: "models/truck.glb",
+    lods: [
+      {
+        url: "models/truck.glb",
+        triangles: 7836,
+        bytes: 501140,
+        distance: 0
+      },
+      {
+        url: "models/truck_lod1.glb",
+        triangles: 3918,
+        bytes: 249244,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["exhaust"],
+    pivots: [],
+    kind: "vehicle",
+    bounds: {
+      min: [-1.286, -0.005, -3.958],
+      max: [1.286, 2.725, 3.73]
+    },
+    license: "MIT",
+    notes: "6x6 military cargo truck (Ural-class, generic), open bed. Socket `exhaust`.",
+    destroyed: "truck_destroyed"
+  },
+  truck_covered: {
+    url: "models/truck_covered.glb",
+    lods: [
+      {
+        url: "models/truck_covered.glb",
+        triangles: 7516,
+        bytes: 480540,
+        distance: 0
+      },
+      {
+        url: "models/truck_covered_lod1.glb",
+        triangles: 3758,
+        bytes: 238748,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["exhaust"],
+    pivots: [],
+    kind: "vehicle",
+    bounds: {
+      min: [-1.286, -0.005, -3.958],
+      max: [1.286, 3.08, 3.73]
+    },
+    license: "MIT",
+    notes: "6x6 military cargo truck (Ural-class, generic) with canvas tilt. Socket `exhaust`."
+  },
+  truck_destroyed: {
+    url: "models/truck_destroyed.glb",
+    lods: [
+      {
+        url: "models/truck_destroyed.glb",
+        triangles: 7100,
+        bytes: 210508,
+        distance: 0
+      },
+      {
+        url: "models/truck_destroyed_lod1.glb",
+        triangles: 3550,
+        bytes: 121100,
+        distance: 260
+      }
+    ],
+    scale: 1,
+    sockets: ["exhaust"],
+    pivots: [],
+    kind: "vehicle",
+    bounds: {
+      min: [-2.812, -0.362, -4.003],
+      max: [2.753, 2.471, 3.635]
+    },
+    license: "MIT",
+    notes: "6x6 military cargo truck (Ural-class, generic), open bed. Socket `exhaust`."
   },
   aam_hobs: {
     url: "models/aam_hobs.glb",
@@ -218,82 +540,6 @@ export const CATALOG = {
     },
     license: "MIT",
     notes: "Medium-range radar missile (R-77-like) with lattice tail fins."
-  },
-  artillery: {
-    url: "models/artillery.glb",
-    lods: [
-      {
-        url: "models/artillery.glb",
-        triangles: 1140,
-        bytes: 157804,
-        distance: 0
-      },
-      {
-        url: "models/artillery_lod1.glb",
-        triangles: 570,
-        bytes: 76852,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["muzzle"],
-    pivots: ["barrel", "turret"],
-    kind: "artillery",
-    bounds: {
-      min: [-3.01, -0.002, -4.752],
-      max: [3.01, 2.334, 3.375]
-    },
-    license: "MIT",
-    notes: "Towed 122 mm howitzer (D-30 class, generic) emplaced on three trails. turret = yaw, barrel = pitch, socket `muzzle`.",
-    destroyed: "artillery_destroyed"
-  },
-  artillery_destroyed: {
-    url: "models/artillery_destroyed.glb",
-    lods: [
-      {
-        url: "models/artillery_destroyed.glb",
-        triangles: 1072,
-        bytes: 115768,
-        distance: 0
-      },
-      {
-        url: "models/artillery_destroyed_lod1.glb",
-        triangles: 536,
-        bytes: 58904,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["muzzle"],
-    pivots: ["barrel", "turret"],
-    kind: "artillery",
-    bounds: {
-      min: [-3.01, -0.064, -4.422],
-      max: [2.65, 1.758, 3.375]
-    },
-    license: "MIT",
-    notes: "Towed 122 mm howitzer (D-30 class, generic) emplaced on three trails. turret = yaw, barrel = pitch, socket `muzzle`."
-  },
-  bomb: {
-    url: "models/bomb.glb",
-    lods: [
-      {
-        url: "models/bomb.glb",
-        triangles: 708,
-        bytes: 49536,
-        distance: 0
-      }
-    ],
-    scale: 1,
-    sockets: ["tail", "fuze"],
-    pivots: [],
-    kind: "bomb",
-    bounds: {
-      min: [-0.265, -0.265, -1.285],
-      max: [0.265, 0.273, 1.195]
-    },
-    license: "MIT",
-    notes: "500 kg low-drag general-purpose bomb (FAB-500 M-62-like). Socket `tail` at the fin box."
   },
   bunker: {
     url: "models/bunker.glb",
@@ -371,33 +617,6 @@ export const CATALOG = {
     license: "MIT",
     notes: "26 mm IR decoy cartridge. `nozzle` is the burning end (aft)."
   },
-  helicopter: {
-    url: "models/helicopter.glb",
-    lods: [
-      {
-        url: "models/helicopter.glb",
-        triangles: 1550,
-        bytes: 180700,
-        distance: 0
-      },
-      {
-        url: "models/helicopter_lod1.glb",
-        triangles: 782,
-        bytes: 83028,
-        distance: 400
-      }
-    ],
-    scale: 1,
-    sockets: ["exhaust_L", "exhaust_R"],
-    pivots: ["rotor", "tail_rotor"],
-    kind: "helicopter",
-    bounds: {
-      min: [-8.769, -0.007, -11.209],
-      max: [10.655, 7.98, 10.575]
-    },
-    license: "MIT",
-    notes: "Medium transport helicopter (Mi-8 class, generic). `rotor` spins about +Y, `tail_rotor` about +X."
-  },
   helipad: {
     url: "models/helipad.glb",
     lods: [
@@ -445,61 +664,6 @@ export const CATALOG = {
     },
     license: "MIT",
     notes: "Sandbagged MANPADS firing post (no figures): launcher on a rest, spare rounds, radio. `launcher` = yaw/pitch pivot at the grip; socket `launch` at the tube mouth."
-  },
-  radar: {
-    url: "models/radar.glb",
-    lods: [
-      {
-        url: "models/radar.glb",
-        triangles: 1944,
-        bytes: 177360,
-        distance: 0
-      },
-      {
-        url: "models/radar_lod1.glb",
-        triangles: 972,
-        bytes: 84780,
-        distance: 300
-      }
-    ],
-    scale: 1,
-    sockets: ["feed"],
-    pivots: ["dish"],
-    kind: "radar",
-    bounds: {
-      min: [-1.75, -0.023, -3.8],
-      max: [1.75, 4.21, 2.287]
-    },
-    license: "MIT",
-    notes: "Towed surveillance/fire-control radar trailer: `dish` yaws (spin it), socket `feed` at the horn.",
-    destroyed: "radar_destroyed"
-  },
-  radar_destroyed: {
-    url: "models/radar_destroyed.glb",
-    lods: [
-      {
-        url: "models/radar_destroyed.glb",
-        triangles: 2088,
-        bytes: 136220,
-        distance: 0
-      },
-      {
-        url: "models/radar_destroyed_lod1.glb",
-        triangles: 1044,
-        bytes: 67660,
-        distance: 300
-      }
-    ],
-    scale: 1,
-    sockets: ["feed"],
-    pivots: ["dish"],
-    kind: "radar",
-    bounds: {
-      min: [-3.145, -0.265, -4.483],
-      max: [3.425, 3.001, 2.673]
-    },
-    license: "MIT",
-    notes: "Towed surveillance/fire-control radar trailer: `dish` yaws (spin it), socket `feed` at the horn."
   },
   rocket: {
     url: "models/rocket.glb",
@@ -585,88 +749,6 @@ export const CATALOG = {
     license: "MIT",
     notes: "Vehicle-launched short-range SAM round (SA-8 / SA-13 class, generic)."
   },
-  sam_launcher: {
-    url: "models/sam_launcher.glb",
-    lods: [
-      {
-        url: "models/sam_launcher.glb",
-        triangles: 3504,
-        bytes: 271592,
-        distance: 0
-      },
-      {
-        url: "models/sam_launcher_lod1.glb",
-        triangles: 1752,
-        bytes: 139276,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["rail_1", "rail_2", "rail_3", "rail_4", "exhaust"],
-    pivots: ["launcher", "turret"],
-    kind: "sam_site",
-    bounds: {
-      min: [-1.396, 0.003, -3.188],
-      max: [1.396, 3.013, 3.188]
-    },
-    license: "MIT",
-    notes: "Tracked short-range SAM launcher (SA-13 class, generic): turret = yaw, launcher = pitch; rail_1..4 at the container mouths.",
-    destroyed: "sam_launcher_destroyed"
-  },
-  sam_launcher_destroyed: {
-    url: "models/sam_launcher_destroyed.glb",
-    lods: [
-      {
-        url: "models/sam_launcher_destroyed.glb",
-        triangles: 3592,
-        bytes: 187852,
-        distance: 0
-      },
-      {
-        url: "models/sam_launcher_destroyed_lod1.glb",
-        triangles: 1796,
-        bytes: 96532,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["rail_1", "rail_2", "rail_3", "exhaust"],
-    pivots: ["launcher", "turret"],
-    kind: "sam_site",
-    bounds: {
-      min: [-1.826, -0.182, -3.901],
-      max: [3.354, 2.791, 3.402]
-    },
-    license: "MIT",
-    notes: "Tracked short-range SAM launcher (SA-13 class, generic): turret = yaw, launcher = pitch; rail_1..4 at the container mouths."
-  },
-  sangar: {
-    url: "models/sangar.glb",
-    lods: [
-      {
-        url: "models/sangar.glb",
-        triangles: 5660,
-        bytes: 412220,
-        distance: 0
-      },
-      {
-        url: "models/sangar_lod1.glb",
-        triangles: 2830,
-        bytes: 223096,
-        distance: 220
-      }
-    ],
-    scale: 1,
-    sockets: ["gunner"],
-    pivots: [],
-    kind: "position",
-    bounds: {
-      min: [-2.399, -0.019, -2.44],
-      max: [2.377, 1.195, 1.508]
-    },
-    license: "MIT",
-    notes: "Dry-stone sangar (C-shaped fighting position, open to the rear) with sandbag topping."
-  },
   supply_dump: {
     url: "models/supply_dump.glb",
     lods: [
@@ -720,88 +802,6 @@ export const CATALOG = {
     },
     license: "MIT",
     notes: "Ridge tent (4 x 3 m) with guy lines and stone-weighted skirt."
-  },
-  truck: {
-    url: "models/truck.glb",
-    lods: [
-      {
-        url: "models/truck.glb",
-        triangles: 2328,
-        bytes: 228644,
-        distance: 0
-      },
-      {
-        url: "models/truck_lod1.glb",
-        triangles: 1164,
-        bytes: 117032,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["exhaust"],
-    pivots: [],
-    kind: "vehicle",
-    bounds: {
-      min: [-1.55, -0.002, -3.832],
-      max: [1.55, 3.1, 3.71]
-    },
-    license: "MIT",
-    notes: "6x6 military cargo truck (Ural-class, generic), open bed. Socket `exhaust`.",
-    destroyed: "truck_destroyed"
-  },
-  truck_covered: {
-    url: "models/truck_covered.glb",
-    lods: [
-      {
-        url: "models/truck_covered.glb",
-        triangles: 2008,
-        bytes: 203268,
-        distance: 0
-      },
-      {
-        url: "models/truck_covered_lod1.glb",
-        triangles: 1004,
-        bytes: 103404,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["exhaust"],
-    pivots: [],
-    kind: "vehicle",
-    bounds: {
-      min: [-1.55, -0.002, -3.832],
-      max: [1.55, 3.1, 3.71]
-    },
-    license: "MIT",
-    notes: "6x6 military cargo truck (Ural-class, generic) with canvas tilt. Socket `exhaust`."
-  },
-  truck_destroyed: {
-    url: "models/truck_destroyed.glb",
-    lods: [
-      {
-        url: "models/truck_destroyed.glb",
-        triangles: 2284,
-        bytes: 142152,
-        distance: 0
-      },
-      {
-        url: "models/truck_destroyed_lod1.glb",
-        triangles: 1142,
-        bytes: 72508,
-        distance: 260
-      }
-    ],
-    scale: 1,
-    sockets: ["exhaust"],
-    pivots: [],
-    kind: "vehicle",
-    bounds: {
-      min: [-2.812, -0.345, -3.884],
-      max: [2.753, 2.84, 3.615]
-    },
-    license: "MIT",
-    notes: "6x6 military cargo truck (Ural-class, generic), open bed. Socket `exhaust`."
   },
   base_raven: {
     url: "assets/bases/raven-lod0.glb",
