@@ -6,7 +6,7 @@ import { buildTerrainTextures } from './textures.js';
 import { makeTerrainNodes } from './nodes.js';
 import { TerrainLayers } from './layers.js';
 import { buildTerrainMaterial, applyShadowHooks } from './material.js';
-import { ShadowSweep, SHADOW_MIN, SHADOW_STEP } from './shadowSweep.js';
+import { ShadowSweep } from './shadowSweep.js';
 
 /**
  * GPU terrain: a geometry clipmap displaced from the DEM.
@@ -112,8 +112,6 @@ export class Terrain {
       skyColor: uniform(new THREE.Color(0.32, 0.5, 0.85)),
       skyReflect: uniform(1),
       shadowTex: this.shadow.texture,
-      shadowStep: SHADOW_STEP,
-      shadowMin: SHADOW_MIN,
       shadowSoft: uniform(3.5),
       shadowOn: uniform(1),
       shadowCamPos: uniform(new THREE.Vector3()),

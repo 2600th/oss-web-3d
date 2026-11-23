@@ -12,18 +12,26 @@
 // O(texels), exact for any azimuth up to the interpolation, and it yields a
 // signed, smooth field that the shader thresholds — so ridge shadows many
 // kilometres long cost one texture fetch per pixel.
-import { SHADOW_MIN, SHADOW_STEP } from './shadowConst.js';
+//
+// [ground polish] Output: half floats in metres (shadowConst.js), clamped to
+// [SHADOW_MIN, SHADOW_MAX]; it was 8-bit and saturated 47.75 m above the ground.
+import { SHADOW_MIN, SHADOW_MAX, encodeShadow } from './shadowConst.js';
 
 let H = null;
 let n = 0;
 let cellX = 1;
 let cellZ = 1;
 
+// Native binary16 stores where the engine has them (Chrome 135+), else the
+// bit conversion in shadowConst.js. Either way the result is a Uint16Array.
+const F16 = typeof Float16Array === 'function' ? Float16Array : null;
+
 function sweep(dir) {
-  const out = new Uint8Array(n * n);
+  const bits = new Uint16Array(n * n);
+  const f16 = F16 ? new F16(bits.buffer) : null;
   const horiz = Math.hypot(dir[0], dir[2]);
-  if (dir[1] <= 0.002) { out.fill(255); return out; }
-  if (horiz < 1e-4) return out; // sun at the zenith: nothing is shadowed
+  if (dir[1] <= 0.002) { bits.fill(encodeShadow(SHADOW_MAX)); return bits; }
+  if (horiz < 1e-4) { bits.fill(encodeShadow(SHADOW_MIN)); return bits; } // sun at the zenith: nothing is shadowed
   const tan = dir[1] / horiz;
   const gx = dir[0] / horiz / cellX; // texels per metre travelled toward the sun
   const gz = dir[2] / horiz / cellZ;
@@ -34,7 +42,6 @@ function sweep(dir) {
   const drop = stepLen * tan;
   let prev = new Float32Array(n).fill(-1e9); // max(h, S) on the sunward line
   let cur = new Float32Array(n);
-  const inv = 1 / SHADOW_STEP;
   for (let q = 0; q < n; q++) {
     const line = sign > 0 ? n - 1 - q : q;
     for (let c = 0; c < n; c++) {
@@ -49,13 +56,14 @@ function sweep(dir) {
       }
       const k = majorX ? c * n + line : line * n + c;
       const h = H[k];
-      const v = (s - h - SHADOW_MIN) * inv;
-      out[k] = v <= 0 ? 0 : v >= 255 ? 255 : v;
+      const v = s - h;
+      if (f16) f16[k] = v <= SHADOW_MIN ? SHADOW_MIN : v >= SHADOW_MAX ? SHADOW_MAX : v;
+      else bits[k] = encodeShadow(v);
       cur[c] = s > h ? s : h;
     }
     const tmp = prev; prev = cur; cur = tmp;
   }
-  return out;
+  return bits;
 }
 
 self.onmessage = (e) => {
@@ -63,7 +71,8 @@ self.onmessage = (e) => {
   if (m.type === 'init') {
     H = m.heights; n = m.res; cellX = m.cellX; cellZ = m.cellZ;
   } else if (m.type === 'sweep') {
+    const t0 = performance.now();
     const data = sweep(m.dir);
-    self.postMessage({ type: 'done', id: m.id, data }, [data.buffer]);
+    self.postMessage({ type: 'done', id: m.id, data, ms: performance.now() - t0 }, [data.buffer]);
   }
 };
