@@ -1,4 +1,4 @@
-import { Renderer } from '../engine/Renderer.js';
+import { Renderer, POWER_PREFERENCE } from '../engine/Renderer.js';
 
 /**
  * Boot + lifecycle robustness (engine pass).
@@ -22,7 +22,7 @@ import { Renderer } from '../engine/Renderer.js';
 export async function probeWebGPU() {
   try {
     if (typeof navigator === 'undefined' || !navigator.gpu) return false;
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const adapter = await navigator.gpu.requestAdapter(POWER_PREFERENCE ? { powerPreference: POWER_PREFERENCE } : undefined);
     return !!adapter;
   } catch {
     return false;

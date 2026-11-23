@@ -1,6 +1,11 @@
 import * as THREE from 'three/webgpu';
 import { QUALITY, pickTier } from './Quality.js';
 
+const IS_WINDOWS = typeof navigator !== 'undefined' &&
+  /Win/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? navigator.userAgent ?? '');
+/** GPU adapter preference, or undefined where the browser ignores it (Windows). */
+export const POWER_PREFERENCE = IS_WINDOWS ? undefined : 'high-performance';
+
 /**
  * Owns the WebGPURenderer, the main camera and the canvas size.
  *
@@ -29,7 +34,9 @@ export class Renderer {
     this.renderer = new THREE.WebGPURenderer({
       canvas,
       antialias: false, // AA is done in post (TRAA / SMAA)
-      powerPreference: 'high-performance',
+      // Chrome on Windows ignores it and logs a console warning each time: only
+      // pass it where it chooses a GPU (dual-GPU macOS / Linux laptops).
+      powerPreference: POWER_PREFERENCE,
       forceWebGL,
       logarithmicDepthBuffer: false,
       reversedDepthBuffer: true, // float depth precision for 0.5 m .. 300 km

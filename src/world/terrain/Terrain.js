@@ -82,6 +82,18 @@ export class Terrain {
     this.textures = buildTerrainTextures(DEM, { aniso });
     this.nodes = makeTerrainNodes(DEM, this.textures);
     this.layers = new TerrainLayers({ size: this.tier.layerSize, aniso });
+    // [engine perf] These textures never change after their (last) upload, but
+    // three keeps the source arrays: ~170 MB of JS heap at 3073^2 (height,
+    // surf, river at 36 MB each, the two layer arrays at 24 MB). Drop them once
+    // the GPU has its copy. The layer arrays are rewritten by layers.load(), so
+    // only after the loaded upload. (Device loss restarts the page, so nothing
+    // ever needs to re-upload them; the shadow texture is dynamic and kept.)
+    const release = (tex, ready = () => true) => {
+      tex.onUpdate = () => { if (ready() && tex.image?.data) tex.image.data = null; };
+    };
+    for (const k of ['height', 'outer', 'amp', 'tile', 'surf', 'river', 'outerSurf']) if (this.textures[k]) release(this.textures[k]);
+    release(this.layers.albedo, () => this.layers.loaded);
+    release(this.layers.nrm, () => this.layers.loaded);
     this.shadow = new ShadowSweep(DEM);
 
     this.uniforms = {
