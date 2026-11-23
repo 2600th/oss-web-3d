@@ -11,6 +11,7 @@ import { CombatVisuals } from './visuals.js';
 import { LockTracker, lockGeometry, pickTarget, cycleTarget } from './lock.js';
 import { leadPoint, ballisticImpact, rocketImpact } from './guidance.js';
 import { WEAPONS, PLAYER, SPECIALS } from './weapons.js';
+import { GUN_MUZZLE } from '../vfx/core/sockets.js';
 
 export const order = 50;
 export function createSystem(game) { return new CombatSystem(game); }
@@ -218,7 +219,9 @@ export class CombatSystem {
       }
       const r = this.world.rng;
       _dir.addScaledVector(f.right, (r() - 0.5) * 2 * w.spread).addScaledVector(f.up, (r() - 0.5) * 2 * w.spread).normalize();
-      _v.copy(f.position).addScaledVector(f.forward, 7).addScaledVector(f.up, -0.6);
+      // from the GSh-23 muzzle (one socket shared with the muzzle flash; it was
+      // 7 m ahead, at the nose-cone tip)
+      _v.copy(f.position).addScaledVector(f.right, GUN_MUZZLE.x).addScaledVector(f.up, GUN_MUZZLE.y).addScaledVector(f.forward, -GUN_MUZZLE.z);
       _v2.copy(_dir).multiplyScalar(w.muzzle).add(f.velocity);
       this.world.fireBullet(this.player, _v, _v2, w.damage, w.life);
     }
