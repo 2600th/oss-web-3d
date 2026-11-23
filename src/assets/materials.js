@@ -20,6 +20,10 @@ import { premultipliedGlassClass, setupGlass, setupLensGlass, bindGlassEnv } fro
  * roughness ~0.42 with the texture's own grime/panel-line contrast (texel vs. a
  * blurred mip of itself) pushing dirty areas rougher, a little metalness so the
  * sky reflection takes the paint colour, and on the player a thin clearcoat.
+ * [mig skin] The shipped MiG GLBs now carry a baked `<part>_orm` map (ambient
+ * occlusion, roughness, metalness) and a panel-line normal map
+ * (tools/blender/build-mig-skin.mjs); when it is present the heuristic above
+ * is replaced by the authored maps and there is no clearcoat.
  * The canopy is clear glass: almost transparent head-on, a Fresnel-weighted
  * reflection of `scene.environment` toward grazing angles.
  *
@@ -99,6 +103,11 @@ function memo(src, key, build) {
 
 const GLASS = /canopy|glass/i;
 const INTERIOR = /cockpit/i;
+// [mig skin] Cockpit tub. The bake is the geometric sky visibility; the gain
+// stands for light bounced between the tub's own surfaces, which the bake
+// does not carry. COCKPIT_RECESS is the albedo left in a fully enclosed texel.
+const COCKPIT_AO_GAIN = 1.3;
+const COCKPIT_RECESS = 0.55;
 
 /** Grime/panel-line driven roughness from the albedo map itself (no ORM in the source). */
 function paintRoughness(map, base, range) {
@@ -139,8 +148,19 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
           const { min, max } = o.geometry.boundingBox;
           return setupGlass(g, { canopy: /canopy/i.test(name), low, box: { min: min.toArray(), max: max.toArray() } });
         }
-        const m = toNodeMaterial(src, rich && !INTERIOR.test(o.name) ? THREE.MeshPhysicalNodeMaterial : THREE.MeshStandardNodeMaterial);
+        // [mig skin] `<part>_orm`: baked occlusion (R), roughness (G) and
+        // metalness (B) in one texture (tools/blender/build-mig-skin.mjs).
+        const orm = src.aoMap && src.aoMap === src.roughnessMap ? src.aoMap : null;
+        const m = toNodeMaterial(src, rich && !orm && !INTERIOR.test(o.name) ? THREE.MeshPhysicalNodeMaterial : THREE.MeshStandardNodeMaterial);
         filterTextures(m, tier);
+        let ormTexel = null;
+        if (orm) {
+          // one fetch feeds all three inputs (the map slots would sample it three times)
+          m.aoMap = m.roughnessMap = m.metalnessMap = null;
+          m.roughness = 1;
+          m.metalness = 1;
+          ormTexel = texture(orm, uv(orm.channel ?? 0));
+        }
         if (/pitot/.test(o.name)) {
           // [textures] the source ships this nose sensor with the exporter's
           // missing-texture magenta (1, 0, 1); a dark grey metal fitting
@@ -158,8 +178,40 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
           // fill light it as if it stood in the open: the panel read as bright
           // as the airframe outside. A constant occlusion on indirect light
           // (screen-space GTAO multiplies on top of it; the sun is untouched).
+          if (ormTexel) {
+            // [mig skin] The constant is replaced by the baked occlusion: the
+            // tub walls, the coaming, the panel shroud and the canopy frame
+            // each take their own share of sky away, so the panel face and
+            // the footwell sit well under the sills. AO only scales indirect
+            // light; a texel that sees almost no sky is almost never reached
+            // by the sun either (the shadow map cannot resolve gauge bezels),
+            // so the deepest recesses also lose some albedo.
+            const ao = ormTexel.r;
+            m.aoNode = low ? ao : ao.mul(COCKPIT_AO_GAIN);
+            m.roughnessNode = ormTexel.g;
+            m.metalnessNode = float(0.03);
+            const recess = mix(float(COCKPIT_RECESS), float(1), smoothstep(0.02, 0.4, ao));
+            const base = !low && m.map ? sharpenedColor(m, 0.35) : m.map ? texture(m.map, uv(m.map.channel ?? 0)).mul(vec4(m.color.r, m.color.g, m.color.b, 1)) : vec4(m.color.r, m.color.g, m.color.b, 1);
+            m.colorNode = vec4(base.rgb.mul(recess), base.a);
+            return m;
+          }
           if (!low) m.aoNode = float(0.42);
           if (!low && m.map) m.colorNode = sharpenedColor(m, 0.35); // [textures]
+          return m;
+        }
+        if (ormTexel) {
+          // [mig skin] Painted skin with authored maps. Paint is a dielectric
+          // (the map's metalness is 0 there, 0.9 on bare metal and chipped
+          // edges); roughness varies panel to panel, rises in soot, grime and
+          // scuffs and falls in wet streaks. No clearcoat: service paint is
+          // satin, and a coat over soot and bare metal is wrong.
+          m.aoNode = ormTexel.r;
+          m.roughnessNode = ormTexel.g;
+          m.metalnessNode = ormTexel.b;
+          m.envMapIntensity = 1;
+          // the 2048 px player airframe has its sharpening baked in
+          const big = (m.map?.image?.width ?? 0) >= 2048;
+          if (!low && m.map && !big) m.colorNode = sharpenedColor(m, role === 'player' ? 0.45 : 0.35);
           return m;
         }
         if (!low && m.map) m.colorNode = sharpenedColor(m, role === 'player' ? 0.55 : 0.4); // [textures]

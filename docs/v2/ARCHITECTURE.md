@@ -1079,3 +1079,27 @@ Details and evidence in `docs/v2/evidence/polish-ground/README.md`.
   - `src/assets/catalog.test.mjs` budgets: `vehicle` 12000 (was 8000),
     `pilot` 18000 (was 15000), as in the task brief.
   - Evidence: `docs/v2/evidence/polish-models-3/README.md`.
+
+- **MiG skin pass (baked AO, panel-line normals, weathering, ORM):**
+  - `mig21.glb`, `mig21_hostile.glb`, `mig21_hostile_lod1.glb` and
+    `mig21-low.glb`: every opaque textured material now has one
+    `<part>_orm` texture bound as both `occlusionTexture` and
+    `metallicRoughnessTexture` (R = baked ambient occlusion, G = roughness,
+    B = metalness; factors are 1). It replaces the `KHR_materials_specular`
+    map, which is gone from those materials. Node names, pivots and the
+    texture count (33) are unchanged. The player airframe base colour and
+    normal map are 2048 px (were 1024).
+  - `src/assets/materials.js` `upgradeAircraftMaterials`: a source material
+    whose `aoMap` and `roughnessMap` are the same texture takes the authored
+    path: `aoNode`, `roughnessNode` and `metalnessNode` come from one fetch,
+    the material is a `MeshStandardNodeMaterial` (no clearcoat, paint
+    metalness 0). The cockpit interior's constant `aoNode = 0.42` is now the
+    baked occlusion times `COCKPIT_AO_GAIN`; the constant remains the
+    fallback for a GLB without the map. Materials without an ORM map (pitot,
+    decal cards, glass) take the old path unchanged.
+  - Built by `node tools/blender/build-mig-skin.mjs` (pure Node: it reads the
+    pre-pass GLBs from git and is idempotent), then
+    `node tools/blender/write-catalog.mjs`. A later script that edits the MiG
+    GLBs in place must run before it, or be folded into its `BASE` inputs.
+  - Test: `src/assets/migSkin.test.mjs`.
+  - Evidence: `docs/v2/evidence/polish-mig-skin/README.md`.
