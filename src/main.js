@@ -1,3 +1,4 @@
+import { inject } from '@vercel/analytics';
 import { Renderer } from './engine/Renderer.js';
 import { PostFX } from './engine/PostFX.js';
 import { Input } from './core/Input.js';
@@ -11,6 +12,8 @@ function bootFailure(message) {
   el.hidden = false;
   el.style.display = 'grid';
 }
+
+inject();
 
 async function start() {
   const canvas = document.getElementById('viewport');
