@@ -700,3 +700,46 @@ Owner paths: the glass branch of `src/assets/materials.js` (tagged `[glass]`),
   emissive) and `wallRadiance` (uniform, read from the scene's
   `HemisphereLight`). The terrain material adds a wet bank margin (albedo and
   roughness) outside the water.
+
+### Shadows polish: sun / moon, terrain and cloud shadows (changed where marked)
+
+Owner paths: `src/world/shadows/**` (new) and the blocks tagged `[shadows]` in
+`src/world/Environment.js`, `src/world/terrain/{Terrain,shadowSweep,material}.js`
+and `src/world/clouds/Clouds.js`. Evidence: `docs/v2/evidence/polish-shadows/`.
+
+- **Sun shadow (changed).** The 120 m box that followed the player is replaced
+  by cascades fitted to the game camera: `env.sunShadows`, from
+  `installSunShadows` in `src/world/shadows/SunShadows.js`.
+  - Tiers in `shadowMath.js` `SUN_SHADOW_TIERS`: 2 to 4 cascades, 260 m to 1200 m.
+  - Filter: PCSS on WebGPU at medium and above. On low and on WebGL2, a disc
+    PCF with a fixed radius.
+  - `env.sun.shadow.shadowNode` is a `CSMShadowNode`. Read cascade cameras from
+    `env.sunShadows.node.lights[i].shadow`, not from `env.sun.shadow.camera`.
+  - Casters are on layers 0 and `SHADOW_LAYER`, as before.
+  - `env.sunShadows.update(camera, keyLight)` runs inside `env.update`. With
+    the moon as key light, it switches to the moon's angular size.
+- **Terrain no longer casts into the sun shadow map (changed)**
+  (`SHADOW_CAST_CELL = 0`). The terrain's self-shadow is only the heightfield
+  sweep, so the old caster culling in `Terrain.update` now culls nothing.
+- **`env.terrainShadow` (new):** a TSL `Fn(positionWorld) -> float` built from
+  the heightfield sweep (`ShadowSweep.makeShadowFn`), set by `Terrain`.
+  - It is 0 inside terrain shadow.
+  - It fades to no effect between 36 m and 46 m above the DEM ground, because
+    the 8-bit sweep saturates at 47.75 m.
+  - It is null without a terrain.
+- **`env.applyCloudShadow(material, { terrain = true })` (changed):**
+  - It also multiplies `env.terrainShadow` into the received shadow, so units
+    and props in a ridge's shadow are no longer sunlit. To skip this, pass
+    `{ terrain: false }` or set `material.terrainLit`.
+  - It adds the hook to the material's program cache key. three's
+    `customProgramCacheKey` ignores `receivedShadowNode`, so otherwise two
+    materials that differ only by the hook share one shader.
+  - It is still idempotent. `Terrain`'s constructor sets `terrainShadow`
+    right after `Environment` is built, so it exists before any model loads.
+  - Call it again after `material.clone()`.
+- **Terrain `applyShadowHooks` (changed):** the cloud and sweep shadows apply at
+  every distance. The old "inside the shadow box" gate is gone.
+- **Cloud shadow map (changed look, same API):** the march integrates at most
+  `CLOUD_SHADOW_PATH` (8 km) of the sun ray, with a per-texel jitter.
+  - At a low sun it no longer draws bands. This answers the time-of-day
+    section's request about bands with the sun under about 2 degrees.

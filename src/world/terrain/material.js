@@ -508,15 +508,18 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
  * re-install it; Terrain.update calls this again whenever the node it finds is
  * not the one returned here.
  *
- * The sun shadow map only covers a small box around the player. Receivers that
- * fall inside that box in the light's xy but beyond its depth range read as
- * fully shadowed (a dark square on the ground far below the aircraft), so the
- * map's result is only trusted inside the box's depth range.
+ * [shadows] The sun shadow map is now camera-fitted cascades (src/world/shadows/
+ * SunShadows.js) that return 1 outside their range and fade out at its end, so
+ * the old depth-range gate for the single 120 m box around the player is gone
+ * (`uniforms.shadowCamPos` / `shadowRange` are no longer read). The terrain
+ * does not cast into those maps; `lit` (the heightfield sweep) is its shadow.
+ * The environment's own terrain-shadow term is skipped here (`terrain: false`):
+ * `lit` already is that term.
  */
-export function applyShadowHooks(mat, env, uniforms) {
+export function applyShadowHooks(mat, env, uniforms) { // eslint-disable-line no-unused-vars
   if (env?.applyCloudShadow) {
     if (mat.userData) delete mat.userData.cloudShadowFn; // force a fresh install to wrap
-    env.applyCloudShadow(mat);
+    env.applyCloudShadow(mat, { terrain: false });
   } else if (env?.cloudShadow) {
     mat.receivedShadowNode = Fn(([s]) => s.mul(env.cloudShadow(positionWorld)));
   } else {
@@ -524,13 +527,7 @@ export function applyShadowHooks(mat, env, uniforms) {
   }
   const prev = mat.receivedShadowNode;
   const lit = mat.terrainLit;
-  const wrapped = Fn(([s]) => {
-    // distance from the shadow camera along the light, in metres
-    const depth = dot(uniforms.shadowCamPos.sub(positionWorld), uniforms.sunDir);
-    const inBox = step(uniforms.shadowRange.x, depth).mul(step(depth, uniforms.shadowRange.y));
-    const map = mix(float(1), s, inBox);
-    return (prev ? prev(map) : map).mul(lit);
-  });
+  const wrapped = Fn(([s]) => (prev ? prev(s) : s).mul(lit));
   mat.receivedShadowNode = wrapped;
   mat.needsUpdate = true;
   return wrapped;
