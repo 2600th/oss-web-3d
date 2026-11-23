@@ -242,7 +242,7 @@ export const MISSIONS = [
     // heat-seekers and hides the posts from you. The pictures are taken below it.
     conditions: { time: 17.6, weather: 'overcast' },
     specials: ['hobs', 'bomb', 'lraam'], special: 'hobs',
-    timeLimit: 900, parTime: 420, rank: { S: 14000, A: 12000, B: 9500, C: 7000 },
+    timeLimit: 900, parTime: 420, rank: { S: 16800, A: 14500, B: 11500, C: 8000 },
     maxAttackers: 2, recon: { total: 4, photoScore: 1800 },
     groups: {
       post1: { kind: 'base', near: { x: -12500, z: 2500 }, search: 2200, snap: 'ridge', tags: ['m3_site'], units: [{ type: 'post', tags: ['m3_post'], isTarget: true }, { type: 'manpads', count: 1 }, { type: 'tent', count: 2 }] },

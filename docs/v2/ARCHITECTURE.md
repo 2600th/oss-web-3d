@@ -367,3 +367,63 @@ when unavoidable; say so in your report.
   Terrain additions: `ready`, `material(s)`, `stats`, `height`, `verify()`,
   `crackTest()`, `gpuTime()` (dev; use `?gputime`). Rivers are shaded in the
   terrain material (`src/world/water/river.js`), there is no separate water mesh.
+
+### Gameplay polish: difficulty, weather, new sorties, onboarding (additive unless marked)
+
+- **Difficulty.** `src/game/difficulty.js` (`DIFFICULTY` table: `damage`, `accuracy`,
+  `aggression`, `missile`, `flare`, `attackers`, `score`). API: `game.flow.difficulty`
+  ('easy'|'normal'|'hard'), `game.flow.difficulties` (menu rows), `game.flow.setDifficulty(level)`.
+  Setting key `difficulty` in `src/core/Settings.js` (flow follows `settings:change`);
+  URL `?difficulty=`. New event `flow:difficulty {level, difficulty}`. Results and
+  `scoring.computeScore` carry `difficulty` / `breakdown.difficulty` (the score scale;
+  rank thresholds are the same on every level).
+- **Time of day and weather.** Every mission has `conditions: {time (hours), weather,
+  advance? (hours per sortie minute), choose?}`; `src/missions/conditions.js` owns the
+  weather table (`clear`, `scattered`, `cumulus`, `overcast`, `snow`, `storm`), the
+  labels and the numbers gameplay reads. Live object `game.conditions` `{time, weather,
+  label, light, night, visibility, turbulence, cloud: {base, top}|null, irLoss, wind,
+  rain, snow, lightning, coverage, applied}`; event `conditions:change` (same payload)
+  at sortie start and every 2 s while the clock advances; `hud.conditions`; mission
+  metadata `flow.missions[i].conditions {time, weather, label, night, choose}` (label
+  e.g. "0540 · Dawn · Scattered cloud", shown in the briefing).
+  Environment binding (`applyToEnvironment`): calls `env.setTimeOfDay(hours)` and
+  `env.setWeather(state)` / `env.weather.set(state)` / plain `env.weather.{rain, snow,
+  lightning, wind}` when they exist, with `state = {type, rain, snow, lightning, wind,
+  coverage, turbulence}`; otherwise `env.setPreset(name, {coverage})` (morning, noon,
+  default, golden, overcast, storm). Optional read: `env.inCloud` (0..1) for the player.
+  What it does to play: `flight.turbulence` (0..1 buffet, `FlightModel.gust`);
+  optically-laid guns and shoulder-launched missiles reach `range x visibility`
+  (radar SAMs do not care); pilots detect at `detect x visibility` and go for the cloud
+  layer when defensive; an IR missile loses an aircraft inside the layer (`irLoss`
+  per second, both sides) and IR lock takes 2.5x as long through it; the player's
+  ground lock range is `lockRange x sqrt(visibility)` (min 0.5); trucks carry headlight
+  meshes (`name: 'headlights'`) at night.
+- **Free flight picker.** `game.flow.conditionOptions {times: [{id, label, time}],
+  weather: [{id, label}]}`, `game.flow.setConditions({time, weather})` (persisted,
+  localStorage `safedsagar.v2.freeConditions`), `game.flow.freeConditions`, event
+  `flow:conditions`. The briefing screen shows two chip rows for `conditions.choose`.
+- **Campaign (changed).** Six sorties and free flight: `m1`, `m2`, `night` (Black Road,
+  night convoy interdiction), `m3`, `storm` (Thunderhead, intercept in a storm), `m4`,
+  `free`. `order` renumbered. A save from the four-mission chain keeps everything it
+  had open (`scoring.isUnlocked`). New fail reason `escaped`.
+- **Events.** `player:hit` gains `weapon` (weapon id). New `hint {id, action, text,
+  keys, urgent, duration, handled}` (M1 onboarding; a listener that shows it sets
+  `handled = true`, otherwise the line is spoken on the radio by the wingman).
+  Progress in localStorage `safedsagar.v2.onboarding`; anything the player already did
+  unprompted is never taught, and nothing is taught once M1 is complete.
+- **Aces (changed).** `fighter.pilot` is the named pilot data for all four; `fighter.ace`
+  / target `isAce` is true only for the flight lead (`cast.js` `lead: true`), so the
+  HUD's "Flight lead" / "LEAD DOWN" matches the radio. The other three have `elite`.
+  Objective `track: {destroyed: tag, total}` pins the displayed total (M4 shows 0/4
+  from the start, not 0/2 until the second pair spawns).
+- **Air defence (changed).** `src/ai/ground.js` `AA` table and `aaaBurstError(n, d)`:
+  guns track with lag and open with ranging bursts; shoulder-launch teams carry
+  `rounds: 3`. `src/combat/los.js` `clearLine(a, b)` is the one line-of-sight test
+  (lock, AI, SAM command guidance, recon). Rocket pipper is a real ballistic solution
+  (`guidance.rocketImpact`). Tower callsign is `KESAR TOWER`.
+- **Flight (changed).** Terrain collision clearance is `TERRAIN_CLEARANCE = 6` m (was
+  12). Standard assist: a gentle turn with a push levels the wings and bunts; a real
+  turn (latched above 2.6 g of turn demand) rolls past ninety and pulls.
+- **Dev.** `game.dev.run(id, {special, bot, difficulty})`, `dev.batch(id, n, opts)`,
+  `dev.table()`, `dev.runs`: the flying bot (`src/game/dev/Bot.js`), real intents,
+  damage on, about 20x real time. Evidence in `docs/v2/evidence/polish-gameplay/`.

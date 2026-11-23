@@ -122,6 +122,15 @@ export const AIRCRAFT = {
   gripHigh: 2.9,
 };
 
+/**
+ * Metres between the aircraft's origin and the rock at which it has hit.
+ * The CPU height field equals the rendered surface to under 0.1 m
+ * (`__verifyTerrain()`), so the margin only has to cover the airframe: the
+ * MiG-21 is 4 m tall with a 3.6 m half-span. It was 12 m, which read as dying
+ * a clear wingspan above the ridge on a low pass.
+ */
+export const TERRAIN_CLEARANCE = 6;
+
 /** Peak disturbance at turbulence 1, rad/s of commanded rate. */
 export const TURBULENCE = { pitch: 0.07, roll: 0.3 };
 const GUST = { pitch: 0, roll: 0 };
@@ -434,7 +443,7 @@ export class FlightModel {
    * Sample spacing is held to half the clearance so the test cannot step over
    * the envelope it is enforcing, whatever dt the caller passes.
    */
-  checkTerrainCollision(dt, clearance = 12) {
+  checkTerrainCollision(dt, clearance = TERRAIN_CLEARANCE) {
     if (this.crashed) return false;
 
     const travel = this.velocity.length() * dt;
