@@ -193,3 +193,22 @@ when unavoidable; say so in your report.
 ## Contract changes
 
 (append here)
+
+- **post + camera (additive).** `game.post.useStaticVelocity(material)` gives a
+  material whose vertices are placed by a `positionNode` (terrain clipmap, water)
+  correct camera-only velocity: three's VelocityNode reprojects the undisplaced
+  `positionGeometry`, which breaks TRAA and motion blur. The camera system applies
+  it to `game.terrain` materials. `useTransparentVelocity(material)`: blended
+  surfaces keep the velocity behind them (the scene MRT velocity target now uses
+  material blending). `post.setFrameState({sunDirection, sunIntensity, airspeed,
+  reheat, screen})`, `post.notifyCut()`, `post.options` (`autoExposure`,
+  `exposureCompensation`, `motionBlur`, `reducedMotion`, `flare`), `post.stats`.
+  `uniforms.exposure` is now written every frame by auto-exposure.
+  Camera: `cameraRig.view` (effective view), `setMode/cycleMode`, `lockHeld`,
+  `look`, `followMissile(m)`, `killCam(target, pos)`, `deathCam(pos, vel)`,
+  `playCinematic(name, opts) -> Promise`, `stopCinematic()`, `options`
+  (`shake`, `killCam`, `missileCam`, `reducedMotion`, `fovEffects`), `rumble`.
+  New event `camera:cinematic` `{name, state: 'start'|'end'}`; `camera:mode`
+  also carries `base`. Input actions read if present: `camera`, `lookTarget`,
+  `missileCam` (fallback keys C / V / B). URL flags: `?gputime`,
+  `?reducedMotion`, `?nokillcam`, `?cinematic=<name>`, `?aa=traa|fxaa|smaa|none`.
