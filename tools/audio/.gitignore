@@ -1,0 +1,4 @@
+# Downloaded CC0 sample libraries and intermediate renders (re-creatable).
+.cache/
+.build/
+__pycache__/

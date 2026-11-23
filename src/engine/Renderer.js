@@ -19,6 +19,8 @@ export class Renderer {
       forceWebGL,
       logarithmicDepthBuffer: false,
       reversedDepthBuffer: true, // float depth precision for 0.5 m .. 300 km
+      // (post/camera) GPU pass timing for profiling, opt-in: ?gputime
+      trackTimestamp: typeof location !== 'undefined' && new URLSearchParams(location.search).has('gputime'),
     });
     this.renderer.toneMapping = THREE.NoToneMapping; // tone mapping lives in PostFX
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
