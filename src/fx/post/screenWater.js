@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import {
-  Fn, float, vec2, vec3, vec4, uv, uniform, texture, max, mix, clamp, smoothstep, length, dot,
+  Fn, float, vec2, vec3, vec4, uv, uniform, texture, max, min, mix, clamp, smoothstep, length, dot,
   fract, sin, floor, exp, abs, sign, normalize, select, sqrt,
+  hash as pcgHash,
 } from 'three/tsl';
 
 /**
@@ -89,33 +90,51 @@ export class ScreenWater {
       const s0 = prev.sample(st);
       const h = s0.r;
       const k = u.flow;
-      // velocity of mobile water: airflow at speed, gravity when slow
-      const dir = this._flowDir(st);
-      // a forward-facing lens has a stagnation point in the middle: water
-      // there lingers and beads, and is flung off faster toward the rim;
-      // on the canopy the stream is fast everywhere
-      const rr = length(st.sub(0.5).mul(vec2(u.aspect, 1)));
-      const lensSpeed = smoothstep(0.04, 0.75, rr).mul(1.7).add(0.35);
-      const flowSpeed = mix(lensSpeed, float(2.2), u.canopy);
-      const vel = dir.mul(k.mul(k).mul(flowSpeed)).add(u.gravity.mul(float(1).sub(k)));
+      const maxStep = min(u.texel.x, u.texel.y).mul(3);
+      // per-frame displacement of mobile water at p, in texels: airflow at
+      // speed, gravity when slow; capped at ~3 texels so drops stay drops
+      const dispAt = (p) => {
+        const dir = this._flowDir(p);
+        // a forward-facing lens has a stagnation point in the middle: water
+        // there lingers and beads, and is flung off faster toward the rim;
+        // on the canopy the stream is fast everywhere
+        const rr = length(p.sub(0.5).mul(vec2(u.aspect, 1)));
+        const lensSpeed = smoothstep(0.04, 0.75, rr).mul(1.7).add(0.35);
+        const flowSpeed = mix(lensSpeed, float(2.2), u.canopy);
+        const vel = dir.mul(k.mul(k).mul(flowSpeed)).add(u.gravity.mul(float(1).sub(k)));
+        const step = vel.mul(u.dt);
+        return step.mul(min(float(1), maxStep.div(length(step).max(1e-6)))).div(u.texel);
+      };
       const mob = (x) => smoothstep(u.stick, u.stick.mul(1.9).add(0.05), x);
       const m0 = mob(h);
-      // semi-Lagrangian transport of the mobile part, two taps back along
-      // the path: fast flow stretches a drop into a streak
-      const back = vel.mul(u.dt);
+      // Semi-Lagrangian transport of the mobile part: one tap back along the
+      // path. (A max over several taps along the path drew nicer streaks but
+      // is not conservative: drops grew by the extra path length every frame
+      // until the glass was one sheet.) The streak a running drop leaves is
+      // the trail channel below.
+      // Whole-texel steps: a fractional bilinear shift every frame would
+      // diffuse a bead flat within a second. Sub-texel motion (slow creep) is
+      // kept by stochastic rounding with one random offset per frame for the
+      // whole glass, so every texel of a drop moves together.
+      const inTex = dispAt(st);
+      const r01 = hash22(vec2(u.seed.mul(0.731), u.seed.mul(0.277).add(1.3)));
+      const back = floor(inTex.add(r01)).mul(u.texel);
+      // The airflow fans out from the stagnation point (divergent): advected
+      // as-is, every drop would be stretched over a growing area at full
+      // height, so water would multiply. Thin it by the local stretch instead
+      // (volume kept; stretched water drops below bead height and is stripped).
+      const tx = vec2(u.texel.x, 0), ty = vec2(0, u.texel.y);
+      const div = dispAt(st.add(tx)).x.sub(dispAt(st.sub(tx)).x)
+        .add(dispAt(st.add(ty)).y.sub(dispAt(st.sub(ty)).y)).mul(0.5);
+      // (never thickened where the flow converges: with whole-texel steps that
+      // compression is not exact, and any gain there compounds every frame)
+      const keep = clamp(float(1).sub(div), 0.5, 1);
       const inside = (q) => select(q.x.greaterThan(0).and(q.x.lessThan(1)).and(q.y.greaterThan(0)).and(q.y.lessThan(1)), float(1), float(0));
-      // four taps along the path: a fast run is stretched into a streak
-      // (max, not sum: the streak's length is bounded by the path, its
-      // water is not multiplied)
-      const tap = (f, w) => {
-        const q = st.sub(back.mul(f));
-        const hq = prev.sample(q).r;
-        return hq.mul(mob(hq)).mul(inside(q)).mul(w);
-      };
-      const arrive = max(max(tap(0.5, 1), tap(1, 1)), max(tap(1.6, 0.9), tap(2.2, 0.8)));
-      // what stays: beads cling; streaks thin out as they run (water is
-      // left behind in the trail)
-      let hn = h.mul(float(1).sub(m0)).add(arrive.mul(0.97));
+      const q1 = st.sub(back);
+      const hq = prev.sample(q1).r;
+      const arrive = hq.mul(mob(hq)).mul(inside(q1)).mul(keep);
+      // what stays: beads cling; running water thins a little as it goes
+      let hn = h.mul(float(1).sub(m0)).add(arrive.mul(0.99));
 
       // new drops: small (mist / drizzle) and big (rain), one candidate per cell
       const asp = vec2(u.aspect, 1);
@@ -124,7 +143,11 @@ export class ScreenWater {
         const g = st.mul(asp).mul(cells);
         rate = rate.div(u.aspect.mul(cells * cells));
         const cell = floor(g);
-        const r = hash12(cell.add(u.seed.mul(vec2(0.137, 0.719))));
+        // spawn test needs a well-resolved uniform: per-cell odds per frame
+        // are ~1e-4, and the sin-hash is quantised (~1/256 steps near 0), so
+        // with it every cell spawned at its floor rate and water never dried
+        const salt = float(cells * 7.31);
+        const r = fract(pcgHash(cell.x.add(cell.y.mul(173)).add(salt)).add(pcgHash(u.seed.add(salt.mul(13)))));
         const spawn = r.lessThan(rate.mul(u.dt));
         const ctr = hash22(cell.add(u.seed.mul(vec2(0.311, 0.173)))).mul(0.6).add(0.2);
         const rad = mix(float(rMin), float(rMax), hash12(cell.add(u.seed.mul(0.0911)).add(7.1)));
@@ -132,9 +155,13 @@ export class ScreenWater {
         const prof = sqrt(clamp(float(1).sub(d.mul(d)), 0, 1)).mul(amp);
         return select(spawn, prof, float(0));
       };
-      hn = hn.add(drop(30, u.rateSmall, 0.2, 0.4, 0.44));
+      hn = hn.add(drop(22, u.rateSmall, 0.2, 0.4, 0.55));
       hn = hn.add(drop(11, u.rateBig, 0.18, 0.36, 0.95));
-      hn = max(hn.sub(u.evap.mul(u.dt)), 0).min(1.6);
+      // the airflow strips the thin film below bead height that every
+      // moving drop leaves at its edges; otherwise that residue pools into
+      // one flat sheet whose edge reads as a contour line on the lens
+      const strip = float(1).sub(smoothstep(0.0, u.stick, hn)).mul(k).mul(0.5);
+      hn = max(hn.sub(u.evap.add(strip).mul(u.dt)), 0).min(1.6);
 
       // trail: wet film where water ran, dries over a few seconds
       const moving = max(h.mul(m0), arrive);
@@ -209,19 +236,23 @@ export class ScreenWater {
 export function waterShading(w, st, texel, aspect) {
   const c = w.sample(st);
   const e = texel.mul(1.5);
-  const hx1 = w.sample(st.add(vec2(e.x, 0))).r;
-  const hx0 = w.sample(st.sub(vec2(e.x, 0))).r;
-  const hy1 = w.sample(st.add(vec2(0, e.y))).r;
-  const hy0 = w.sample(st.sub(vec2(0, e.y))).r;
+  const sx1 = w.sample(st.add(vec2(e.x, 0)));
+  const sx0 = w.sample(st.sub(vec2(e.x, 0)));
+  const sy1 = w.sample(st.add(vec2(0, e.y)));
+  const sy0 = w.sample(st.sub(vec2(0, e.y)));
+  const hx1 = sx1.r, hx0 = sx0.r, hy1 = sy1.r, hy0 = sy0.r;
   const grad = vec2(hx1.sub(hx0), hy1.sub(hy0));
+  // the wet trail a running drop leaves is a thin rivulet: it bends light a
+  // little along its edges (its own gradient) and catches a glint
+  const tgrad = vec2(sx1.g.sub(sx0.g), sy1.g.sub(sy0.g));
   const h = c.r.add(hx1).add(hx0).add(hy1).add(hy0).div(5);
   const mask = smoothstep(0.1, 0.26, h);
   // a drop is a small fish-eye lens: it inverts and shrinks what is behind
-  // it (offset toward the drop's own gradient), trail film barely bends light
-  const offset = grad.mul(-0.065).mul(mask).add(grad.mul(-0.012).mul(c.g));
-  const n = normalize(vec3(grad.mul(vec2(-6, 6)), 1));
+  // it (offset toward the drop's own gradient)
+  const offset = grad.mul(-0.065).mul(mask).add(tgrad.mul(-0.03));
+  const n = normalize(vec3(grad.add(tgrad.mul(0.5)).mul(vec2(-6, 6)), 1));
   const L = normalize(vec3(-0.35, 0.6, 0.72));
-  const spec = max(dot(n, L), 0).pow(28).mul(mask);
+  const spec = max(dot(n, L), 0).pow(28).mul(max(mask, smoothstep(0.05, 0.2, c.g).mul(0.5)));
   // a thin dark meniscus only at the very edge of a bead (where it is
   // thin and steep); the body of the drop gathers light and reads brighter
   const g = length(grad);

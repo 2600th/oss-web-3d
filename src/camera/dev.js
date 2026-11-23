@@ -151,11 +151,12 @@ export function installCameraDev(game, sys) {
       return e;
     },
     async sun() {
-      save(); rig.setMode('chase');
-      cruise(1500);
-      await wait(1200);
-      game.env?.setSun?.(12, headingDeg() + 8);
-      await wait(1500);
+      save(); god(); rig.setMode('chase');
+      // straight and level (no autopilot turns) so the sun stays in frame
+      game.spawnAt({ x: -14000, z: 4000, alt: 5200, heading: 270, speed: 240 });
+      await wait(800);
+      game.env?.setSun?.(9, headingDeg() + 7);
+      await wait(1800);
     },
     async title() {
       reset();
@@ -164,7 +165,12 @@ export function installCameraDev(game, sys) {
     },
     async sortie() {
       reset();
-      game.flow.startMission(game.flow.selected ?? 'm1');
+      // through the briefing, as a player would (the intro only plays on
+      // briefing -> sortie, not on a dev ?mission= start or a resume)
+      const id = game.flow.selected ?? 'm1';
+      game.flow.selectMission(id);
+      await wait(300);
+      game.flow.startMission(id);
       await wait(400);
     },
   };

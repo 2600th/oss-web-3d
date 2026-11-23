@@ -14,9 +14,9 @@
  *   frost                0..1 ice rim (cold cloud at altitude)
  */
 export const WATER_DEFAULTS = Object.freeze({
-  mistRate: 55, // small drops per second over the glass, fully in cloud
-  rainSmall: 40,
-  rainBig: 8, // big drops per second in heavy rain
+  mistRate: 120, // small drops per second over the glass, fully in cloud
+  rainSmall: 110,
+  rainBig: 22, // big drops per second in heavy rain
   flowOnset: 35, // m/s: below this, drops only bead and slide with gravity
   flowFull: 190, // m/s: airflow streams everything back
   evap: 0.05,

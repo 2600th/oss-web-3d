@@ -92,7 +92,7 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
   const r8 = pow(abs(cos(ang.mul(4.0).add(0.6))), 260.0).mul(0.55);
   const fine = pow(abs(cos(ang.mul(23.0).add(1.7))), 30.0).mul(0.25);
   const vary = fract(sin(ang.mul(37.0).floor().mul(12.9898)).mul(43758.5453)).mul(0.6).add(0.4);
-  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-5.2))).mul(2.4).add(fine.mul(exp(dist.mul(-14))).mul(1.5));
+  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-7.5))).mul(1.5).add(fine.mul(exp(dist.mul(-16))).mul(1.2));
   out.addAssign(vec3(1.0, 0.95, 0.88).mul(rays));
 
   // anamorphic streak (cylindrical front element): a hair-thin hot core and
@@ -104,7 +104,7 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
 
   // halo ring around the sun, slightly chromatic
   const ring = (rad, w) => exp(dist.sub(rad).div(w).pow(2).negate());
-  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.09));
+  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.05));
 
   // ghosts along the sun -> centre axis (position = s * f, f < 0 is mirrored)
   const ghost = (f, size, tint, strength, hex) => {

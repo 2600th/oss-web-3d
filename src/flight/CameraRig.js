@@ -374,7 +374,16 @@ export class CameraRig {
       b.t += rdt;
       const k = easeInOut(b.t / b.dur);
       cam.position.lerpVectors(b.from.pos, cam.position, k);
-      _q.copy(b.from.quat).slerp(cam.quaternion, k);
+      if (RIDING.has(view) && flight) {
+        // returning to the jet: the in-between camera keeps looking at it
+        // (a plain slerp between two far-apart poses swings it off frame)
+        _m.lookAt(cam.position, flight.position, _u.set(0, 1, 0));
+        _q2.setFromRotationMatrix(_m);
+        if (k < 0.5) _q.copy(b.from.quat).slerp(_q2, easeInOut(k * 2));
+        else _q.copy(_q2).slerp(cam.quaternion, easeInOut(k * 2 - 1));
+      } else {
+        _q.copy(b.from.quat).slerp(cam.quaternion, k);
+      }
       cam.quaternion.copy(_q);
       fov = b.from.fov + (fov - b.from.fov) * k;
       shift = (b.from.shift ?? 0) + (shift - (b.from.shift ?? 0)) * k;

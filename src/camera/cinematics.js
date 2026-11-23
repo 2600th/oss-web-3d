@@ -238,9 +238,12 @@ export const CINEMATICS = {
       levelAxes(ctx.focus);
       const k = smoothstep(1.2, 2.6, t);
       out.position.copy(s.anchor).addScaledVector(_h, k * 60);
-      out.target.copy(ctx.focus.position).addScaledVector(_h, 8 + k * 40);
       const d = out.position.distanceTo(ctx.focus.position);
-      out.fov = clamp(12 + d * 0.07, 18, 55);
+      // lead the jet a little, never so much that it leaves the frame as it
+      // screams past (the pan is fastest abeam, where d is smallest)
+      out.target.copy(ctx.focus.position).addScaledVector(_h, Math.min(8 + k * 40, d * 0.2));
+      // frame ~24 m of jet and air around it: long lens far out, wide abeam
+      out.fov = clamp((2 * Math.atan(12 / Math.max(d, 1)) * 180) / Math.PI, 14, 60);
       out.roll = -0.04 * (1 - k);
       setDof(out, 0.7 * (1 - k), d, Math.max(25, d * 2));
     },
