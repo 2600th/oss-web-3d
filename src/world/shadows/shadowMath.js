@@ -59,9 +59,10 @@ export function cascadeSplits(count, near, far, lambda = 0.8, target = []) {
  * the camera that the shadow map covers (it fades out over the last quarter;
  * beyond it the terrain's own heightfield shadow and the cloud shadow remain).
  * `pcss` = contact-hardening soft shadows (WebGPU only: it reads raw depth).
+ * Without it the filter is a fixed disc of `fallbackRadius()` metres.
  */
 export const SUN_SHADOW_TIERS = {
-  low: { cascades: 2, mapSize: 1024, far: 260, lambda: 0.7, pcss: false, blocker: 0, taps: 0 },
+  low: { cascades: 2, mapSize: 1024, far: 260, lambda: 0.7, pcss: false, blocker: 0, taps: 8 },
   medium: { cascades: 3, mapSize: 2048, far: 520, lambda: 0.8, pcss: true, blocker: 8, taps: 12 },
   high: { cascades: 4, mapSize: 2048, far: 900, lambda: 0.82, pcss: true, blocker: 10, taps: 16 },
   ultra: { cascades: 4, mapSize: 4096, far: 1200, lambda: 0.82, pcss: true, blocker: 12, taps: 20 },
@@ -76,6 +77,19 @@ export function sunShadowConfig(tier = {}, backend = 'webgpu') {
   };
   if (backend !== 'webgpu') cfg.pcss = false; // the WebGL2 backend cannot load a compare-sampled depth texture
   return cfg;
+}
+
+/**
+ * Filter radius (m) when there is no blocker search (low tier, WebGL2): the
+ * penumbra half-width of a caster FALLBACK_SEPARATION metres above the ground.
+ * A fixed disc that size still fades the shadows of casters much thinner than
+ * it (guy wires, aerials) the way their missing umbra would, at the price of
+ * slightly soft contact shadows.
+ */
+export const FALLBACK_SEPARATION = 30;
+
+export function fallbackRadius(angularDiameterDeg = SUN_ANGULAR_DIAMETER, separation = FALLBACK_SEPARATION) {
+  return separation * penumbraSlope(angularDiameterDeg);
 }
 
 /** World size (m) of one shadow-map texel for an orthographic cascade `width` metres across. */

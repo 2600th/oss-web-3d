@@ -4,7 +4,9 @@ import {
 } from 'three/tsl';
 import { ShadowNode } from 'three/webgpu';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
-import { cascadeSplits, cascadeBias, penumbraSlope, sunShadowConfig, SUN_ANGULAR_DIAMETER, MOON_ANGULAR_DIAMETER } from './shadowMath.js';
+import {
+  cascadeSplits, cascadeBias, penumbraSlope, fallbackRadius, sunShadowConfig, SUN_ANGULAR_DIAMETER, MOON_ANGULAR_DIAMETER,
+} from './shadowMath.js';
 
 /**
  * Key-light (sun / moon) shadows: camera-fitted cascades with a physically
@@ -27,6 +29,10 @@ import { cascadeSplits, cascadeBias, penumbraSlope, sunShadowConfig, SUN_ANGULAR
  *    receiver, the mean blocker distance sets the penumbra radius
  *    (distance x tan(angular radius)) and a rotated Vogel-disc PCF of that radius
  *    averages hardware 2x2 compares. Thin, far casters fade by themselves.
+ *  - Filter without a blocker search (low tier, WebGL2, which cannot load a
+ *    compare-sampled depth texture): a rotated disc PCF of a fixed world radius
+ *    (shadowMath.fallbackRadius, ~0.14 m), so casters much thinner than that
+ *    (guy wires, aerials) still fade instead of drawing hard lines.
  *  - Bias per cascade from its texel size: normal offset ~1.5 texels and a
  *    half-texel depth bias, instead of one fixed 2 m depth bias (which detached
  *    every small shadow from its caster).
@@ -104,6 +110,26 @@ export function makePCSSFilter({ tanHalf, blocker = 10, taps = 16 }) {
       lit.assign(acc.div(taps));
     });
     return lit;
+  });
+}
+
+/**
+ * Fixed-size disc PCF (no blocker search): `radius` is a uniform in metres.
+ * Works on WebGL2 (compare samples only).
+ */
+export function makeDiscPCFFilter({ radius, taps = 12 }) {
+  return Fn(({ depthTexture, shadowCoord, shadow }) => {
+    const u = shadowUniforms(shadow);
+    const size = u.mapSize.x;
+    const texel = u.right.sub(u.left).div(size);
+    const r = clamp(radius.div(texel), MIN_TEXELS, MAX_TEXELS).div(size);
+    const phi = interleavedGradientNoise(screenCoordinate.xy).mul(6.28318530718);
+    const acc = float(0).toVar();
+    for (let i = 0; i < taps; i++) {
+      const uv = shadowCoord.xy.add(vogelDiskSample(i, taps, phi).mul(r));
+      acc.addAssign(texture(depthTexture, uv).compare(shadowCoord.z));
+    }
+    return acc.div(taps);
   });
 }
 
@@ -205,7 +231,10 @@ export function installSunShadows(light, camera, { tier, backend, layers = 1 }) 
   light.shadow.camera.far = cfg.depth;
 
   const tanHalf = uniform(penumbraSlope(SUN_ANGULAR_DIAMETER));
-  const filter = cfg.pcss ? makePCSSFilter({ tanHalf, blocker: cfg.blocker, taps: cfg.taps }) : null;
+  const radius = uniform(fallbackRadius(SUN_ANGULAR_DIAMETER));
+  const filter = cfg.pcss
+    ? makePCSSFilter({ tanHalf, blocker: cfg.blocker, taps: cfg.taps })
+    : makeDiscPCFFilter({ radius, taps: Math.min(cfg.taps || 12, 12) });
   const node = new SunCascades(light, camera, cfg, filter);
   light.shadow.shadowNode = node;
 
@@ -216,8 +245,11 @@ export function installSunShadows(light, camera, { tier, backend, layers = 1 }) 
     node,
     config: cfg,
     tanHalf,
+    radius,
     update(cam = camera, keyLight = 'sun') {
-      tanHalf.value = penumbraSlope(keyLight === 'moon' ? MOON_ANGULAR_DIAMETER : SUN_ANGULAR_DIAMETER);
+      const deg = keyLight === 'moon' ? MOON_ANGULAR_DIAMETER : SUN_ANGULAR_DIAMETER;
+      tanHalf.value = penumbraSlope(deg);
+      radius.value = fallbackRadius(deg);
       if (!node.camera) return; // not built yet
       if (Math.abs(cam.fov - fov) > 0.25 || cam.aspect !== aspect || cam.near !== near) {
         fov = cam.fov; aspect = cam.aspect; near = cam.near;
