@@ -37,7 +37,7 @@ export const MISSIONS = [
       east: { kind: 'base', kit: 'slate', near: { x: -30300, z: 2500 }, search: 900, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
         units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'aaa', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }, { type: 'manpads', count: 1, isTarget: false }] },
       west: { kind: 'base', kit: 'cinder', near: { x: -34200, z: 1900 }, search: 900, snap: 'ridge', name: 'STRONGPOINT', tags: ['m1_primary'], isTarget: true, kitHealth: 170,
-        units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'flak', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }] },
+        units: [{ type: 'sangar', count: 2, tags: ['m1_primary'], isTarget: true }, { type: 'aaa', count: 1, isTarget: false }, { type: 'tent', count: 2, isTarget: false }] },
       convoy: { kind: 'convoy', from: { x: -30000, z: 8000 }, heading: 280, length: 9500, count: 5, speed: 15, tags: ['m1_convoy'], isTarget: true },
       bandits: { kind: 'fighters', type: 'bandit', count: 2, at: { x: -41000, z: -12000, alt: 6300 }, heading: 140, tags: ['m1_air'], isTarget: true, aware: true },
     },

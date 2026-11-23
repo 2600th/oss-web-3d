@@ -12,7 +12,7 @@ import { alongPath, pathLength } from './sites.js';
 export const GROUND = {
   aaa:     { name: 'AA GUN',     health: 55,  armor: 'medium', radius: 7,  score: 150, behaviour: 'aaa', range: 2500 },
   flak:    { name: 'FLAK',       health: 85,  armor: 'medium', radius: 8,  score: 200, behaviour: 'flak', range: 5000, minRange: 900 },
-  manpads: { name: 'SAM TEAM',   health: 28,  armor: 'soft',   radius: 6,  score: 200, behaviour: 'manpads', range: 3800, minRange: 500, lockTime: 3.0, reload: 16, weapon: 'e_manpads' },
+  manpads: { name: 'SAM TEAM',   health: 28,  armor: 'soft',   radius: 6,  score: 200, behaviour: 'manpads', range: 3800, minRange: 500, lockTime: 3.0, reload: 16, weapon: 'e_manpads', rounds: 3 },
   sam:     { name: 'SAM SITE',   health: 95,  armor: 'medium', radius: 9,  score: 350, behaviour: 'sam', range: 8500, minRange: 1400, lockTime: 4.2, reload: 15, weapon: 'e_sam', radarFloor: 150 },
   radar:   { name: 'RADAR',      health: 70,  armor: 'medium', radius: 9,  score: 300 },
   bunker:  { name: 'BUNKER',     health: 260, armor: 'hard',   radius: 12, score: 300 },
@@ -91,6 +91,8 @@ export class GroundUnit {
     this.tracking = false;
     this.idle = 0;
     this.bursts = 0;
+    /** Missiles left (a shoulder-launch team carries a few; a SAM site reloads). */
+    this.rounds = d.rounds ?? Infinity;
   }
 
   update(dt, ctx) {
@@ -196,7 +198,7 @@ export class GroundUnit {
     const d = this.def;
     const p = ctx.player;
     this.timer -= dt;
-    let can = engaged && this.timer <= 0;
+    let can = engaged && this.timer <= 0 && this.rounds > 0;
     const radarGuided = d.weapon === 'e_sam';
     if (can && radarGuided) {
       // Needs its radar, and cannot see under the radar floor.
@@ -209,6 +211,7 @@ export class GroundUnit {
     this.locking = true;
     if (this.lock < d.lockTime / diff.aggression) return;
     this.lock = 0;
+    this.rounds--;
     this.timer = (d.reload * (0.85 + this.rng() * 0.3)) / diff.aggression;
     _muzzle.copy(this.entity.position); _muzzle.y += 4;
     _v.subVectors(p.position, _muzzle).normalize();

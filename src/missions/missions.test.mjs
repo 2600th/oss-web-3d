@@ -164,7 +164,7 @@ test('score: bonuses only on completion, time bonus falls from par to the limit'
   const failed = computeScore({ ...base, completed: false, time: 200 });
   assert.equal(failed.total, 5000);
   const fast = computeScore({ ...base, completed: true, time: 250 });
-  assert.deepEqual(fast.breakdown, { targets: 4000, bonuses: 1000, time: 3000, accuracy: 750, survival: 1200 });
+  assert.deepEqual(fast.breakdown, { targets: 4000, bonuses: 1000, time: 3000, accuracy: 750, survival: 1200, difficulty: 0 });
   assert.equal(computeScore({ ...base, completed: true, time: 600 }).breakdown.time, 1500);
   assert.equal(computeScore({ ...base, completed: true, time: 900 }).breakdown.time, 0);
   assert.equal(computeScore({ ...base, completed: true, time: 250, health: 1, damageTaken: 0 }).breakdown.survival, 2000);
