@@ -2,6 +2,9 @@
  * Quality tiers. Every system reads its budget from here so a tier change is
  * one switch. `ultra` targets a desktop discrete GPU at 1440p/60+; `low` targets
  * integrated GPUs and phones, including the WebGL2 fallback backend.
+ *
+ * `ssao`: near-field GTAO on indirect light (src/fx/post/ambientOcclusion.js);
+ * WebGPU only, sized per tier in src/fx/post/config.js (`ao`).
  */
 export const QUALITY = {
   low: {
@@ -12,7 +15,9 @@ export const QUALITY = {
   medium: {
     name: 'medium', maxPixelRatio: 1.25, shadowMapSize: 2048, shadowCascades: 3,
     terrainGrid: 128, terrainLevels: 10, cloudSteps: 48, cloudScale: 0.35,
-    particlesMax: 60000, bloom: true, motionBlur: true, ssao: false, taa: true,
+    // [realism] ssao on medium is the cheap variant (aircraft and units only,
+    // 160 m, 8 samples; src/fx/post/config.js): under 0.07 ms at 1440p
+    particlesMax: 60000, bloom: true, motionBlur: true, ssao: true, taa: true,
   },
   high: {
     name: 'high', maxPixelRatio: 1.5, shadowMapSize: 2048, shadowCascades: 4,

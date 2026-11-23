@@ -20,6 +20,7 @@ import { EXPOSURE_DEFAULTS, targetExposureEV, adaptLog2, evToMultiplier } from '
 import { motionBlurParams } from '../fx/post/motionParams.js';
 import { createLensDirtTexture, createFrostTexture } from '../fx/post/textures.js';
 import { NearFieldAO } from '../fx/post/ambientOcclusion.js';
+import { createGodRays, godRayStrength } from '../fx/post/godRays.js';
 
 const _v = new THREE.Vector3();
 /** Auto-exposure metering interval in frames (15 Hz at 60 fps). */
@@ -74,6 +75,8 @@ export class PostFX {
       speedStreaks: true,
       /** depth of field in cinematic / kill cams (camera system drives the amount) */
       dof: true,
+      /** [realism] crepuscular rays: null = automatic (low sun near the frame), or a fixed strength (0 = off) */
+      godRays: null,
       exposure: { ...EXPOSURE_DEFAULTS },
     };
 
@@ -119,6 +122,8 @@ export class PostFX {
       // depth of field
       dofAmount: u(0), dofFocus: u(50), dofFocal: u(30), dofBokeh: u(1.5),
       seed: u(0),
+      // [realism] low-sun crepuscular rays (src/fx/post/godRays.js); strength written per frame
+      godRays: u(0), godRayFloor: u(1.2), godRayCap: u(6), godRayDecay: u(0.985), godRayAir: u(9000),
     };
 
     /**
@@ -316,6 +321,21 @@ export class PostFX {
     this._vis = visNode;
     const vis = visNode.x; // 1x1 target: the node's own uv() samples the only texel
 
+    // --- [realism] low-sun crepuscular rays (skipped while their strength is 0) --
+    this._rays = null;
+    if (cfg.godRays) {
+      const g = createGodRays({
+        color: hdr, depth, sunUV: u.sunUV, exposure: u.exposure, aspect: u.aspect, near: u.near, far: u.far,
+        samples: cfg.godRays.samples, scale: cfg.godRays.scale,
+        u: { floor: u.godRayFloor, cap: u.godRayCap, decay: u.godRayDecay, airLength: u.godRayAir },
+      });
+      for (const node of [g.mask, g]) {
+        const run = node.updateBefore.bind(node);
+        node.updateBefore = (frame) => { if (u.godRays.value > 0.001) run(frame); };
+      }
+      this._rays = g;
+    }
+
     // --- screen water (GPU sim, updated in render() before the pipeline) ---
     if (cfg.water) {
       const [ww, wh] = cfg.water;
@@ -434,6 +454,8 @@ export class PostFX {
       x = x.add(vec3(luminance(x).mul(0.22).add(0.015)).mul(st).mul(u.streaks));
     }
 
+    if (this._rays) x = x.add(this._rays.sample(uv0).rgb.mul(u.godRays));
+
     if (cfg.flare) {
       const amount = vis.mul(u.sunAmount);
       x = x.add(sunFlare(uv0, u.sunUV, aspect, amount, u.flareRot));
@@ -461,6 +483,7 @@ export class PostFX {
     let keep = float(0);
     for (const k of keepList) keep = keep.add(keepAlive(k));
     if (this._dof) keep = keep.add(keepAlive(this._dof));
+    if (this._rays) keep = keep.add(keepAlive(this._rays));
     let out = renderOutput(vec4(vec3(keep).add(ldr), 1), THREE.NoToneMapping, THREE.SRGBColorSpace);
     if (cfg.aa === 'fxaa') out = fxaa(out);
     else if (cfg.aa === 'smaa') out = smaa(out);
@@ -476,6 +499,7 @@ export class PostFX {
     else if (this.debugView === 'exposure') out = vec4(vec3(meter1.sample(uv0).x.div(meter1.sample(uv0).y.max(1e-4)).add(8).div(16)), 1);
     else if (this.debugView === 'flare') out = vec4(sunFlare(uv0, u.sunUV, aspect, select(vis.greaterThan(0), float(1), float(0.2)), u.flareRot), 1);
     else if (this.debugView === 'bloom' && bloomTex) out = vec4(bloomTex.rgb.mul(u.exposure), 1);
+    else if (this.debugView === 'rays' && this._rays) out = vec4(this._rays.sample(uv0).rgb, 1);
     else if (this.debugView === 'ao' && this.ao) out = vec4(vec3(texture(this.ao.gtao._aoRenderTarget.texture).sample(uv0).r), 1);
     // 'passthrough': scene (+ stages) tone-mapped only — the A/B baseline for timing the chain
     else if (this.debugView === 'passthrough') out = renderOutput(vec4(color.rgb.mul(u.exposure), 1), THREE.AgXToneMapping, THREE.SRGBColorSpace);
@@ -558,6 +582,11 @@ export class PostFX {
       u.flareRot.value = (sx * 0.9 + sy * 0.5);
     }
     u.sunAmount.value = amount;
+    // [realism] crepuscular rays: low sun, on or near the screen, sun as key light
+    const gr = this.cfg?.godRays;
+    const forced = this.options.godRays;
+    u.godRays.value = !gr ? 0 : forced != null ? forced
+      : sun ? godRayStrength(Math.asin(Math.min(1, Math.max(-1, sun.y))) * 57.29578, amount, gr.gain) : 0;
   }
 
   _updateExposure(dt) {

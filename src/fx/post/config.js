@@ -15,31 +15,35 @@
  *            WebGPU only: { far (m), samples, scale (of the drawing buffer),
  *            terrain (the terrain enters the prepass within `far`) } | null.
  *            Gated by the Quality tier's `ssao` flag; `?noao` turns it off.
+ * godRays:   low-sun screen-space crepuscular rays (src/fx/post/godRays.js):
+ *            { samples, scale, gain } | null. `?norays` turns them off.
  */
 export const POST_TIERS = {
   low: {
     aa: 'fxaa', mbSamples: 0, mbTile: 16, bloom: true, bloomRadius: 0.5, sharpen: 0,
     flare: true, flareGrid: 4, dirt: false, chromatic: 0, grain: 0.6,
     meter: [32, 18], water: [320, 180], dof: false, streaks: true,
-    ao: null,
+    ao: null, godRays: null,
   },
   medium: {
     aa: 'traa', mbSamples: 10, mbTile: 24, bloom: true, bloomRadius: 0.55, sharpen: 0.4,
     flare: true, flareGrid: 6, dirt: true, chromatic: 0.7, grain: 1,
     meter: [64, 36], water: [400, 225], dof: true, streaks: true,
-    ao: { far: 160, samples: 8, scale: 0.5, terrain: false },
+    ao: { far: 160, samples: 8, scale: 0.5, terrain: false }, godRays: null,
   },
   high: {
     aa: 'traa', mbSamples: 14, mbTile: 32, bloom: true, bloomRadius: 0.6, sharpen: 0.5,
     flare: true, flareGrid: 8, dirt: true, chromatic: 1, grain: 1,
     meter: [64, 36], water: [480, 270], dof: true, streaks: true,
     ao: { far: 400, samples: 12, scale: 0.5, terrain: true },
+    godRays: { samples: 40, scale: 0.25, gain: 0.5 },
   },
   ultra: {
     aa: 'traa', mbSamples: 18, mbTile: 40, bloom: true, bloomRadius: 0.6, sharpen: 0.5,
     flare: true, flareGrid: 8, dirt: true, chromatic: 1, grain: 1,
     meter: [64, 36], water: [640, 360], dof: true, streaks: true,
     ao: { far: 600, samples: 16, scale: 0.5, terrain: true },
+    godRays: { samples: 48, scale: 0.35, gain: 0.5 },
   },
 };
 
@@ -58,5 +62,6 @@ export function postConfig(tier) {
   if (q?.has('nowater')) cfg.water = null;
   if (q?.has('nodof')) cfg.dof = false;
   if (q?.has('noao')) cfg.ao = null;
+  if (q?.has('norays')) cfg.godRays = null;
   return cfg;
 }
