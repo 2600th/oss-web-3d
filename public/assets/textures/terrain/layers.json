@@ -1,0 +1,98 @@
+{
+  "size": 1024,
+  "layers": [
+    {
+      "name": "scree",
+      "source": "https://polyhaven.com/a/dry_ground_rocks",
+      "id": "dry_ground_rocks",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 4,
+      "meanAlbedoLinear": [
+        0.3161,
+        0.1852,
+        0.0859
+      ]
+    },
+    {
+      "name": "rock",
+      "source": "https://polyhaven.com/a/rock_face_03",
+      "id": "rock_face_03",
+      "authors": [
+        "Dario Barresi",
+        "Rico Cilliers"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 2.7,
+      "meanAlbedoLinear": [
+        0.2326,
+        0.1456,
+        0.0837
+      ]
+    },
+    {
+      "name": "strata",
+      "source": "https://polyhaven.com/a/cliff_side",
+      "id": "cliff_side",
+      "authors": [
+        "James Ray Cock",
+        "Jenelle van Heerden",
+        "Dario Barresi"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 1.83,
+      "meanAlbedoLinear": [
+        0.213,
+        0.0918,
+        0.034
+      ]
+    },
+    {
+      "name": "snow",
+      "source": "https://polyhaven.com/a/snow_02",
+      "id": "snow_02",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 2,
+      "meanAlbedoLinear": [
+        0.3791,
+        0.3785,
+        0.3886
+      ]
+    },
+    {
+      "name": "grass",
+      "source": "https://polyhaven.com/a/grass_ground",
+      "id": "grass_ground",
+      "authors": [
+        "Charlotte Baglioni"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 2.51,
+      "meanAlbedoLinear": [
+        0.1585,
+        0.119,
+        0.0491
+      ]
+    },
+    {
+      "name": "gravel",
+      "source": "https://polyhaven.com/a/ganges_river_pebbles",
+      "id": "ganges_river_pebbles",
+      "authors": [
+        "Amal Kumar"
+      ],
+      "licence": "CC0-1.0",
+      "sizeMetres": 2.16,
+      "meanAlbedoLinear": [
+        0.2326,
+        0.1956,
+        0.1554
+      ]
+    }
+  ]
+}

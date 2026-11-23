@@ -1,6 +1,6 @@
 {
   "id": "kargil-drass-batalik-srtm1",
-  "resolution": 2049,
+  "resolution": 3073,
   "geographicBounds": {
     "west": 75.6,
     "east": 76.58,
@@ -8,23 +8,115 @@
     "north": 34.9
   },
   "worldSize": [
-    89906.89277105509,
+    89906.8927710551,
     88459.19999999969
   ],
   "worldBounds": {
-    "minX": -44953.446385527546,
-    "maxX": 44953.446385527546,
+    "minX": -44953.44638552755,
+    "maxX": 44953.44638552755,
     "minZ": -44229.599999999846,
     "maxZ": 44229.599999999846
   },
   "cellMetres": [
-    43.899849985866744,
-    43.19296874999985
+    29.2665666572445,
+    28.7953124999999
   ],
-  "heightMin": 2479,
-  "heightMax": 5947,
+  "heightMin": 2487,
+  "heightMax": 5949,
   "voidsFilled": 0,
-  "sha256": "7c8345f1844c85789e5299a3a267fae26e6177a32fc523a74edb7712e06451f0",
+  "packs": [
+    {
+      "id": "hi",
+      "file": "kargil-hi.stp",
+      "bytes": 9246025,
+      "resolution": 3073,
+      "cellMetres": [
+        29.2665666572445,
+        28.7953124999999
+      ],
+      "heightMin": 2487,
+      "heightMax": 5949,
+      "sha256": "4c192aa0f5eeba5c9877f543abf2790ae53327c5f182d7ae20f1b5e8d6470cb6"
+    },
+    {
+      "id": "lo",
+      "file": "kargil-lo.stp",
+      "bytes": 4850099,
+      "resolution": 2049,
+      "cellMetres": [
+        43.89984998586675,
+        43.19296874999985
+      ],
+      "heightMin": 2487,
+      "heightMax": 5950,
+      "sha256": "52f4bbafed544275665237eb004d9aa5032aa3001116e4f42831ee04a050a602"
+    }
+  ],
+  "rivers": {
+    "thresholdKm2": 28,
+    "polylines": 86,
+    "lengthKm": 941,
+    "inflows": [
+      {
+        "name": "Indus",
+        "lon": 76.58,
+        "lat": 34.5573,
+        "areaKm2": 60000,
+        "height": 2764
+      },
+      {
+        "name": "Suru",
+        "lon": 75.9496,
+        "lat": 34.1,
+        "areaKm2": 2400,
+        "height": 3238
+      },
+      {
+        "name": "Shingo",
+        "lon": 75.6,
+        "lat": 34.6432,
+        "areaKm2": 3500,
+        "height": 3241
+      },
+      {
+        "name": "Drass",
+        "lon": 75.6,
+        "lat": 34.3995,
+        "areaKm2": 260,
+        "height": 3208
+      }
+    ],
+    "landmarks": [
+      {
+        "name": "Drass town (Drass river)",
+        "lon": 75.76,
+        "lat": 34.43,
+        "catchmentKm2": 728,
+        "widthM": 46
+      },
+      {
+        "name": "Kargil (Suru)",
+        "lon": 76.126,
+        "lat": 34.557,
+        "catchmentKm2": 6094,
+        "widthM": 60
+      },
+      {
+        "name": "Kaksar (Shingo)",
+        "lon": 75.93,
+        "lat": 34.6,
+        "catchmentKm2": 4819,
+        "widthM": 58
+      },
+      {
+        "name": "Batalik (Indus)",
+        "lon": 76.33,
+        "lat": 34.63,
+        "catchmentKm2": 60979,
+        "widthM": 75
+      }
+    ]
+  },
   "attribution": "SRTM 1-arcsecond via Mapzen terrain tiles (AWS Open Data); courtesy USGS/NASA.",
   "sources": [
     "https://elevation-tiles-prod.s3.amazonaws.com/skadi/N34/N34E075.hgt.gz",
