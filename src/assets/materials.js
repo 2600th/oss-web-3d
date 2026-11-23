@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
-  texture, uv, float, vec3, clamp, luminance, mix, normalView, positionViewDirection, dot, pow, oneMinus,
-  positionLocal, mx_noise_float, bumpMap, smoothstep, lights,
+  texture, uv, float, int, vec3, vec4, clamp, luminance, mix, normalView, positionViewDirection, dot, pow, oneMinus,
+  positionLocal, normalLocal, mx_noise_float, bumpMap, smoothstep, lights,
 } from 'three/tsl';
 
 /**
@@ -29,6 +29,39 @@ import {
 
 const converted = new WeakMap(); // source material -> node material (per recipe key)
 const originals = new WeakMap(); // mesh -> the material it had before any upgrade
+
+// [textures] Texture filtering. GLTFLoader leaves every texture at anisotropy
+// 1, so the skin, the cockpit consoles and every unit atlas blurred to mush at
+// grazing angles (wing tops from the chase camera, side consoles from the
+// seat). The assets system sets the device maximum (configureAssets); `low`
+// stays at 4.
+const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'specularIntensityMap', 'specularColorMap', 'alphaMap'];
+let maxAnisotropy = 8;
+/** Anisotropic filtering applied to model textures from now on (clamped to >= 1). */
+export function setTextureAnisotropy(n) { maxAnisotropy = Math.max(1, n | 0); }
+function filterTextures(m, tier) {
+  const a = tier === 'low' ? Math.min(4, maxAnisotropy) : maxAnisotropy;
+  for (const k of TEX_SLOTS) {
+    const t = m[k];
+    if (!t?.isTexture || t.anisotropy === a) continue;
+    t.anisotropy = a;
+    t.needsUpdate = true;
+  }
+}
+
+/**
+ * Albedo with a light unsharp mask against a blurrier mip of itself: the MiG
+ * atlases are 1024 px for the whole airframe, so in a close chase shot every
+ * texel is magnified 5-10x and panel lines, stencils and the roundel rims went
+ * soft. Edges regain contrast; flat paint is unchanged. One extra fetch.
+ */
+function sharpenedColor(m, amount) {
+  const map = m.map;
+  const t = texture(map, uv(map.channel ?? 0));
+  const soft = texture(map, uv(map.channel ?? 0)).bias(float(1.6));
+  const rgb = clamp(t.rgb.add(t.rgb.sub(soft.rgb).mul(amount)), 0, 1);
+  return vec4(rgb.mul(vec3(m.color.r, m.color.g, m.color.b)), t.a);
+}
 
 const COPY = [
   'name', 'map', 'lightMap', 'lightMapIntensity', 'aoMap', 'aoMapIntensity', 'emissiveIntensity', 'emissiveMap',
@@ -128,11 +161,22 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
           return g;
         }
         const m = toNodeMaterial(src, rich && !INTERIOR.test(o.name) ? THREE.MeshPhysicalNodeMaterial : THREE.MeshStandardNodeMaterial);
+        filterTextures(m, tier);
+        if (/pitot/.test(o.name)) {
+          // [textures] the source ships this nose sensor with the exporter's
+          // missing-texture magenta (1, 0, 1); a dark grey metal fitting
+          m.color.setRGB(0.12, 0.12, 0.13);
+          m.metalness = 0.6;
+          m.roughness = 0.45;
+          return m;
+        }
         if (INTERIOR.test(o.name)) {
           m.roughness = 0.7;
           m.metalness = 0.05;
+          if (!low && m.map) m.colorNode = sharpenedColor(m, 0.35); // [textures]
           return m;
         }
+        if (!low && m.map) m.colorNode = sharpenedColor(m, role === 'player' ? 0.55 : 0.4); // [textures]
         // painted metal skin
         m.metalness = role === 'hostile' ? 0.22 : 0.18;
         m.roughness = 0.44;
@@ -172,6 +216,16 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
 // ------------------------------------------------------------------ ground units
 
 /**
+ * [textures] Detail source for ground units: a texture array layer and its mean
+ * luminance (the terrain's ground layers, so it costs no download). Set by the
+ * assets system before models load; until then units keep the noise-only recipe.
+ */
+let detail = null;
+export function setGroundDetail(d) {
+  detail = d?.albedo ? { albedo: d.albedo, layer: d.layer ?? 0, meanLum: d.meanLum ?? 0.18 } : null;
+}
+
+/**
  * Ground props / units: node materials with a procedural detail normal and a
  * low-frequency albedo breakup (object space, so it sticks to the model).
  */
@@ -185,18 +239,37 @@ export function upgradeGroundMaterials(root, { tier = 'high', env = null } = {})
       if (!src || src.isNodeMaterial || !src.isMeshStandardMaterial) return src;
       return memo(src, key, () => {
         const m = toNodeMaterial(src, THREE.MeshStandardNodeMaterial);
+        filterTextures(m, tier);
         if (low || src.userData?.noDetail) return m;
         const burned = !!src.userData?.burned;
         const p = positionLocal;
         // two octaves of 3D noise: fine (pitting, weld seams, stone grain) + medium (dents)
         const fine = mx_noise_float(p.mul(burned ? 9 : 6.5));
         const mid = mx_noise_float(p.mul(1.7).add(vec3(3.1, 7.7, 1.3)));
-        const height = fine.mul(0.35).add(mid.mul(0.65));
+        let height = fine.mul(0.35).add(mid.mul(0.65));
+        // [textures] Real grain: the terrain's scree photograph, triplanar in
+        // object space at 0.45 m, as luminance only. It roughens canvas, sandbags
+        // and stone into weathered surfaces and gives painted metal a dusty
+        // mottle (half strength where the ORM map says metal). Without it the
+        // baked atlases (no normal map, ~2 cm texels) read as flat plastic in the
+        // recon optic and from a low pass.
+        let grain = null;
+        if (detail?.albedo) {
+          const S = 0.45;
+          const w = pow(normalLocal.abs(), vec3(4));
+          const wn = w.div(w.x.add(w.y).add(w.z));
+          const at = (q) => luminance(texture(detail.albedo, q.div(S)).depth(int(detail.layer)).rgb);
+          const lum = at(p.zy).mul(wn.x).add(at(p.xz).mul(wn.y)).add(at(p.xy).mul(wn.z));
+          const metal = m.metalnessMap ? texture(m.metalnessMap, uv()).b : float(m.metalness);
+          grain = lum.div(detail.meanLum).sub(1).mul(mix(float(1), float(0.45), metal));
+          height = height.add(grain.mul(2.2));
+        }
         m.normalNode = bumpMap(height, float(burned ? 0.06 : 0.035));
         // faint dust/fade breakup over a few metres, darker low down
         const breakup = mx_noise_float(p.mul(0.45).add(vec3(11, 2, 5))).mul(0.5).add(0.5);
         const low01 = smoothstep(0.0, 1.2, p.y);
-        const tint = mix(float(0.86), float(1.06), breakup).mul(mix(float(0.9), float(1), low01));
+        let tint = mix(float(0.86), float(1.06), breakup).mul(mix(float(0.9), float(1), low01));
+        if (grain) tint = tint.mul(clamp(grain.mul(0.55).add(1), 0.6, 1.3));
         const col = vec3(m.color.r, m.color.g, m.color.b);
         m.colorNode = m.map ? texture(m.map, uv()).rgb.mul(col).mul(tint) : col.mul(tint);
         return m;

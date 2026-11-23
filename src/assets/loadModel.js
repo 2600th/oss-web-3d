@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { CATALOG } from './catalog.js';
-import { upgradeAircraftMaterials, upgradeGroundMaterials } from './materials.js';
+import { upgradeAircraftMaterials, upgradeGroundMaterials, setTextureAnisotropy } from './materials.js';
 
 /**
  * Asset loading for everything in src/assets/catalog.js.
@@ -158,14 +158,16 @@ export async function loadModel(id, { lod = 0, burned = false, castShadow = true
 
 /**
  * Runtime context for the material recipes (src/assets/materials.js): quality
- * tier and the Environment (cloud shadows). Set by the assets system at init;
+ * tier, the Environment (cloud shadows) and the anisotropic filtering level
+ * for model textures. Set by the assets system at init;
  * until then (or with `materials: false`) models keep their GLB materials.
  */
 const config = { tier: 'high', env: null, materials: true };
-export function configureAssets({ tier, env, materials } = {}) {
+export function configureAssets({ tier, env, materials, anisotropy } = {}) {
   if (tier) config.tier = tier;
   if (env) config.env = env;
   if (materials !== undefined) config.materials = materials;
+  if (anisotropy) setTextureAnisotropy(anisotropy); // [textures] model texture filtering (device max)
   return config;
 }
 
