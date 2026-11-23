@@ -498,8 +498,11 @@ async function buildSkin({ rec, baseBuf, normalBuf, specBuf, bw, bh, up, native,
     if (!cov[i]) { rough[i] = ro; metal[i] = mm * 0.9; continue; }
     const px = pos[i * 3], py = pos[i * 3 + 1], pz = pos[i * 3 + 2];
     const nx = nrm[i * 3], ny = nrm[i * 3 + 1], nz = nrm[i * 3 + 2];
-    const a = ao[i];
+    let a = ao[i];
     const rad = Math.hypot(px, py - AXIS_Y);
+    // Inside the jet pipe the bare metal walls light each other: the geometric
+    // occlusion (near zero) would leave a black disc in the middle of the chase view.
+    if (pz > 5.2 && rad < 0.6 && a < 0.4) { a = 0.6; ao[i] = 0.5; }
 
     // 1. panel tone and gloss; repainted patches
     if (P.tone > 0 && paint > 0) {

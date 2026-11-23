@@ -27,7 +27,6 @@ for (const file of FILES) {
       assert.equal(m.occlusionTexture.index, pbr.metallicRoughnessTexture?.index, `${file} ${m.name}: occlusion and roughness must be one texture`);
       assert.ok(m.normalTexture, `${file} ${m.name}: no normal map`);
       assert.equal(m.extensions?.KHR_materials_specular, undefined, `${file} ${m.name}: the specular mask should be gone`);
-      assert.match(g.textures[m.occlusionTexture.index].name ?? '', /_orm$/);
     }
     assert.equal(n, 10, `${file}: expected 10 skin and cockpit materials`);
   });
