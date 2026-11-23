@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { Fn, float, positionWorld, uniform } from 'three/tsl';
 import { Atmosphere } from './atmosphere/Atmosphere.js';
 import { Clouds } from './clouds/Clouds.js';
+import { TimeOfDay } from './timeofday/TimeOfDay.js'; // [timeofday]
 
 /**
  * Sky, sun, ambient, aerial perspective and volumetric clouds.
@@ -18,6 +19,11 @@ import { Clouds } from './clouds/Clouds.js';
  *   setSun(elevDeg, azDeg)
  *   update(dt, camera, focus)
  *   atmosphere, clouds   the subsystems (uniforms under .u for live tuning)
+ *
+ * [timeofday] Time of day, moon, stars and night lighting are installed by
+ * ./timeofday/TimeOfDay.js (setTimeOfDay, timeScale, timePresets, solarDirection,
+ * moonDirection, moonPhase, keyLight, night, exposureHint). `sunDirection` / `sun`
+ * are the *key light*: the sun by day, the moon at night.
  */
 
 export const PRESETS = {
@@ -94,6 +100,10 @@ export class Environment {
     this._lightAltitude = -1e9;
     this._dirty = true;
 
+    // [timeofday] clock, ephemeris, night sky; adds its radiance to the sky dome
+    // and the reflection environment built above.
+    this.timeOfDay = new TimeOfDay(this, { tier: tier.name, low, sky: !params.has('nonight') });
+
     this.setPreset(params.get('preset') && PRESETS[params.get('preset')] ? params.get('preset') : 'default');
   }
 
@@ -104,17 +114,33 @@ export class Environment {
     const az = THREE.MathUtils.degToRad(azimuthDeg);
     // azimuth from north (-Z) clockwise toward east (+X)
     this.sunDirection.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
+    // [timeofday] an explicit sun position takes the sun off the clock
+    this.solarDirection?.copy(this.sunDirection);
+    this.timeOfDay?.manualSun();
     this._dirty = true;
   }
+
+  /**
+   * [timeofday] Rebuild lights and ambient on the next update; with
+   * `environment` (default) also the PMREM reflection map, which costs ~10 ms.
+   */
+  invalidate(environment = true) { if (environment) this._dirty = true; else this._lightsDirty = true; }
 
   /**
    * Weather + time-of-day preset. Options override individual fields, e.g.
    * setPreset('default', { coverage: 0.7 }).
    */
   setPreset(name, overrides = {}) {
+    // [timeofday] names that only exist as times of day (dawn, afternoon, dusk,
+    // night, moonlit-night): default weather + that clock time.
+    if (!PRESETS[name] && this.timeOfDay?.presets[name]) {
+      this.timeOfDay.set(name);
+      this.preset = name;
+      return this.timeOfDay.presets[name];
+    }
     const p = { ...(PRESETS[name] ?? PRESETS.default), ...overrides };
     this.preset = PRESETS[name] ? name : 'default';
-    this.setSun(p.sun[0], p.sun[1]);
+    if (p.sun) this.setSun(p.sun[0], p.sun[1]); // [timeofday] sun: null = weather only
     this.atmosphere.setHaze(p.haze);
     this.exposureScale = p.exposure;
     this._envTintScalar = p.envTint;
@@ -156,11 +182,13 @@ export class Environment {
   _updateLights(altitude) {
     const atm = this.atmosphere;
     const e = atm.sunIrradianceAt(altitude);
+    const amb = atm.ambientAt(altitude);
+    // [timeofday] at night the moon is the key light; the night sky adds to the ambient
+    this.timeOfDay?.shade(altitude, e, amb, true);
     const m = Math.max(e[0], e[1], e[2], 1e-4);
     this.sun.color.setRGB(e[0] / m, e[1] / m, e[2] / m);
     this.sun.intensity = m;
 
-    const amb = atm.ambientAt(altitude);
     const up = Math.max(this.sunDirection.y, 0);
     const vis = this.clouds ? 0.35 + 0.65 * this.sunVisibility : 1;
     const ground = GROUND_ALBEDO.map((a, i) => a * (e[i] * up * vis + amb.irradiance[i]) / Math.PI);
@@ -182,6 +210,7 @@ export class Environment {
       const ec = atm.sunIrradianceAt(7200);
       u.sunE.value.set(ec[0], ec[1], ec[2]);
       const ac = atm.ambientAt(7200);
+      this.timeOfDay?.shade(7200, ec, ac, false); // [timeofday] moonlit clouds
       // Radiance arriving from above (sky) and from below (ground + horizon haze).
       u.ambTop.value.set(ac.zenith[0] * 0.6 + ac.horizon[0] * 0.4, ac.zenith[1] * 0.6 + ac.horizon[1] * 0.4, ac.zenith[2] * 0.6 + ac.horizon[2] * 0.4);
       u.ambBot.value.set(ground[0] * 0.8 + ac.horizon[0] * 0.3, ground[1] * 0.8 + ac.horizon[1] * 0.3, ground[2] * 0.8 + ac.horizon[2] * 0.3);
@@ -200,13 +229,16 @@ export class Environment {
   /** Keep the shadow frustum on the focus (usually the player aircraft). */
   update(dt, camera, focus = camera.position) {
     const atm = this.atmosphere;
+    this.timeOfDay?.update(dt, camera); // [timeofday] moves solarDirection / sunDirection
     this.sky.position.copy(camera.position);
     this.sun.target.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(this.sunDirection, 2000);
-    atm.u.sunDir.value.copy(this.sunDirection);
+    // [timeofday] the atmosphere is lit by the true sun even while the moon is the key light
+    atm.u.sunDir.value.copy(this.solarDirection ?? this.sunDirection);
 
     const alt = camera.position.y;
-    if (this._dirty || Math.abs(alt - this._lightAltitude) > 150) {
+    if (this._dirty || this._lightsDirty || Math.abs(alt - this._lightAltitude) > 150) {
+      this._lightsDirty = false;
       this._lightAltitude = alt;
       this._updateLights(alt);
     }
@@ -235,6 +267,7 @@ export class Environment {
   dispose() {
     this.atmosphere.dispose();
     this.clouds?.dispose();
+    this.timeOfDay?.dispose();
     this._pmrem.dispose();
     this._envTarget?.dispose();
   }
