@@ -206,12 +206,44 @@ async function buildHostileTemplate() {
   return { isTemplate: true, object: ac.model };
 }
 
+// [art pass] Beyond this distance (camera, metres) the hostile shows its LOD1
+// airframe (24k instead of 232k triangles; catalog `mig21_hostile.lods[1].distance`).
+const HOSTILE_LOD1_DISTANCE = 600;
+
 export async function hostileFighterModel() {
   hostileTemplate ??= buildHostileTemplate();
   const src = await hostileTemplate;
   const g = new THREE.Group();
   g.name = 'hostile-aircraft';
-  g.add(src.isTemplate ? src.object.clone() : await tryLoadModel('mig21_hostile') ?? src.object.clone());
+  if (src.isTemplate) {
+    g.add(src.object.clone());
+    return g;
+  }
+  // [art pass] a simple pilot in the cockpit (pilot LOD1, aircraft model space,
+  // no shadow) and the light airframe at range
+  const [near, far, pilot] = await Promise.all([
+    tryLoadModel('mig21_hostile'),
+    tryLoadModel('mig21_hostile', { lod: 1 }),
+    tryLoadModel('pilot', { lod: 1, castShadow: false }),
+  ]);
+  if (!near) {
+    g.add(src.object.clone());
+    return g;
+  }
+  if (pilot) {
+    pilot.name = 'pilot';
+    near.add(pilot);
+  }
+  if (far && far.userData.lod === 1) {
+    const lod = new THREE.LOD();
+    lod.name = 'hostile-lod';
+    lod.hysteresis = 0.1;
+    lod.addLevel(near, 0);
+    lod.addLevel(far, HOSTILE_LOD1_DISTANCE);
+    g.add(lod);
+  } else {
+    g.add(near);
+  }
   return g;
 }
 

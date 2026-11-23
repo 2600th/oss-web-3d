@@ -20,7 +20,8 @@
 import * as THREE from 'three/webgpu';
 import { smoothstep, positionWorld, normalWorld, mix, vec3, float, texture, triplanarTexture } from 'three/tsl';
 import { terrainHeight } from '../world/terrain/heightfield.js';
-import { configureAssets } from './loadModel.js';
+import { configureAssets, loadModel } from './loadModel.js';
+import { PilotRig } from './pilot.js';
 import { CATALOG } from './catalog.js';
 import { SurfaceRig, bodyRates, flapDemand } from './controlSurfaces.js';
 import { upgradeGroundMaterials, applyCloudShadows } from './materials.js';
@@ -31,6 +32,7 @@ export function createSystem(game) { return new AssetsSystem(game); }
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 const _rates = { x: 0, y: 0, z: 0 };
 
 class AssetsSystem {
@@ -49,11 +51,46 @@ class AssetsSystem {
     configureAssets({ tier, env: game.env });
     game.player.configure?.({ tier, env: game.env });
     game.events.on('player:respawn', () => game.player.surfaces?.reset?.({}));
+    // The pilot (pilot.glb is in aircraft model space: identity under the airframe model).
+    this.pilot = null;
+    if (game.player?.model) {
+      loadModel('pilot', { lod: 0 }).then((p) => {
+        p.name = 'pilot';
+        game.player.model.add(p);
+        this.pilot = new PilotRig(p);
+      }).catch((e) => console.warn('[assets] pilot unavailable', e));
+    }
+  }
+
+  /** Head and visibility of the player's pilot: no head in first person, looks at the fight. */
+  _pilot(dt, game) {
+    const view = game.cameraRig?.view;
+    const firstPerson = view === 'cockpit' || view === 'hud';
+    const f = game.flight;
+    _q.copy(f.orientation).invert();
+    let target = null;
+    const lock = game.cameraRig?.lockTarget?.position ?? null;
+    let best = lock;
+    if (!best) {
+      // else the nearest live bandit within 2.5 km
+      let d2 = 2500 * 2500;
+      for (const fi of game.systems.ai?.fighters ?? []) {
+        const p = fi.entity?.alive ? fi.entity.position : null;
+        if (!p) continue;
+        const d = p.distanceToSquared(f.position);
+        if (d < d2) { d2 = d; best = p; }
+      }
+    }
+    if (best) target = _v.subVectors(best, f.position).applyQuaternion(_q).normalize();
+    // bank: + = right wing down
+    const right = _w.set(1, 0, 0).applyQuaternion(f.orientation);
+    this.pilot.update(Math.min(dt, 0.1), { target, bank: -Math.asin(THREE.MathUtils.clamp(right.y, -1, 1)), g: f.gLoad ?? 1, firstPerson });
   }
 
   lateUpdate(dt, game) {
     if (dt <= 0) return;
     game.player.updateSurfaces?.(dt, game.flight);
+    if (this.pilot) this._pilot(dt, game);
     const ai = game.systems.ai;
     if (!ai) return;
     const cam = game.camera.position;

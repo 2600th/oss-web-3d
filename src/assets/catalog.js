@@ -19,8 +19,8 @@ export const CATALOG = {
       eye: [0, 0.22, -2.95],
       hud: [0, 0.212, -3.364],
       nozzle: [0, 0.05, 7.58],
-      wingtipL: [-3.516, -0.05, 1.6],
-      wingtipR: [3.516, -0.05, 1.6],
+      wingtipL: [-3.64, -0.777, 2.74],
+      wingtipR: [3.64, -0.777, 2.74],
       gun: [0, -0.6, -2.5]
     },
     pivots: ["stab_L", "stab_R", "aileron_L", "aileron_R", "flap_L", "flap_R"],
@@ -50,8 +50,8 @@ export const CATALOG = {
       eye: [0, 0.22, -2.95],
       hud: [0, 0.212, -3.364],
       nozzle: [0, 0.05, 7.58],
-      wingtipL: [-3.516, -0.05, 1.6],
-      wingtipR: [3.516, -0.05, 1.6],
+      wingtipL: [-3.64, -0.777, 2.74],
+      wingtipR: [3.64, -0.777, 2.74],
       gun: [0, -0.6, -2.5]
     },
     pivots: ["stab_L", "stab_R", "aileron_L", "aileron_R", "flap_L", "flap_R"],
@@ -73,6 +73,33 @@ export const CATALOG = {
     kind: "cockpit",
     license: "MIT",
     notes: "First-person overlay for the player MiG: emissive MFD/aux display faces, canopy periscope, `eye` and `hud` sockets. Parent to aircraft.model (identity transform). The interior itself is part of mig21.glb. Use camera near <= 0.05 m in cockpit view."
+  },
+  pilot: {
+    url: "models/pilot.glb",
+    lods: [
+      {
+        url: "models/pilot.glb",
+        triangles: 11562,
+        bytes: 281700,
+        distance: 0
+      },
+      {
+        url: "models/pilot_lod1.glb",
+        triangles: 1845,
+        bytes: 62224,
+        distance: 250
+      }
+    ],
+    scale: 1,
+    sockets: ["pilot_eye"],
+    pivots: ["pilot_head"],
+    kind: "pilot",
+    bounds: {
+      min: [-0.351, -0.739, -3.955],
+      max: [0.26, 0.403, -2.607]
+    },
+    license: "MIT",
+    notes: "Seated jet pilot in aircraft model space: parent to the MiG model with an identity transform (eye at (0, 0.22, -2.95)). pilot_head pivots at the top of the neck (rotation.y = look, +x = nod down); hide pilot_head in the cockpit view. Sage flight suit, no insignia. LOD1 is for hostile jets. Built by tools/blender/build_pilot.py."
   },
   aaa_gun: {
     url: "models/aaa_gun.glb",
