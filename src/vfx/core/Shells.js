@@ -5,7 +5,7 @@ import {
 } from 'three/tsl';
 
 /** Ray-marched samples through an afterburner plume (jittered per pixel, so no banding). */
-const PLUME_SAT = 4; // luminance a plume tends to however long the chord
+const PLUME_SAT = 1.5; // luminance a plume tends to however long the chord
 const PLUME_STEPS = 10;
 /** Shock cells drawn at most. */
 const MAX_DISKS = 5;
