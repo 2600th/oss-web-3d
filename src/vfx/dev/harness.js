@@ -44,7 +44,7 @@ export function installHarness(vfx, game) {
     }
     if (!camSpec) return;
     const from = camSpec.from ? V(...camSpec.from) : rel(...camSpec.rel);
-    const to = camSpec.to ? V(...camSpec.to) : camSpec.look ? rel(...camSpec.look) : game.flight.position;
+    const to = camSpec.to ? V(...camSpec.to) : camSpec.look ? rel(...camSpec.look) : game.flight.position.clone();
     if (camSpec.follow?.position) to.copy(camSpec.follow.position);
     camera.position.copy(from);
     camera.up.set(0, 1, 0);
@@ -232,6 +232,7 @@ export function installHarness(vfx, game) {
         while (s.acc >= 1) {
           s.acc -= 1;
           const d = f.fwd.clone().add(V((Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012 - (o.down ?? 0.25), (Math.random() - 0.5) * 0.012)).normalize();
+          vfx.tracer(rel(0, -0.6, -2.5), d.clone().multiplyScalar(1050).add(f.v));
           const t = raycastTerrain(f.p.x, f.p.y, f.p.z, d.x, d.y, d.z, 6000, 30);
           if (Number.isFinite(t)) setTimeout(() => ev.emit('weapon:gunHit', { position: f.p.clone().addScaledVector(d, t), normal: V(0, 1, 0), targetKind: 'terrain' }), (t / 880) * 1000);
         }

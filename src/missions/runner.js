@@ -184,7 +184,9 @@ export class MissionRunner {
     const o = this.phase?.objective;
     if (!o) return { text: '', progress: 0, total: 0 };
     let progress = 0, total = 0;
-    if (o.track?.destroyed) { total = this.view.total(o.track.destroyed); progress = this.view.destroyed(o.track.destroyed); }
+    // `track.total` states the count up front when the group arrives in waves
+    // (otherwise "shoot down all four" reads 0/2 until the second pair spawns).
+    if (o.track?.destroyed) { total = Math.max(o.track.total ?? 0, this.view.total(o.track.destroyed)); progress = this.view.destroyed(o.track.destroyed); }
     else if (o.track?.captured) { total = o.track.captured; progress = Math.min(this.captured, total); }
     return { text: o.text, progress, total, marker: o.marker ?? null };
   }

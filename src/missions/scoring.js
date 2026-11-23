@@ -21,8 +21,10 @@ export function accuracy({ gunFired = 0, gunHits = 0, mslFired = 0, mslHits = 0 
  *   time      full bonus at or under `parTime`, none at `timeLimit` (completed only)
  *   accuracy  up to 1500 (completed only)
  *   survival  up to 1500 for health, +500 untouched (completed only)
+ *   difficulty  the sum above times `difficultyScale`, minus the sum (so the
+ *               parts still add up to the total; 0 on Normal)
  */
-export function computeScore({ targetScore = 0, bonuses = 0, completed = false, time = 0, parTime = 300, timeLimit = 900, timeBonus = 3000, accuracy: acc = 0, health = 1, damageTaken = 0 }) {
+export function computeScore({ targetScore = 0, bonuses = 0, completed = false, time = 0, parTime = 300, timeLimit = 900, timeBonus = 3000, accuracy: acc = 0, health = 1, damageTaken = 0, difficultyScale = 1 }) {
   const b = { targets: Math.round(targetScore), bonuses: Math.round(bonuses), time: 0, accuracy: 0, survival: 0 };
   if (completed) {
     const span = Math.max(1, (timeLimit || parTime * 3) - parTime);
@@ -31,7 +33,9 @@ export function computeScore({ targetScore = 0, bonuses = 0, completed = false, 
     b.accuracy = Math.round(1500 * Math.min(1, Math.max(0, acc)));
     b.survival = Math.round(1500 * Math.min(1, Math.max(0, health))) + (damageTaken <= 0 ? 500 : 0);
   }
-  const total = b.targets + b.bonuses + b.time + b.accuracy + b.survival;
+  const sum = b.targets + b.bonuses + b.time + b.accuracy + b.survival;
+  const total = Math.round(sum * difficultyScale);
+  b.difficulty = total - sum;
   return { total, breakdown: b };
 }
 
@@ -84,5 +88,8 @@ export function isUnlocked(missions, index, progress) {
   const m = missions[index];
   if (!m || m.free || index === 0) return true;
   const prev = missions.slice(0, index).reverse().find((x) => !x.free);
-  return !prev || progress.missions[prev.id]?.completed === true;
+  if (!prev || progress.missions[prev.id]?.completed === true) return true;
+  // A save from before a sortie was inserted into the chain keeps what it had:
+  // anything already flown, or earlier than something already flown, stays open.
+  return missions.slice(index).some((x) => !x.free && progress.missions[x.id]?.completed === true);
 }

@@ -2,13 +2,14 @@
 // damage, and the per-frame HUD snapshot (`game.hud`). The simulation itself
 // (missiles, bullets, flares, damage) lives in CombatWorld.
 import * as THREE from 'three/webgpu';
-import { terrainHeight, lineOfSight, raycastTerrain } from '../world/terrain/heightfield.js';
+import { terrainHeight, raycastTerrain } from '../world/terrain/heightfield.js';
+import { clearLine } from './los.js';
 import { burnerReheat } from '../flight/burner.js';
 import { AIRCRAFT } from '../flight/FlightModel.js';
 import { CombatWorld } from './CombatWorld.js';
 import { CombatVisuals } from './visuals.js';
 import { LockTracker, lockGeometry, pickTarget, cycleTarget } from './lock.js';
-import { leadPoint, ballisticImpact } from './guidance.js';
+import { leadPoint, ballisticImpact, rocketImpact } from './guidance.js';
 import { WEAPONS, PLAYER, SPECIALS } from './weapons.js';
 
 export const order = 50;
@@ -147,24 +148,37 @@ export class CombatSystem {
     this.world.step(dt);
   }
 
+  /**
+   * Lock range against a target. The player's seeker finds a vehicle by eye
+   * and by heat: in the dark or in murk it has to be closer to a ground target
+   * (night x0.72, storm x0.74). Air targets are unaffected (cloud is handled
+   * separately, by lock time).
+   */
+  lockRangeFor(w, t) {
+    const v = this.world.conditions?.visibility ?? 1;
+    return t?.class === 'ground' ? w.lockRange * Math.max(0.5, Math.sqrt(v)) : w.lockRange;
+  }
+
   _updateLock(dt, f) {
     const st = this.weapon;
     const w = st.def;
     const t = this.target;
     let can = false;
     if (t && t.alive && w.type === 'missile' && st.ammo > 0 && t.lockable !== false && (t.class === 'air' || w.groundLock)) {
-      const g = lockGeometry(f.position, f.forward, t.position, w.lockRange, w.lockCone);
+      const g = lockGeometry(f.position, f.forward, t.position, this.lockRangeFor(w, t), w.lockCone);
       if (g.inRange && g.inCone) {
         this._losTimer -= dt;
         if (this._losTimer <= 0) {
           this._losTimer = 0.1;
           _v.copy(t.position); _v.y += Math.max(6, t.radius * 0.6);
-          this._los = lineOfSight(f.position, _v, 40);
+          this._los = clearLine(f.position, _v);
         }
         can = this._los;
       }
     }
-    const tr = this.lock.update(dt, t && t.alive ? t : null, can, w.lockTime ?? 1);
+    // Infra-red lock through cloud is slow (radar does not notice).
+    const murk = w.guidance === 'ir' && t && t.class === 'air' && (this.world.cloaked(t) || this.world.cloaked(this.player)) ? 2.5 : 1;
+    const tr = this.lock.update(dt, t && t.alive ? t : null, can, (w.lockTime ?? 1) * murk);
     if (tr) this.game.events.emit(`lock:${tr.event}`, { target: tr.target });
     if (this._lockMark && this._lockMark !== t) this._lockMark.lockedByPlayer = 'none';
     if (t) t.lockedByPlayer = this.lock.state;
@@ -274,6 +288,7 @@ export class CombatSystem {
     const live = this.active && p.alive && !f.crashed;
     p.engine.throttle = f.throttleSmoothed;
     p.engine.reheat = burnerReheat(f.throttleSmoothed);
+    this.world.playerInCloud = game.env?.inCloud ?? 0;
 
     if (live) {
       if (input.pressed.fireMissile) this.fire();
@@ -337,8 +352,7 @@ export class CombatSystem {
     if (w.type === 'bomb') {
       this._ccipValid = Number.isFinite(ballisticImpact(this.ccip, f.position, f.velocity, terrainHeight, { drag: w.drag }));
     } else if (w.type === 'rocket') {
-      const d = raycastTerrain(f.position.x, f.position.y, f.position.z, f.forward.x, f.forward.y, f.forward.z, 6000, 60);
-      if (Number.isFinite(d)) { this.ccip.copy(f.position).addScaledVector(f.forward, d); this._ccipValid = true; }
+      this._ccipValid = Number.isFinite(rocketImpact(this.ccip, f.position, f.forward, f.airspeed, w, terrainHeight));
     }
   }
 
@@ -413,7 +427,7 @@ export class CombatSystem {
       o.isTarget = t.isTarget === true; o.isAce = t.isAce === true;
       o.distance = t.position.distanceTo(f.position);
       o.selected = t === this.target;
-      o.lockable = t.lockable !== false && w.type === 'missile' && (t.class === 'air' || !!w.groundLock) && o.distance <= w.lockRange;
+      o.lockable = t.lockable !== false && w.type === 'missile' && (t.class === 'air' || !!w.groundLock) && o.distance <= this.lockRangeFor(w, t);
       o.locked = o.selected && this.lock.state === 'locked';
       o.health = t.health / t.maxHealth;
       o.onScreen = undefined; o.screen = o.screen ?? { x: 0, y: 0 };

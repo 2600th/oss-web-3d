@@ -1,14 +1,17 @@
 // Mission system: runs the active mission script, the radio, reactive chatter,
 // recon photography, score and the sortie result. Emits `radio`, `mission:*`
 // and `music:intensity`; writes the mission part of `game.hud`.
-import { lineOfSight } from '../world/terrain/heightfield.js';
+import { clearLine } from '../combat/los.js';
 import { MISSIONS, missionById } from './data.js';
 import { CAST, CHATTER, REMEMBRANCE } from './cast.js';
 import { MissionRunner } from './runner.js';
 import { Radio } from './radio.js';
 import { Recon, OPTIC } from './recon.js';
+import { Onboarding, controlLabel } from './onboarding.js';
 import { accuracy, computeScore, rankFor, loadProgress, recordResult, saveProgress, isUnlocked } from './scoring.js';
 import { WEAPONS } from '../combat/weapons.js';
+import { difficultyFor } from '../game/difficulty.js';
+import { resolveConditions, applyToEnvironment, conditionsLabel } from './conditions.js';
 
 export const order = 52;
 export function createSystem(game) { return new MissionSystem(game); }
@@ -18,10 +21,16 @@ const FAIL_TEXT = {
   crashed: 'Vajra One was lost to the mountain.',
   time: 'The window closed before the task was done.',
   overrun: 'Anvil could not hold the face. The crest stayed in hostile hands.',
+  escaped: 'Too many trucks reached the pass. The ammunition went through.',
   objective: 'The objective was not met.',
 };
 const OUTRO_SECONDS = { complete: 6, failed: 3.5 };
-const los = (a, b) => lineOfSight(a, b, 32);
+// Sight the top of the post, not its footing: a grazing line to a point on
+// the ground clips the ridge the post stands on.
+const _top = { x: 0, y: 0, z: 0 };
+/** 'S-8 ROCKETS' -> 'S-8 Rockets', 'R-73 ARCHER' -> 'R-73 Archer' (designations keep their capitals). */
+const sentenceName = (n) => n?.split(' ').map((w) => (/[0-9-]/.test(w) ? w : w[0] + w.slice(1).toLowerCase())).join(' ');
+const los = (a, b) => { _top.x = b.x; _top.y = b.y + 12; _top.z = b.z; return clearLine(a, _top); };
 
 export class MissionSystem {
   constructor(game) {
@@ -57,12 +66,23 @@ export class MissionSystem {
     ev.on('player:hit', ({ health, source }) => {
       if (!this.running) return;
       this._lastHitBy = source;
-      if (source?.fighter?.ace) this.aceLine(source.fighter.ace, 'hit', 0.5);
+      if (source?.fighter?.pilot) this.aceLine(source.fighter.pilot, 'hit', 0.5);
       else if (health < 0.3) this.chatter('playerCritical'); else this.chatter('playerHit');
     });
-    ev.on('target:hit', ({ target }) => { if (target.fighter?.ace && this.rng() < 0.35) this.aceLine(target.fighter.ace, 'hit', 0.6); });
-    ev.on('ai:engage', ({ fighter }) => { if (!this.running) return; if (fighter.ace) this.aceLine(fighter.ace, 'engage', 1); else this.chatter('bandits'); });
-    ev.on('ai:fire', ({ fighter }) => { if (fighter.ace) this.aceLine(fighter.ace, 'fire', 0.5); });
+    ev.on('target:hit', ({ target }) => { if (target.fighter?.pilot && this.rng() < 0.35) this.aceLine(target.fighter.pilot, 'struck', 0.6); });
+    // Onboarding: doing the thing retires its prompt.
+    ev.on('flare:release', ({ flare }) => { if (flare.owner === this.combat?.player) this.onboard?.learn('flares'); });
+    ev.on('lock:locked', () => this.onboard?.learn('lock'));
+    ev.on('weapon:switch', () => this.onboard?.learn('special'));
+    ev.on('weapon:gun', ({ firing, entity }) => { if (firing && entity === this.combat?.player) this.onboard?.learn('gun'); });
+    // Turning the difficulty down mid-sortie keeps the lower score multiplier.
+    ev.on('flow:difficulty', ({ difficulty }) => {
+      if (!this.runner) return;
+      const s = difficultyFor(difficulty).score;
+      if (s < this._scoreScale) { this._scoreScale = s; this.difficulty = difficulty; }
+    });
+    ev.on('ai:engage', ({ fighter }) => { if (!this.running) return; if (fighter.pilot) this.aceLine(fighter.pilot, 'engage', 1); else this.chatter('bandits'); });
+    ev.on('ai:fire', ({ fighter }) => { if (fighter.pilot) this.aceLine(fighter.pilot, 'fire', 0.5); });
   }
 
   init(game) {
@@ -77,10 +97,35 @@ export class MissionSystem {
     return this.list.map((m, i) => ({
       id: m.id, order: m.order, name: m.name, location: m.location, summary: m.summary, briefing: m.briefing,
       free: m.free === true, timeLimit: m.timeLimit, parTime: m.parTime, rank: m.rank,
+      // Time of day and weather: `label` is ready for the briefing; `choose`
+      // means the player picks them (free flight, flow.setConditions).
+      conditions: this._conditionsMeta(m),
       specials: m.specials.map((id) => ({ id, name: WEAPONS[id].name, short: WEAPONS[id].short, ammo: WEAPONS[id].ammo, description: WEAPONS[id].description })),
       special: m.special, unlocked: isUnlocked(this.list, i, this.progress),
       best: this.progress.missions[m.id] ?? null,
     }));
+  }
+
+  _conditionsDef(m) {
+    return m.conditions?.choose ? { ...m.conditions, ...(this.game.flow?.freeConditions ?? {}) } : (m.conditions ?? {});
+  }
+
+  _conditionsMeta(m) {
+    const c = resolveConditions(this._conditionsDef(m));
+    return { time: c.time, weather: c.weather, label: conditionsLabel(c.time, c.weather), night: c.night, choose: m.conditions?.choose === true };
+  }
+
+  /** Set the sortie's time of day and weather (environment, AI, weapons, flight). */
+  _applyConditions(m) {
+    const game = this.game;
+    const c = resolveConditions(this._conditionsDef(m), game.conditions ?? (game.conditions = {}));
+    this.conditions = c;
+    this._condTimer = 0;
+    c.applied = applyToEnvironment(game.env, c);
+    this.combat.world.conditions = c;
+    this.ai.ctx.conditions = c;
+    game.flight.turbulence = c.turbulence;
+    game.events.emit('conditions:change', { ...c });
   }
 
   // -------------------------------------------------------------- start --
@@ -98,12 +143,16 @@ export class MissionSystem {
     this._outro = 0;
     this.radio.clear();
     this.special = m.specials.includes(special) ? special : m.special;
+    this.difficulty = game.flow?.difficulty ?? 'normal';
+    this._scoreScale = difficultyFor(this.difficulty).score;
     this.combat.resetForSortie({ special: this.special });
     this.combat.world.god = false;
     this.ai.hostile = true;
     this.ai.maxAttackers = m.maxAttackers ?? 2;
     game.spawnAt(m.start);
+    this._applyConditions(m);
     this.recon = m.recon ? new Recon() : null;
+    this.onboard = m.onboarding ? new Onboarding({ veteran: this.progress.missions[m.id]?.completed === true }) : null;
 
     this.runner = new MissionRunner(m, {
       spawn: (def) => {
@@ -127,11 +176,13 @@ export class MissionSystem {
 
   stop() {
     this._setOptic(false);
+    if (this.game.flight) this.game.flight.turbulence = 0;
     if (this.combat) this.combat.active = false;
     this.ai?.clear();
     this.runner = null;
     this.mission = null;
     this.recon = null;
+    this.onboard = null;
     this.radio.clear();
   }
 
@@ -169,6 +220,7 @@ export class MissionSystem {
     const player = this.combat.player;
     if (m.owner === player) {
       const w = m.weapon;
+      if (m.target) this.onboard?.learn('fire');
       this.chatter(w.type === 'bomb' ? 'playerBomb' : w.type === 'rocket' ? 'playerRockets' : w.guidance === 'radar' ? 'playerRadar' : 'playerMissile');
       const st = this.combat.msl;
       if (st.ammo === 8) this.chatter('lowAmmo');
@@ -184,7 +236,7 @@ export class MissionSystem {
     this.runner.notifyDestroyed(target.tags ?? []);
     if (killer !== this.combat.player) return;
     this.targetScore += score;
-    if (target.fighter?.ace) this.aceLine(target.fighter.ace, 'down', 1);
+    if (target.fighter?.pilot) this.aceLine(target.fighter.pilot, 'down', 1);
     else if (target.class === 'air') this.chatter(target.lastHitWeapon === 'gun' ? 'gunKill' : 'airKill');
     else if (target.kind === 'supply') this.chatter('bigKill');
     else this.chatter('groundKill');
@@ -200,6 +252,7 @@ export class MissionSystem {
     const { total, breakdown } = computeScore({
       targetScore: this.targetScore, bonuses: this.bonusScore, completed, time: this.runner.time,
       parTime: m.parTime, timeLimit: m.timeLimit, accuracy: acc, health: p.health / p.maxHealth, damageTaken: st.damageTaken,
+      difficultyScale: this._scoreScale ?? 1,
     });
     const rank = m.rank ? rankFor(total, m.rank, completed) : null;
     let newBest = false;
@@ -209,7 +262,7 @@ export class MissionSystem {
     }
     this.result = {
       missionId: m.id, name: m.name, state, completed, reason, reasonText: completed ? null : (FAIL_TEXT[reason] ?? FAIL_TEXT.objective),
-      score: total, breakdown, rank, thresholds: m.rank, newBest, time: this.runner.time,
+      score: total, breakdown, rank, thresholds: m.rank, newBest, time: this.runner.time, difficulty: this.difficulty ?? 'normal',
       kills: st.kills, airKills: st.airKills, groundKills: st.groundKills, accuracy: acc,
       shots: { gunFired: st.gunFired, gunHits: st.gunHits, mslFired: st.mslFired, mslHits: st.mslHits },
       damageTaken: st.damageTaken, health: p.health / p.maxHealth,
@@ -224,7 +277,7 @@ export class MissionSystem {
       game.events.emit('mission:complete', { mission: this.info(), result: this.result });
     } else {
       // Respectful: one quiet line, no jeering, then silence.
-      const killer = this._lastHitBy?.fighter?.ace;
+      const killer = this._lastHitBy?.fighter?.pilot;
       if (reason === 'shot_down' && killer) this.aceLine(killer, 'kill', 1);
       else if (reason === 'shot_down' || reason === 'crashed') this.radio.say('control', 'Vajra One, Shikhar... Vajra One, respond. ...Vajra One.', 2);
       else if (reason === 'time') this.radio.say('control', 'Vajra One, Shikhar. We are out of time. Return to base.', 2);
@@ -271,6 +324,17 @@ export class MissionSystem {
     const f = game.flight;
     const p = this.combat.player;
 
+    // The clock runs (a dusk strike ends in the dark).
+    const c = this.conditions;
+    if (c?.advance && r.state === 'running') {
+      c.time = (c.time + (c.advance * dt) / 60) % 24;
+      if ((this._condTimer -= dt) <= 0) {
+        this._condTimer = 2;
+        resolveConditions({ time: c.time, weather: c.weather, advance: c.advance }, c);
+        applyToEnvironment(game.env, c, { timeOnly: true });
+        game.events.emit('conditions:change', { ...c });
+      }
+    }
     if (r.state === 'running') {
       // Convoys that made it out.
       for (const u of this.ai.ground) {
@@ -290,6 +354,7 @@ export class MissionSystem {
           game.events.emit('recon:capture', { target: shot.entity, quality: shot.best, captured: this.recon.captured, total: this.recon.total });
         }
       }
+      if (this.onboard?.enabled && game.playerControl) this._onboarding(game, hud, r);
       if (hud.warning === 'pullup') this.chatter('pullUp');
       r.update(dt, { player: f.position, health: p.health / p.maxHealth });
     } else if (this._outro > 0) {
@@ -313,11 +378,37 @@ export class MissionSystem {
     hud.timeRemaining = r.timeRemaining;
     hud.objective = r.objective();
     hud.mission = { id: m.id, name: m.name, phase: r.phase?.id ?? null, phaseName: r.phase?.name ?? null, state: r.state };
+    hud.conditions = c ? { time: c.time, weather: c.weather, label: c.label, night: c.night, light: c.light, turbulence: c.turbulence } : null;
     hud.recon = this.recon ? {
       active: this.recon.active, captured: this.recon.captured, total: this.recon.total,
       progress: this.recon.progress, focus: this.recon.focus?.entity ?? null, quality: this.recon.focus?.quality ?? 0,
       axis: this.recon.axis, fov: OPTIC.fov,
     } : null;
+  }
+
+  /**
+   * First-sortie prompts. Emits `hint {id, action, text, keys, urgent,
+   * duration, handled}`; a HUD that draws it sets `handled = true` in its
+   * listener, otherwise the wingman says it on the radio.
+   */
+  _onboarding(game, hud, r) {
+    const input = game.input;
+    const ob = this.onboard;
+    if (input.pressed.targetNext) ob.learn('target');
+    if (input.pressed.camera) ob.learn('camera');
+    if (hud.highG > 0.5) ob.learn('highG');
+    const t = hud.target;
+    const hint = ob.update({
+      time: r.time, phase: r.phase?.id, threats: hud.threats?.length ?? 0,
+      lockable: !!t && t.lockable === true && t.team === 'hostile', lockState: hud.lock?.state ?? 'none',
+      targetDistance: t?.distance ?? Infinity, gunSolution: !!hud.gun?.lead,
+      kills: this.combat.world.stats.kills, spAmmo: this.combat.sp.ammo, current: this.combat.current,
+      specialName: sentenceName(this.combat.sp.def.name), targets: hud.targets?.length ?? 0,
+    }, (action) => controlLabel(input.bindings, action, input.modality));
+    if (!hint) return;
+    const payload = { ...hint, handled: false };
+    game.events.emit('hint', payload);
+    if (!payload.handled) this.radio.say('wing', hint.text, hint.urgent ? 2 : 1);
   }
 
   dispose() { this.stop(); }

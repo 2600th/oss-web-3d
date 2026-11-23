@@ -2,11 +2,13 @@
 // weapons, registered with combat as a target. No rendering dependencies; the
 // AI system attaches the model to `entity.object3d`.
 import { Vector3, Group } from 'three';
-import { terrainHeight, maxHeightAlong, lineOfSight } from '../world/terrain/heightfield.js';
+import { terrainHeight, maxHeightAlong } from '../world/terrain/heightfield.js';
+import { clearLine } from '../combat/los.js';
 import { leadPoint } from '../combat/guidance.js';
 import { WEAPONS } from '../combat/weapons.js';
 import { AiFlight, AIRFRAMES } from './aiFlight.js';
 import { SKILLS, newMemory, decide, steer, employ } from './brain.js';
+import { DIFFICULTY, scaleSkill } from '../game/difficulty.js';
 
 const _to = new Vector3();
 const _des = new Vector3();
@@ -26,7 +28,9 @@ export class Fighter {
    */
   constructor(def, rng = Math.random) {
     const type = def.skill ?? 'bandit';
-    this.skill = { ...SKILLS[type], ...(def.skillOverrides ?? {}) };
+    /** The pilot as written; `skill` is this at the current difficulty. */
+    this.baseSkill = { ...SKILLS[type], ...(def.skillOverrides ?? {}) };
+    this.skill = scaleSkill(this.baseSkill, def.difficulty ?? DIFFICULTY.normal);
     this.flight = new AiFlight({ ...AIRFRAMES[def.airframe ?? type], ...(def.airframeOverrides ?? {}) });
     this.mem = newMemory();
     this.mem.missiles = this.skill.missiles;
@@ -38,7 +42,10 @@ export class Fighter {
     this.slot = def.slot ?? { x: 0, y: 0, z: 0 };
     this.route = def.route ?? null;
     this.routeIndex = 0;
-    this.ace = def.ace ?? null;
+    /** Named pilot data (missions/cast.js ACES entry) for radio lines, or null. */
+    this.pilot = def.ace ?? null;
+    /** Set only for the flight lead: the one the HUD marks and calls "LEAD". */
+    this.ace = def.ace?.lead ? def.ace : null;
     this.time = rng() * 10;
     this.gunFiring = false;
     this._gunAcc = 0;
@@ -53,7 +60,7 @@ export class Fighter {
     const f = this.flight;
     this.entity = {
       kind: def.isAce ? 'ace' : 'fighter', class: 'air', armor: 'air', team: 'hostile',
-      name: def.name ?? 'BANDIT', isAce: def.isAce === true, isTarget: def.isTarget === true,
+      name: def.name ?? 'BANDIT', isAce: def.isAce === true, elite: !!def.ace, isTarget: def.isTarget === true,
       position: f.position, velocity: f.velocity, quaternion: f.quaternion,
       alive: true, health: def.health ?? DEFAULT_HEALTH[type], radius: 10,
       score: def.score ?? DEFAULT_SCORE[type], tags: def.tags ?? [], explosion: 'medium',
@@ -64,6 +71,8 @@ export class Fighter {
       },
     };
   }
+
+  setDifficulty(d) { this.skill = scaleSkill(this.baseSkill, d); }
 
   /** Nearest missile tracking this aircraft, or null. */
   _nearestMissile(world) {
@@ -100,11 +109,12 @@ export class Fighter {
     s.missile = m ? { range: m.position.distanceTo(f.position) } : null;
     s.lockedBy = this.entity.lockedByPlayer ?? 'none';
     s.alerted = ctx.alerted === true;
+    s.visibility = ctx.conditions?.visibility ?? 1;
     s.role = this.role;
     s.leaderAlive = !!this.leader?.entity.alive;
     s.leaderEngaged = !!this.leader && !['patrol', 'formation', 'intercept'].includes(this.leader.mem.mode);
     s.hasRoute = !!this.route;
-    s.los = range < 6000 ? lineOfSight(f.position, t.position, 16) : false;
+    s.los = range < 6000 ? clearLine(f.position, t.position, 110) : false;
     s.token = ctx.tokens.has(this);
     leadPoint(_lead, f.position, f.velocity, t.position, t.velocity, WEAPONS.e_gun.muzzle);
     _v.subVectors(_lead, f.position);
@@ -178,6 +188,13 @@ export class Fighter {
       _right.crossVectors(f.forward, f.up);
       _des.normalize().addScaledVector(_right, Math.sin(this.time * 3.1) * k.jink * 0.7).addScaledVector(f.up, Math.cos(this.time * 2.3) * k.jink * 0.35);
     }
+    // Weather: a pilot who is defensive goes for the cloud layer, where an
+    // infra-red seeker cannot hold him.
+    const layer = ctx.conditions?.cloud;
+    if (layer && (m.mode === 'evade' || m.mode === 'extend' || m.mode === 'break')) {
+      _des.normalize();
+      _des.y = Math.max(-0.5, Math.min(0.5, ((layer.base + layer.top) * 0.5 - f.position.y) / 1200));
+    }
     // Never descend into the floor outside of a committed attack.
     const agl = f.position.y - terrainHeight(f.position.x, f.position.z);
     if (agl < 380 && _des.y < 0) { _des.normalize(); _des.y = Math.max(_des.y, 0.15); }
@@ -200,7 +217,9 @@ export class Fighter {
         leadPoint(_lead, f.position, f.velocity, ctx.player.position, ctx.player.velocity, w.muzzle);
         _v.subVectors(_lead, f.position).normalize();
         const r = this.rng;
-        const err = k.gunError;
+        // Rough air spoils a gun solution for them exactly as it does for the
+        // player (storm: twice the scatter).
+        const err = k.gunError * (1 + (ctx.conditions?.turbulence ?? 0));
         _v.x += (r() - 0.5) * 2 * err; _v.y += (r() - 0.5) * 2 * err; _v.z += (r() - 0.5) * 2 * err;
         _v.normalize().multiplyScalar(w.muzzle).add(f.velocity);
         _v2.copy(f.position).addScaledVector(f.forward, 8);
