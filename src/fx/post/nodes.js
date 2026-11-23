@@ -63,6 +63,13 @@ export function sunVisibility({ color, depth, sunUV, aspect, radius, refLum, gri
 // Sun lens flare (analytic, full resolution, added in exposed HDR)
 // ---------------------------------------------------------------------------
 
+/**
+ * [realism] Aperture ghosts were the loudest thing in a low-sun frame (a
+ * green hexagon and orange discs over the terrain, even with the sun behind
+ * thin cloud). Multi-coated lenses keep them near the noise floor.
+ */
+const GHOST_GAIN = 0.35;
+
 const hexDist = (q) => {
   const a = abs(q);
   return max(a.x.mul(0.866025).add(a.y.mul(0.5)), a.y);
@@ -92,19 +99,21 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
   const r8 = pow(abs(cos(ang.mul(4.0).add(0.6))), 260.0).mul(0.55);
   const fine = pow(abs(cos(ang.mul(23.0).add(1.7))), 30.0).mul(0.25);
   const vary = fract(sin(ang.mul(37.0).floor().mul(12.9898)).mul(43758.5453)).mul(0.6).add(0.4);
-  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-7.5))).mul(1.5).add(fine.mul(exp(dist.mul(-16))).mul(1.2));
+  // [realism] rays 0.6x: a stopped-down modern lens, not a filter
+  const rays = r6.add(r8).mul(vary).mul(exp(dist.mul(-7.5))).mul(0.9).add(fine.mul(exp(dist.mul(-16))).mul(0.7));
   out.addAssign(vec3(1.0, 0.95, 0.88).mul(rays));
 
   // anamorphic streak (cylindrical front element): a hair-thin hot core and
   // a softer cool sheath, both running most of the frame width
   const ax = abs(d.x);
-  const core = exp(abs(d.y).mul(-520)).mul(exp(ax.mul(-1.6))).mul(0.5);
-  const sheath = exp(abs(d.y).mul(-95)).mul(exp(ax.mul(-3.2))).mul(0.12);
+  // [realism] 0.4x: a hint of a streak, not a cinema anamorphic
+  const core = exp(abs(d.y).mul(-520)).mul(exp(ax.mul(-1.6))).mul(0.2);
+  const sheath = exp(abs(d.y).mul(-95)).mul(exp(ax.mul(-3.2))).mul(0.05);
   out.addAssign(vec3(0.62, 0.8, 1.0).mul(core).add(vec3(0.3, 0.5, 1.0).mul(sheath)));
 
   // halo ring around the sun, slightly chromatic
   const ring = (rad, w) => exp(dist.sub(rad).div(w).pow(2).negate());
-  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.05));
+  out.addAssign(vec3(ring(0.335, 0.014), ring(0.325, 0.014), ring(0.315, 0.015)).mul(0.022));
 
   // ghosts along the sun -> centre axis (position = s * f, f < 0 is mirrored)
   const ghost = (f, size, tint, strength, hex) => {
@@ -112,7 +121,7 @@ export const sunFlare = Fn(([uv0, sunUV, aspect, amount, rot]) => {
     const gd = hex ? hexDist(q) : length(q);
     const disc = smoothstep(size, size * 0.82, gd);
     const rim = smoothstep(size * 0.7, size * 0.98, gd).mul(disc).mul(0.6).add(0.4);
-    return vec3(...tint).mul(disc.mul(rim)).mul(strength);
+    return vec3(...tint).mul(disc.mul(rim)).mul(strength * GHOST_GAIN);
   };
   out.addAssign(ghost(-0.35, 0.045, [0.5, 0.9, 0.6], 0.16, true));
   out.addAssign(ghost(-0.62, 0.085, [0.9, 0.55, 1.0], 0.055, true));
