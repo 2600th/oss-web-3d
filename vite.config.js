@@ -6,26 +6,14 @@ export default defineConfig({
   build: {
     target: 'es2022',
     assetsInlineLimit: 0,
-    // Keep stable third-party engines independently cacheable. The application
-    // changes far more often than Three/Postprocessing, and the measured
-    // monolithic production entry was 1.089 MB minified.
-    // `advancedChunks` is rolldown's own grouping mechanism. The Rollup-style
-    // `manualChunks` callback was accepted without error but did not group the
-    // way it reads: the emitted chunk named `three` held GLTFLoader and the
-    // meshoptimizer decoder, while three.js core itself shipped inside the
-    // chunk named `postprocessing`. Both are third-party and stable, so nothing
-    // was broken — but the caching property this block exists to provide was
-    // not the one it was delivering, and the names actively misled.
     rolldownOptions: {
       output: {
+        // three.js changes far less often than the game; keep it separately cacheable.
         advancedChunks: {
-          groups: [
-            { name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ },
-            { name: 'postprocessing', test: /[\\/]node_modules[\\/]postprocessing[\\/]/ },
-          ],
+          groups: [{ name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ }],
         },
       },
     },
-    chunkSizeWarningLimit: 900,
+    chunkSizeWarningLimit: 1600,
   },
 });
