@@ -190,7 +190,7 @@ export class Atmosphere {
         const h = max(pr.sub(Rg), 0).toVar();
         const muS = cosV.mul(t).add(camR.mul(sunDir.y)).div(pr).toVar();
         const dR = exp(h.div(-a.rayleighH));
-        const dM = exp(h.div(-a.mieH)).mul(haze);
+        const dM = exp(max(h.sub(a.mieBase ?? 0), 0).div(-a.mieH)).mul(haze); // [realism] terrain-based aerosol
         const dO = max(float(1).sub(h.sub(a.ozoneCentre).abs().div(a.ozoneHalfWidth)), 0);
         const sR = vec3(...a.rayleigh).mul(dR).toVar();
         const sM = dM.mul(a.mieScattering).toVar();
