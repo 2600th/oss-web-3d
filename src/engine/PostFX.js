@@ -11,7 +11,7 @@ import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
 import { postConfig } from '../fx/post/config.js';
 import {
-  sunVisibility, sunFlare, sunGlow, agxLook, splitTone, screenStates, filmGrain, aspectUV,
+  sunVisibility, sunFlare, sunGlow, agxLook, splitTone, screenStates, filmGrain, outputDither, aspectUV,
   reversedDepthToDistance, airflowStreaks, shockOffset,
 } from '../fx/post/nodes.js';
 import { createMotionBlur } from '../fx/post/motionBlur.js';
@@ -488,6 +488,7 @@ export class PostFX {
     if (cfg.aa === 'fxaa') out = fxaa(out);
     else if (cfg.aa === 'smaa') out = smaa(out);
     if (cfg.grain > 0) out = vec4(filmGrain(out.rgb, u.grain.mul(0.014 * cfg.grain), u.seed), 1);
+    out = vec4(outputDither(out.rgb, u.seed), 1); // +-1 LSB: no bloom rings on dark skies
 
     // dev views: post.debugView = 'velocity' | 'depth' | 'exposure' | 'flare' | 'bloom'
     //            | 'mbTiles' | 'player' | 'water'

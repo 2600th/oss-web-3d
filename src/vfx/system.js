@@ -137,6 +137,8 @@ class VfxSystem {
     on('missile:end', ({ missile }) => missile && this.emitters.endMissile(missile));
     on('flare:release', ({ flare }) => flare && this.emitters.flare(flare));
     on('explosion', (p) => p.position && this.explosion(p.position, p.size, p.kind, p.velocity));
+    // a new sortie starts on clean ground (the next feed sends the empty list)
+    on('mission:start', () => this.scorches.clear());
     on('weapon:gun', ({ firing, entity }) => this.aircraft.gun(entity, !!firing));
     on('weapon:gunHit', (p) => p.position && this.impact(p.position, p.normal, p.targetKind));
     on('target:destroyed', (p) => this.emitters.targetDestroyed(p));

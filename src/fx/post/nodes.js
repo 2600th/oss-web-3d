@@ -237,6 +237,22 @@ export const filmGrain = (c, amount, seed) => {
   return c.add(n.mul(amount).mul(w));
 };
 
+/**
+ * Triangular-PDF dither of +-1 display LSB, independent of luminance. Film
+ * grain fades out in the shadows, so on low tier (no TRAA jitter, no motion
+ * blur) a bloom halo's smooth falloff on a dark sky quantised to 8 bits into
+ * visible rings. Two hashes summed give a triangle PDF, which removes the
+ * banding without adding visible noise.
+ */
+// (inline, not a typed Fn: it reads the fragment-coordinate builtin)
+export const outputDither = (c, seed) => {
+  const hash = (q) => fract(sin(dot(q, vec2(12.9898, 78.233))).mul(43758.5453));
+  const p = screenCoordinate.xy.mod(1024.0);
+  const a = hash(p.add(vec2(seed.mul(37.0), seed.mul(17.0))));
+  const b = hash(p.add(vec2(seed.mul(53.0).add(91.7), seed.mul(29.0).add(13.1))));
+  return c.add(a.add(b).sub(1).div(255));
+};
+
 // ---------------------------------------------------------------------------
 // Speed: airflow streaks, sonic shock
 // ---------------------------------------------------------------------------
