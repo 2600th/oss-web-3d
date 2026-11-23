@@ -166,10 +166,14 @@ function createOverlay(game) {
   const ctx = canvas.getContext('2d');
   const scratch = { x: 0, y: 0 };
 
+  // ui+hud edit (lead request): with the real HUD present the overlay only
+  // shows behind ?debughud (?debug kept as an alias); without a ui it shows.
+  const q = new URLSearchParams(location.search);
+  const forced = q.has('debughud') || q.has('debug');
   function frame() {
     requestAnimationFrame(frame);
     const hasUi = !!(game.systems.ui || game.systems.hud);
-    root.style.display = hasUi && !new URLSearchParams(location.search).has('debug') ? 'none' : 'block';
+    root.style.display = hasUi && !forced ? 'none' : 'block';
     if (root.style.display === 'none') return;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }

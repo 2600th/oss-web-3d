@@ -194,6 +194,54 @@ when unavoidable; say so in your report.
 
 (append here)
 
+### UI + HUD (additive; nothing existing changed)
+
+- `game.settings` — the shared `Settings` instance (`src/core/Settings.js`), plain keys:
+  `tier` (null = auto), `controlMode` ('standard'|'expert'), `invertY`, `sensitivity`,
+  `vibration`, `masterVolume`, `musicVolume`, `sfxVolume`, `radioVolume` (0..1),
+  `hudColor`, `hudScale`, `hudOpacity`, `palette` ('standard'|'deutan'|'tritan'),
+  `subtitles`, `subtitleSize`, `cameraShake` (0..1), `cameraFov` (deg added to base),
+  `defaultCamera`, `reducedMotion` ('system'|'on'|'off'; resolved getter
+  `settings.prefersReducedMotion`). Persisted in localStorage `safed-sagar.settings.v3`.
+- New event `settings:change` `{key, value, settings}` — emitted by ui on every change.
+  Audio should apply the four volumes; camera `cameraShake`, `cameraFov`, `defaultCamera`.
+- New event `loading:progress` `{progress: 0..1, label?}` — gameplay may emit while a
+  mission loads; the loading screen shows it.
+- `ui:screen` payloads emitted by the ui itself carry `source: 'ui'` (menu navigation:
+  title, missionSelect, briefing, settings, credits, memorial). Flow-driven screens
+  (loading, sortie, pause, debrief) are expected from `game.flow`.
+- `game.ui` — the UI orchestrator (dev/debug; `game.ui.hud`, `game.ui.flow`).
+- Optional, read if present: `game.input.bindings` (array of `{action, label, keys[],
+  pad, code}`; shown in Settings, used for touch fallback), `game.input.setAction(name,
+  held)` (touch buttons call it; otherwise the bound key `code` is simulated),
+  `game.flow.titleCamera` (true = gameplay owns the menu camera; otherwise the ui
+  orbits the player jet behind menus), mission fields `markers: [{kind:
+  'objective'|'sam'|'aaa'|'ace'|'fighter'|'start', label, x, z, radius?}]` and
+  `location: {name, x, z}` for the briefing map, target `velocity` (for gun lead; else
+  estimated), `lock.target` may be the target object or its id, results
+  `{score, rank, kills, accuracy, time, best?, reason?}`.
+- `src/engine/Quality.js` `pickTier` also honours the saved `tier` setting (after the
+  `?quality=` URL override), so a quality change fully applies on reload.
+- **Bound to the merged systems (update).** Settings also carry `brightness` (EV),
+  `motionBlur`, `lensFlare`, `filmGrain`, `killCam`, `missileCam`. The ui applies them
+  directly: volumes -> `game.systems.audio.setVolume(master|music|sfx|radio)` (ui bus
+  follows sfx), post -> `game.post.options.{exposureCompensation, motionBlur, flare,
+  grain, reducedMotion}`, camera -> `game.cameraRig.options.{shake, killCam, missileCam,
+  reducedMotion}` and `baseFov`, `defaultCamera` -> `cameraRig.setMode` at sortie start,
+  `controlMode` -> `input.setMode`, `invertY` -> `input.invertPitch` (and back from
+  `controls:mode`). Menus play `cameraRig.playCinematic('title')` (ui orbit fallback).
+  Nav emits `ui:sound {name: 'hover'|'back'}`; touch flight buttons carry
+  `data-sound="none"`.
+- **Flow.** The ui drives gameplay's flow (`openSelect`, `selectMission`, `setSpecial`,
+  `startMission`, `pause`/`resume`, `retry`, `quitToMenu`, `toTitle`, `confirm` on
+  remembrance) and sets `flow.fallbackKeys = false`. Flow states map to ui screens
+  `select -> missionSelect`, `remembrance -> memorial`; settings/credits stay ui-only
+  overlays. Flow owns the pause key / pad Menu; the ui does not also toggle it.
+  Briefing map markers are derived read-only from `game.systems.missions.list`
+  (group `near`/`at`/`from`, `start`). Bindings shown in Settings come from the live
+  `input.bindings` object. The dev overlay (`src/game/dev/index.js`, small edit) shows
+  with the ui present only behind `?debughud` (or `?debug`).
+
 - **post + camera (additive).** `game.post.useStaticVelocity(material)` gives a
   material whose vertices are placed by a `positionNode` (terrain clipmap, water)
   correct camera-only velocity: three's VelocityNode reprojects the undisplaced

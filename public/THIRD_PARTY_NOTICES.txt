@@ -73,6 +73,25 @@ The same applies to the cloud lighting and terrain classification work, which
 follows publicly described techniques (Nubis/Guerrilla and Frostbite cloud
 rendering, geometric clipmaps and CDLOD) without reusing their code.
 
+Typefaces (src/ui, public/fonts)
+--------------------------------
+
+The interface self-hosts three open typefaces as Latin WOFF2 subsets taken
+from the Fontsource packages, each under the SIL Open Font License 1.1. The
+full licence texts ship beside the fonts in public/fonts/.
+
+B612 and B612 Mono
+  Copyright 2012 The B612 Project Authors (https://github.com/polarsys/b612).
+  Designed by Intactile Design for Airbus as a cockpit display typeface.
+  Files: b612-latin-{400,700}-normal.woff2, b612-mono-latin-{400,700}-normal.woff2
+  Licence: public/fonts/OFL-B612.txt
+
+Big Shoulders Display
+  Copyright 2019 The Big Shoulders Project Authors
+  (https://github.com/xotypeco/big_shoulders). Designed by Patric King.
+  Files: big-shoulders-display-latin-{600,800}-normal.woff2
+  Licence: public/fonts/OFL-BigShouldersDisplay.txt
+
 MiG-21 hostile livery (derivative)
 ----------------------------------
 
