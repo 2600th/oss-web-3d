@@ -673,3 +673,30 @@ Owner paths: `src/engine/PostFX.js`, `src/fx/**`, `src/flight/CameraRig.js`,
   `game.systems.camera.weatherOverride = { rain }`; `post.debugView` gains
   `'player'`, `'mbTiles'`, `'water'` (call `post.rebuild()` after setting).
 - **Removed:** `velocityMotionBlur` from `src/fx/post/nodes.js` (replaced).
+
+### Glass and water polish (additive unless marked)
+
+Owner paths: the glass branch of `src/assets/materials.js` (tagged `[glass]`),
+`src/assets/glass.js` (new), `src/world/water/**`, the water terms of
+`src/world/terrain/material.js` (tagged `[water]`). Evidence:
+`docs/v2/evidence/polish-glass-water/`.
+
+- **Aircraft glass (changed).** Canopy and `glass_misc` materials are now
+  premultiplied-alpha node materials (`premultipliedGlassClass(Base)` in
+  `src/assets/glass.js` skips three's premultiply; rgb is reflected light, alpha
+  is Fresnel coverage). They set their own `mrtNode` (velocity `vec4(0)`), so
+  `post.useTransparentVelocity` leaves them alone; anything that rebuilds a
+  glass material's `mrtNode` must keep velocity at zero in all channels.
+  `userData.glass` and `lightsNode = lights([env.sun])` are unchanged.
+- **glass.js API (new):** `premultipliedGlassClass(Base)`,
+  `setupGlass(material, { canopy, low, box })` (box = mesh-local bounds; the eye
+  inside them = cockpit view), `setupLensGlass(material, { low })`,
+  `bindGlassEnv(env)` (key light for the dust scatter; called by
+  `upgradeAircraftMaterials` when `env` is passed).
+- **River (changed look, same mesh and terrain API).** `src/world/water/river.js`
+  `riverSurface(...)` now also returns `rapids`; new exports
+  `riverReflection({ n, viewDir, skyVis, foam })` -> `{ ao, wall, sky }`
+  (horizon specular occlusion via the AO input, valley-wall radiance to add to
+  emissive) and `wallRadiance` (uniform, read from the scene's
+  `HemisphereLight`). The terrain material adds a wet bank margin (albedo and
+  roughness) outside the water.

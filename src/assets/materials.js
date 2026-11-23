@@ -3,6 +3,7 @@ import {
   texture, uv, float, int, vec3, vec4, clamp, luminance, mix, normalView, positionViewDirection, dot, pow, oneMinus,
   positionLocal, normalLocal, mx_noise_float, bumpMap, smoothstep, lights,
 } from 'three/tsl';
+import { premultipliedGlassClass, setupGlass, setupLensGlass, bindGlassEnv } from './glass.js'; // [glass]
 
 /**
  * Runtime material recipes for the art assets (shared by the player jet in
@@ -99,13 +100,6 @@ function memo(src, key, build) {
 const GLASS = /canopy|glass/i;
 const INTERIOR = /cockpit/i;
 
-/** Fresnel-weighted opacity: clear head-on, mirror-like toward grazing angles. */
-function glassOpacity(base, edge) {
-  const ndv = clamp(dot(normalView, positionViewDirection).abs(), 0, 1);
-  const f = pow(oneMinus(ndv), 4);
-  return float(base).add(f.mul(edge - base));
-}
-
 /** Grime/panel-line driven roughness from the albedo map itself (no ORM in the source). */
 function paintRoughness(map, base, range) {
   if (!map) return float(base);
@@ -134,31 +128,16 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
     const out = list.map((src) => {
       if (!src || src.isNodeMaterial) return src;
       const name = `${o.name} ${src.name}`;
-      // `glass_misc` (source Object_3) is a large dark alpha sheet around the tail that the
-      // source exporter left in; as a classic material it never shows, as a node material
-      // it draws as a smoked disc. Leave it exactly as loaded.
-      if (/glass_misc/.test(o.name)) return src;
       return memo(src, key, () => {
+        // [glass] canopy and the nav-light lenses (`glass_misc`: three ~3 cm covers on the
+        // wingtips and fin tip, not a sheet). Premultiplied glass: reflections at full
+        // strength, the background dimmed by Fresnel coverage (see src/assets/glass.js).
         if (GLASS.test(o.name) && src.transparent) {
-          // canopy + small glazing (glass_misc): clear, coated, reflective
-          const g = low ? toNodeMaterial(src, THREE.MeshStandardNodeMaterial) : toNodeMaterial(src, THREE.MeshPhysicalNodeMaterial);
-          const canopy = /canopy/i.test(name);
-          g.color.setRGB(0.02, 0.026, 0.03);
-          g.roughness = 0.04;
-          g.metalness = 0;
-          g.transparent = true;
-          g.depthWrite = false;
-          g.side = THREE.DoubleSide;
-          g.envMapIntensity = 1.6;
-          if (!low) {
-            g.clearcoat = 1;
-            g.clearcoatRoughness = 0.02;
-            g.ior = 1.52;
-            g.specularIntensity = 1;
-          }
-          g.opacityNode = glassOpacity(canopy ? 0.1 : 0.45, canopy ? 0.82 : 0.9);
-          g.userData.glass = true;
-          return g;
+          const g = toNodeMaterial(src, premultipliedGlassClass(low ? THREE.MeshStandardNodeMaterial : THREE.MeshPhysicalNodeMaterial));
+          if (/glass_misc/.test(name)) return setupLensGlass(g, { low });
+          if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          const { min, max } = o.geometry.boundingBox;
+          return setupGlass(g, { canopy: /canopy/i.test(name), low, box: { min: min.toArray(), max: max.toArray() } });
         }
         const m = toNodeMaterial(src, rich && !INTERIOR.test(o.name) ? THREE.MeshPhysicalNodeMaterial : THREE.MeshStandardNodeMaterial);
         filterTextures(m, tier);
@@ -203,6 +182,7 @@ export function upgradeAircraftMaterials(root, { tier = 'high', role = 'player',
     // wherever the light was placed. (Outside memo(): env arrives later via
     // Aircraft.configure and the memo key does not include it.)
     if (env?.sun?.isLight) {
+      bindGlassEnv(env); // [glass] key light for the canopy dust scatter
       for (const m of out) if (m?.userData?.glass && m.userData.keyLightOnly !== env.sun) {
         m.lightsNode = lights([env.sun]);
         m.userData.keyLightOnly = env.sun;
