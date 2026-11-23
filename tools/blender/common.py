@@ -265,7 +265,7 @@ def select_only(objs, active=None):
     bpy.context.view_layer.objects.active = active or objs[0]
 
 
-def export_glb(path, objs, extras=None):
+def export_glb(path, objs, extras=None, tangents=False):
     """Export the given objects (and their children) as a GLB with +Y up."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     sel = set()
@@ -282,7 +282,7 @@ def export_glb(path, objs, extras=None):
             bpy.context.scene[k] = v
     kw = dict(filepath=path, export_format='GLB', use_selection=True, export_yup=True,
               export_apply=True, export_extras=True, export_cameras=False, export_lights=False,
-              export_animations=True, export_image_format='AUTO')
+              export_animations=True, export_image_format='AUTO', export_tangents=tangents)
     try:
         bpy.ops.export_scene.gltf(**kw)
     except TypeError:
