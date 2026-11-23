@@ -43,7 +43,9 @@ export class Game {
     this.env = new Environment(r);
     this.env.addTo(this.scene);
     const t = r.tier;
-    this.terrain = new Terrain(r, { grid: t.terrainGrid, levels: t.terrainLevels });
+    // (terrain owner) `env` lets the terrain follow the sun for its long-range
+    // shadows and pick up cloud shadows; grid/levels are now derived from the tier.
+    this.terrain = new Terrain(r, { grid: t.terrainGrid, levels: t.terrainLevels, env: this.env });
     this.terrain.addTo(this.scene);
 
     this.flight = new FlightModel();
