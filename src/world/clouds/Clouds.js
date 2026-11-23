@@ -8,6 +8,7 @@ import { generateShapeNoise, generateDetailNoise, generateCirrusNoise, perlinFbm
 import { generateBlueNoise } from './blueNoise.js';
 import { DEM, terrainHeight } from '../terrain/heightfield.js';
 import { CLOUD_SHADOW_PATH } from '../shadows/shadowMath.js'; // [shadows]
+import { PassGuard } from './passGuard.js';
 
 /**
  * Volumetric clouds.
@@ -204,6 +205,8 @@ export class Clouds {
     });
 
     this._quad = new THREE.QuadMesh();
+    this._guard = new PassGuard('clouds'); // [ground polish] see passGuard.js
+    this._sceneRoot = null;
     this._weatherMaterial = this._material('Clouds.weatherRaw', this._weatherPass());
     this._dilateMaterial = this._material('Clouds.weather', this._dilatePass());
     this._shadowMaterial = this._material('Clouds.shadow', this._shadowPass());
@@ -826,6 +829,7 @@ export class Clouds {
   stage() {
     return (color, ctx) => {
       if (!this.node) this.node = new CloudsPassNode(this, ctx.depth);
+      this._sceneRoot = ctx.scenePass?.scene ?? null; // for the pass guard's diagnosis
       const node = this.node;
       const u = this.u;
       const reversed = ctx.renderer.reversedDepthBuffer === true;
@@ -881,6 +885,11 @@ export class Clouds {
     if (!this._marchMaterial) return;
     const u = this.u;
     const camera = this.camera;
+    // [ground polish] a non-finite camera would write NaN into the history
+    // (kept forever by the temporal blend); skip and restart it instead
+    const cp = camera.position;
+    if (!Number.isFinite(cp.x + cp.y + cp.z)) { u.reset.value = 1; return; }
+    if (!this._guard.ready()) return;
     const size = renderer.getDrawingBufferSize(this._size);
     const mw = Math.max(1, Math.ceil(size.x * this.scale / SUB));
     const mh = Math.max(1, Math.ceil(size.y * this.scale / SUB));
@@ -907,14 +916,30 @@ export class Clouds {
     this._histColor.value = read.textures[0];
     this._histAux.value = read.textures[1];
 
+    // [ground polish] The march reads the scene pass's depth, so the scene is
+    // rendered lazily inside the first _quad.render below: an exception from
+    // any scene object lands here. Always restore the renderer (it used to be
+    // left bound to the march target), report once with the culprit, back off.
     this._state = THREE.RendererUtils.resetRendererState(renderer, this._state);
-    this._quad.material = this._marchMaterial;
-    renderer.setRenderTarget(this.marchTarget);
-    this._quad.render(renderer);
-    this._quad.material = this._resolveMaterial;
-    renderer.setRenderTarget(write);
-    this._quad.render(renderer);
-    THREE.RendererUtils.restoreRendererState(renderer, this._state);
+    let failed = null;
+    try {
+      this._quad.material = this._marchMaterial;
+      renderer.setRenderTarget(this.marchTarget);
+      this._quad.render(renderer);
+      this._quad.material = this._resolveMaterial;
+      renderer.setRenderTarget(write);
+      this._quad.render(renderer);
+    } catch (e) {
+      failed = e;
+    } finally {
+      THREE.RendererUtils.restoreRendererState(renderer, this._state);
+    }
+    if (failed) {
+      this._guard.fail(failed, this._sceneRoot);
+      u.reset.value = 1;
+      return;
+    }
+    this._guard.ok();
 
     this.node.colorNode.value = write.textures[0];
     this.node.auxNode.value = write.textures[1];
@@ -948,26 +973,31 @@ export class Clouds {
     u.focusPos.value.copy(focus);
 
     this._state2 = THREE.RendererUtils.resetRendererState(renderer, this._state2);
-    this._weatherAge += dt;
-    if (this._weatherAge > 0.5 || this.weatherDirty) {
-      this._weatherAge = 0;
-      this.weatherDirty = false;
-      this._quad.material = this._weatherMaterial;
-      renderer.setRenderTarget(this.weatherRaw);
+    try { // [ground polish] never leave the renderer bound to a cloud target
+      this._weatherAge += dt;
+      if (this._weatherAge > 0.5 || this.weatherDirty) {
+        this._weatherAge = 0;
+        this.weatherDirty = false;
+        this._quad.material = this._weatherMaterial;
+        renderer.setRenderTarget(this.weatherRaw);
+        this._quad.render(renderer);
+        this._quad.material = this._dilateMaterial;
+        renderer.setRenderTarget(this.weatherTarget);
+        this._quad.render(renderer);
+      }
+      const texel = SHADOW_EXTENT / this.shadowTarget.width;
+      const cx = Math.round(camera.position.x / texel) * texel;
+      const cz = Math.round(camera.position.z / texel) * texel;
+      if (Number.isFinite(cx + cz)) u.shadowCentre.value.set(cx, cz);
+      this._quad.material = this._shadowMaterial;
+      renderer.setRenderTarget(this.shadowTarget);
       this._quad.render(renderer);
-      this._quad.material = this._dilateMaterial;
-      renderer.setRenderTarget(this.weatherTarget);
+      this._quad.material = this._probeMaterial;
+      renderer.setRenderTarget(this.probeTarget);
       this._quad.render(renderer);
+    } finally {
+      THREE.RendererUtils.restoreRendererState(renderer, this._state2);
     }
-    const texel = SHADOW_EXTENT / this.shadowTarget.width;
-    u.shadowCentre.value.set(Math.round(camera.position.x / texel) * texel, Math.round(camera.position.z / texel) * texel);
-    this._quad.material = this._shadowMaterial;
-    renderer.setRenderTarget(this.shadowTarget);
-    this._quad.render(renderer);
-    this._quad.material = this._probeMaterial;
-    renderer.setRenderTarget(this.probeTarget);
-    this._quad.render(renderer);
-    THREE.RendererUtils.restoreRendererState(renderer, this._state2);
 
     if (!this._probePending) {
       this._probePending = true;
