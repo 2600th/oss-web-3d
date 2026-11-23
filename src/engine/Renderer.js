@@ -23,11 +23,11 @@ export const POWER_PREFERENCE = IS_WINDOWS ? undefined : 'high-performance';
  *    `?notimestamps` turns them off everywhere.
  *  - Resizes are coalesced to one per frame (window drags fire dozens of
  *    events, each one re-allocating every render target), and devicePixelRatio
- *    changes (browser zoom, moving to another monitor) re-size too.
+ *    changes (browser zoom, moving to another monitor) are caught by poll().
  *  - `onLost(info)` is called once when the GPU device / GL context is lost.
  */
 export class Renderer {
-  constructor(canvas, { forceWebGL = false, timestamps } = {}) {
+  constructor(canvas, { forceWebGL = false, timestamps, device } = {}) {
     this.canvas = canvas;
     const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
     const wantTimestamps = timestamps ?? (!params.has('notimestamps') && (!forceWebGL || params.has('gputime') || params.has('perfhud')));
@@ -38,6 +38,7 @@ export class Renderer {
       // pass it where it chooses a GPU (dual-GPU macOS / Linux laptops).
       powerPreference: POWER_PREFERENCE,
       forceWebGL,
+      device, // pre-created by BootLifecycle.probeWebGPU (undefined: three creates its own)
       logarithmicDepthBuffer: false,
       reversedDepthBuffer: true, // float depth precision for 0.5 m .. 300 km
       trackTimestamp: wantTimestamps,
@@ -57,13 +58,12 @@ export class Renderer {
     this.onLost = null;
     this._params = params;
     this._resizeQueued = false;
+    this._dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     this._onResize = () => {
       if (this._resizeQueued) return;
       this._resizeQueued = true;
       requestAnimationFrame(() => { this._resizeQueued = false; this.resize(); });
     };
-    this._dprQuery = null;
-    this._onDpr = () => { this._watchDpr(); this._onResize(); };
   }
 
   async init() {
@@ -85,18 +85,21 @@ export class Renderer {
       this.onLost?.(info);
     };
     window.addEventListener('resize', this._onResize);
-    this._watchDpr();
     this.resize();
     return this;
   }
 
-  /** Re-arm the devicePixelRatio media query (it matches one exact value). */
-  _watchDpr() {
-    this._dprQuery?.removeEventListener?.('change', this._onDpr);
-    try {
-      this._dprQuery = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
-      this._dprQuery.addEventListener('change', this._onDpr, { once: true });
-    } catch { this._dprQuery = null; }
+  /**
+   * Once per frame (Perf.frame): catch devicePixelRatio changes (browser
+   * zoom, a move to another monitor) and size changes that fire no `resize`
+   * event (some embedders, DevTools device emulation). Three property reads.
+   */
+  poll() {
+    const dpr = window.devicePixelRatio || 1;
+    if (dpr !== this._dpr || window.innerWidth !== this.width || window.innerHeight !== this.height) {
+      this._dpr = dpr;
+      this._onResize();
+    }
   }
 
   setTier(name) {
@@ -128,7 +131,6 @@ export class Renderer {
 
   dispose() {
     window.removeEventListener('resize', this._onResize);
-    this._dprQuery?.removeEventListener?.('change', this._onDpr);
     this.renderer.dispose();
   }
 }

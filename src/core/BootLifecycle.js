@@ -18,14 +18,23 @@ import { Renderer, POWER_PREFERENCE } from '../engine/Renderer.js';
  * that fallback warns on the console and reuses the same canvas.
  */
 
-/** Is there a usable WebGPU adapter? Never throws. */
+/**
+ * A WebGPU device, created the way three's WebGPUBackend would create it
+ * (compatibility feature level, every feature the adapter has), or null.
+ * Never throws. Handing it to the renderer means the adapter is requested
+ * once per boot, not twice (each request is a round trip to a GPU process
+ * that is busy initialising at that moment).
+ */
 export async function probeWebGPU() {
   try {
-    if (typeof navigator === 'undefined' || !navigator.gpu) return false;
-    const adapter = await navigator.gpu.requestAdapter(POWER_PREFERENCE ? { powerPreference: POWER_PREFERENCE } : undefined);
-    return !!adapter;
+    if (typeof navigator === 'undefined' || !navigator.gpu) return null;
+    const opts = { featureLevel: 'compatibility' };
+    if (POWER_PREFERENCE) opts.powerPreference = POWER_PREFERENCE;
+    const adapter = await navigator.gpu.requestAdapter(opts);
+    if (!adapter) return null;
+    return await adapter.requestDevice({ requiredFeatures: [...adapter.features] });
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -55,11 +64,11 @@ function freshCanvas(old) {
  */
 export async function createRenderer(canvas, params) {
   const force = params.has('webgl');
-  const webgpu = !force && await probeWebGPU();
-  let fallbackReason = force ? 'forced (?webgl)' : webgpu ? null : 'WebGPU unavailable';
-  if (webgpu) {
+  const device = force ? null : await probeWebGPU();
+  let fallbackReason = force ? 'forced (?webgl)' : device ? null : 'WebGPU unavailable';
+  if (device) {
     try {
-      const r = new Renderer(canvas);
+      const r = new Renderer(canvas, { device });
       await r.init();
       if (r.backend === 'webgpu') return { r, canvas, fallbackReason };
       // three fell back by itself (should not happen after a good probe): keep it

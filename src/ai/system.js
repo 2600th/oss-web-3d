@@ -45,7 +45,15 @@ export class AiSystem {
     this.combat = game.systems.combat;
     this.ctx.player = this.combat.player;
     this.ctx.world = this.combat.world;
-    preloadModels();
+    // [engine perf] The hostile fighter (a 5.3 MB GLB plus its meshopt decode)
+    // is not needed for the title: preload it a few seconds after the first
+    // menu screen is up (the boot loader has faded by then), still long before
+    // any sortie can spawn one. A sortie started directly (?mission=) loads it
+    // on first spawn (hostileFighterModel) as before.
+    const off = game.events.on('flow:state', () => {
+      off();
+      setTimeout(() => preloadModels(), 4000);
+    });
   }
 
   // -------------------------------------------------------------- spawn --

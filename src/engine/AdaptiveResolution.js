@@ -35,7 +35,7 @@ export const ADAPTIVE_DEFAULTS = {
  */
 export function nextScale(scale, ms, o = ADAPTIVE_DEFAULTS) {
   if (!(ms > 0) || !Number.isFinite(ms)) return scale;
-  const q = (s) => Math.round(s / o.step) * o.step;
+  const q = (s) => +(Math.round(s / o.step) * o.step).toFixed(3);
   if (ms > o.budgetMs) {
     // pixels needed to fit the budget, with 10 % margin; at least one step down
     const target = scale * Math.sqrt((o.budgetMs * 0.9) / ms);
@@ -119,7 +119,7 @@ export class AdaptiveResolution {
       // within 8 s of the last drop, so we do not oscillate at the boundary).
       const fb = this.o.frameBudgetMs;
       if (med > fb) { next = nextScale(this.scale, med, { ...this.o, budgetMs: fb }); this._lastDrop = 0; }
-      else if (med < fb * 0.9 && (this._lastDrop ?? 99) > 8) next = Math.min(this.o.maxScale, Math.round((this.scale + this.o.step) / this.o.step) * this.o.step);
+      else if (med < fb * 0.9 && (this._lastDrop ?? 99) > 8) next = Math.min(this.o.maxScale, +(Math.round((this.scale + this.o.step) / this.o.step) * this.o.step).toFixed(3));
       else next = this.scale;
     }
     this.history.push({ scale: next, ms: +med.toFixed(2) });

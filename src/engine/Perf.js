@@ -60,6 +60,7 @@ export async function installPerf({ r, game, params }) {
       update();
       render();
     }
+    r.poll();
     if (profiler.available) profiler.sample();
     perf.adaptive.update(dt);
     perf.hud?.update(dt);

@@ -28,7 +28,7 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         // three.js changes far less often than the game; keep it separately cacheable.
-        advancedChunks: {
+        codeSplitting: {
           groups: [{ name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ }],
         },
       },
