@@ -39,6 +39,18 @@
   --pad-r: max(var(--gutter), calc(var(--safe-r) + 16px));
   --pad-b: max(var(--gutter), calc(var(--safe-b) + 16px));
   --pad-l: max(var(--gutter), calc(var(--safe-l) + 16px));
+  /* Menu type scale: read from a sofa as well as a desk. Phones stay at 1. */
+  --ts: 1;
+}
+@media (min-width: 1100px) and (min-height: 720px) {
+  :root {
+    --ts: 1.2;
+  }
+}
+@media (min-width: 1800px) and (min-height: 1000px) {
+  :root {
+    --ts: 1.4;
+  }
 }
 
 html[data-reduced-motion='true'] {
@@ -79,10 +91,11 @@ body {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  font: 400 15px/1.5 var(--f-ui);
+  font: 400 calc(15px * var(--ts)) / 1.5 var(--f-ui);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
-  font-variant-numeric: tabular-nums;
+  /* No global tabular-nums: B612's tabular set gives the full stop a figure
+     width, which reads as "34. 47". Counters that must align use the mono. */
   user-select: none;
 }
 
@@ -114,7 +127,7 @@ body {
   opacity: 1;
 }
 #hud.dim {
-  opacity: 0.16;
+  opacity: 0.12;
 }
 
 /* -------------------------------------------------------------- screens -- */
@@ -207,7 +220,7 @@ html[data-reduced-motion='true'] .scr {
   border: 1px solid var(--line-strong);
   background: rgba(7, 16, 21, 0.6);
   color: var(--text);
-  font: 700 13px/1 var(--f-ui);
+  font: 700 calc(13px * var(--ts))/1 var(--f-ui);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   cursor: pointer;
@@ -232,7 +245,7 @@ html[data-reduced-motion='true'] .scr {
 .btn-small {
   min-height: 36px;
   padding: 0 12px;
-  font-size: 11px;
+  font-size: calc(12px * var(--ts));
 }
 .btn:hover,
 .btn:focus {
@@ -315,7 +328,7 @@ html[data-input='gamepad'] .btn:focus {
 .menu-detail {
   grid-area: detail;
   margin-top: 4px;
-  font: 400 12px/1.3 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.3 var(--f-ui);
   color: var(--text-faint);
   letter-spacing: 0.02em;
 }
@@ -381,7 +394,7 @@ html[data-input='gamepad'] .btn:focus {
 }
 .tagline {
   margin: 0;
-  font: 400 13px/1.4 var(--f-ui);
+  font: 400 calc(13px * var(--ts))/1.4 var(--f-ui);
   text-transform: uppercase;
   letter-spacing: 0.2em;
   color: var(--text-dim);
@@ -397,7 +410,7 @@ html[data-input='gamepad'] .btn:focus {
   margin: 0;
   padding: 7px 10px;
   background: rgba(5, 11, 15, 0.72);
-  font: 400 11px/1 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.08em;
   color: var(--text-dim);
   white-space: pre;
@@ -408,7 +421,7 @@ html[data-input='gamepad'] .btn:focus {
 .disclaimer {
   margin: 0;
   max-width: 62ch;
-  font: 400 11px/1.55 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.55 var(--f-ui);
   color: var(--text-faint);
 }
 
@@ -448,7 +461,8 @@ html[data-input='gamepad'] .btn:focus {
   transition: background var(--fast) var(--ease-out);
 }
 .mission-row[aria-current='true'] {
-  background: rgba(159, 230, 255, 0.08);
+  background: rgba(159, 230, 255, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .mission-row:hover,
 .mission-row:focus {
@@ -466,7 +480,7 @@ html[data-input='gamepad'] .btn:focus {
   cursor: not-allowed;
 }
 .m-index {
-  font: 700 12px/1 var(--f-mono);
+  font: 700 calc(12px * var(--ts))/1 var(--f-mono);
   color: var(--text-faint);
 }
 .m-text {
@@ -478,7 +492,7 @@ html[data-input='gamepad'] .btn:focus {
   text-transform: uppercase;
 }
 .m-loc {
-  font-size: 12px;
+  font-size: calc(12px * var(--ts));
   color: var(--text-dim);
 }
 .m-rank {
@@ -488,7 +502,7 @@ html[data-input='gamepad'] .btn:focus {
 }
 .m-dev {
   grid-column: 2;
-  font: 700 10px/1 var(--f-ui);
+  font: 700 calc(11px * var(--ts))/1 var(--f-ui);
   color: var(--priority);
   text-transform: uppercase;
 }
@@ -518,7 +532,7 @@ html[data-input='gamepad'] .btn:focus {
 .mission-loc,
 .brief-loc {
   margin: 0;
-  font: 400 12px/1.4 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.4 var(--f-ui);
   color: var(--text-dim);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -531,7 +545,7 @@ html[data-input='gamepad'] .btn:focus {
 }
 .mission-best {
   margin: 0;
-  font: 400 12px/1.4 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.4 var(--f-ui);
   color: var(--text-dim);
 }
 .threats {
@@ -546,7 +560,7 @@ html[data-input='gamepad'] .btn:focus {
   padding: 4px 9px;
   border: 1px solid rgba(255, 91, 71, 0.6);
   color: #ffb3a8;
-  font: 700 11px/1.2 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1.2 var(--f-ui);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -576,7 +590,7 @@ html[data-input='gamepad'] .btn:focus {
   gap: 6px;
   background: rgba(7, 16, 21, 0.82);
   border: 1px solid var(--line);
-  font: 400 11px/1.2 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.2 var(--f-ui);
   color: var(--text-dim);
 }
 .lg {
@@ -627,7 +641,7 @@ html[data-input='gamepad'] .btn:focus {
 }
 .brief-sub {
   margin: 12px 0 0;
-  font: 700 11px/1 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -659,14 +673,14 @@ html[data-input='gamepad'] .btn:focus {
   margin: 0;
 }
 .brief-threats dt {
-  font: 700 12px/1.5 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1.5 var(--f-ui);
   color: #ffb3a8;
   text-transform: uppercase;
 }
 .brief-threats dd {
   margin: 0;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--ts));
 }
 .brief-text .scr-actions {
   padding-top: 16px;
@@ -693,7 +707,7 @@ html[data-input='gamepad'] .btn:focus {
   color: var(--text-dim);
   text-decoration: none;
   padding: 6px 0;
-  font: 700 12px/1.2 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1.2 var(--f-ui);
   text-transform: uppercase;
   letter-spacing: 0.12em;
 }
@@ -731,13 +745,13 @@ html[data-input='gamepad'] .btn:focus {
 .set-label {
   grid-area: label;
   font-weight: 700;
-  font-size: 14px;
+  font-size: calc(14px * var(--ts));
 }
 .set-note {
   grid-area: note;
   margin: 4px 0 0;
   max-width: 48ch;
-  font-size: 12px;
+  font-size: calc(12px * var(--ts));
   color: var(--text-faint);
 }
 .set-ctl {
@@ -760,7 +774,7 @@ html[data-input='gamepad'] .btn:focus {
   min-height: 36px;
   border: 1px solid var(--line);
   color: var(--text-dim);
-  font: 700 12px/1 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.04em;
   white-space: nowrap;
   transition: background var(--fast) var(--ease-out), color var(--fast) var(--ease-out);
@@ -806,7 +820,7 @@ html[data-input='gamepad'] .btn:focus {
 .switch-text {
   min-width: 2.5em;
   padding-left: 10px;
-  font: 700 12px/1 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1 var(--f-ui);
   color: var(--text-dim);
 }
 .set-range {
@@ -848,7 +862,7 @@ html[data-input='gamepad'] .btn:focus {
 .range-value {
   min-width: 3.6em;
   text-align: right;
-  font: 700 13px/1 var(--f-ui);
+  font: 700 calc(13px * var(--ts))/1 var(--f-ui);
   color: var(--text);
 }
 .set-notice {
@@ -860,12 +874,12 @@ html[data-input='gamepad'] .btn:focus {
   padding: 10px 12px;
   border: 1px solid rgba(255, 197, 61, 0.55);
   color: #ffe2a3;
-  font-size: 13px;
+  font-size: calc(13px * var(--ts));
 }
 .bindings {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: calc(13px * var(--ts));
 }
 .bindings th,
 .bindings td {
@@ -875,7 +889,7 @@ html[data-input='gamepad'] .btn:focus {
   font-weight: 400;
 }
 .bindings thead th {
-  font: 700 11px/1 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -892,7 +906,7 @@ kbd {
   padding: 2px 6px;
   border: 1px solid var(--line-strong);
   border-bottom-width: 2px;
-  font: 700 11px/1.3 var(--f-mono);
+  font: 700 calc(12px * var(--ts))/1.3 var(--f-mono);
   color: var(--text);
   text-align: center;
 }
@@ -910,7 +924,7 @@ kbd {
 }
 .pause-context {
   margin: 0 0 8px;
-  font: 400 12px/1.4 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.4 var(--f-ui);
   color: var(--text-dim);
 }
 
@@ -942,8 +956,8 @@ kbd {
   display: grid;
   justify-items: center;
   padding: 8px 18px 10px;
-  border: 2px solid var(--priority);
-  color: var(--priority);
+  border: 2px solid var(--accent);
+  color: var(--accent);
   transform: rotate(-3deg);
   animation: stamp 420ms var(--ease-out) 200ms both;
 }
@@ -960,7 +974,7 @@ html[data-reduced-motion='true'] .rank-stamp {
   font: 800 5.2rem/0.9 var(--f-display);
 }
 .rank-cap {
-  font: 700 10px/1 var(--f-ui);
+  font: 700 calc(11px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.24em;
   text-transform: uppercase;
 }
@@ -979,7 +993,7 @@ html[data-reduced-motion='true'] .rank-stamp {
   gap: 6px;
 }
 .res dt {
-  font: 700 10px/1 var(--f-ui);
+  font: 700 calc(11px * var(--ts))/1 var(--f-ui);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -995,7 +1009,7 @@ html[data-reduced-motion='true'] .rank-stamp {
 .debrief-note {
   margin: 0;
   color: var(--priority);
-  font: 700 12px/1 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1 var(--f-ui);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -1062,7 +1076,7 @@ html[data-reduced-motion='true'] .rank-stamp {
   overflow: auto;
 }
 .credits dt {
-  font: 700 11px/1.6 var(--f-ui);
+  font: 700 calc(12px * var(--ts))/1.6 var(--f-ui);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -1099,7 +1113,7 @@ html[data-reduced-motion='true'] .rank-stamp {
 .loading-where,
 .loading-label {
   margin: 0;
-  font: 400 12px/1.4 var(--f-ui);
+  font: 400 calc(12px * var(--ts))/1.4 var(--f-ui);
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1279,7 +1293,8 @@ html[data-reduced-motion='true'] .rank-stamp {
   border-style: dashed;
 }
 .tbtn-missile.locked {
-  border: 3px solid var(--priority);
+  border: 3px solid var(--text);
+  box-shadow: 0 0 0 3px rgba(6, 14, 20, 0.55), 0 0 14px rgba(214, 246, 255, 0.45);
 }
 .tbtn-boost {
   left: var(--edge-l);
@@ -1306,20 +1321,22 @@ html[data-reduced-motion='true'] .rank-stamp {
   right: calc(96px * var(--k));
   bottom: calc(4px * var(--k));
 }
+/* Flares are the panic button: in the thumb's arc between GUN and MSL, one
+   short roll up from either. Weapon switch is rare; it takes the far corner. */
 .tbtn-flares {
   --d: 60px;
-  right: calc(13px * var(--k));
-  bottom: calc(98px * var(--k));
-  border-color: rgba(255, 197, 61, 0.8);
+  right: calc(92px * var(--k));
+  bottom: calc(88px * var(--k));
+  border: 2px solid var(--text);
 }
 .tbtn-weapon {
-  --d: 50px;
-  right: calc(92px * var(--k));
-  bottom: calc(90px * var(--k));
+  --d: 52px;
+  right: calc(13px * var(--k));
+  bottom: calc(98px * var(--k));
   font-size: calc(11px * var(--k));
 }
 .tbtn-target {
-  --d: 50px;
+  --d: 52px;
   right: calc(178px * var(--k));
   bottom: calc(14px * var(--k));
   font-size: calc(11px * var(--k));
@@ -1334,6 +1351,9 @@ html[data-reduced-motion='true'] .rank-stamp {
 .tbtn-small {
   position: static;
   --d: 44px;
+  /* never scaled down: 44 px is the floor */
+  width: 44px;
+  height: 44px;
   border-radius: 0;
   font-size: 10px;
 }

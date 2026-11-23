@@ -37,14 +37,14 @@ export const FALLBACK_MISSIONS = [
     name: 'High Wire',
     description:
       'A hostile fighter screen is shadowing the strike packages over Tiger Hill. Sweep the sector, hold the sky ' +
-      'for the next wave, and watch for the flight lead who has been calling himself Karakoram on open channels.',
+      'for the next wave, and watch for their flight lead, who flies the screen from above it.',
     location: { name: 'Tiger Hill, Mushkoh approaches', ...lonLatToWorld(75.73, 34.47) },
-    threats: ['Fighters', 'Ace', 'SAM'],
+    threats: ['Fighters', 'Flight lead', 'SAM'],
     unlocked: true,
     bestRank: null,
     markers: [
       { kind: 'objective', label: 'CAP point', ...lonLatToWorld(75.73, 34.49) },
-      { kind: 'ace', label: 'Karakoram', ...lonLatToWorld(75.66, 34.52) },
+      { kind: 'ace', label: 'Flight lead', ...lonLatToWorld(75.66, 34.52) },
       { kind: 'sam', label: 'SAM', ...lonLatToWorld(75.69, 34.44), radius: 6000 },
       { kind: 'start', label: 'Ingress', ...lonLatToWorld(75.95, 34.55) },
     ],

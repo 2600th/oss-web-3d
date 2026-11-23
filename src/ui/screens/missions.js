@@ -18,14 +18,15 @@ const THREAT_INFO = {
   SAM: 'Radar-guided surface-to-air missiles. Watch the rings; terrain masks you.',
   Radar: 'Search radar that cues launchers. Kill it and the SAMs go blind.',
   Fighters: 'Hostile interceptors flying in pairs.',
-  Ace: 'A named hostile flight lead. Better aircraft, better pilot.',
+  'Flight lead': 'The hostile flight lead. Better aircraft, better pilot; marked with a double frame.',
 };
+THREAT_INFO.Ace = THREAT_INFO['Flight lead'];
 
 const MARKER_STYLE = {
   objective: { color: '#ffc53d', shape: 'diamond' },
   sam: { color: '#ff5b47', shape: 'ring' },
   aaa: { color: '#ff7a4a', shape: 'ring' },
-  ace: { color: '#ff4f8b', shape: 'chevron' },
+  ace: { color: '#ff5b47', shape: 'chevron' },
   fighter: { color: '#ff5b47', shape: 'chevron' },
   start: { color: '#d6f6ff', shape: 'arrow' },
 };
@@ -215,10 +216,12 @@ export function drawMap(canvas, mission, { span = 36000, labels = true, grid = f
     for (const m of markers) ext = Math.max(ext, Math.abs(m.x - cx) * 2 * (h / w), Math.abs(m.z - cz) * 2);
     span = Math.max(span, ext * 1.35);
   }
-  const k = h / span; // px per metre (span fits the height)
-  // Keep the window inside the DEM so the map never shows the void past it.
+  let k = h / span; // px per metre (span fits the height)
+  // Keep the window inside the DEM so the map never shows the void past it:
+  // zoom in until the DEM covers both axes, then clamp the centre.
   if (relief) {
     const b = relief.bounds;
+    k = Math.max(k, w / (b.maxX - b.minX), h / (b.maxZ - b.minZ));
     const hw = w / 2 / k;
     const hh = h / 2 / k;
     if (b.maxX - b.minX > 2 * hw) cx = Math.min(b.maxX - hw, Math.max(b.minX + hw, cx));

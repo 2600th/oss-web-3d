@@ -133,6 +133,20 @@ export class TouchControls {
     if (!this.enabled) this._release();
   }
 
+  /**
+   * Screen rects (CSS px) of every visible button, so the HUD can move target
+   * markers out from under the player's thumbs. Empty while hidden.
+   */
+  occluders() {
+    if (!this.enabled) return [];
+    const out = [];
+    for (const n of [this.boost, this.camBtn, this.pauseBtn, ...Object.values(this.buttons)]) {
+      const r = n.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) out.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+    }
+    return out;
+  }
+
   dispose() {
     this._release();
     for (const [t, type, fn, o] of this._listeners) t.removeEventListener(type, fn, o);

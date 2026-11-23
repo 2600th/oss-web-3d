@@ -153,6 +153,13 @@ export class UI {
     const now = performance.now();
     const rdt = Math.min(0.1, (now - (this._hudLast ?? now)) / 1000);
     this._hudLast = now;
+    // Button rects change only on resize, rotation or mode switch; a
+    // twice-a-second re-read covers all three without wiring each one.
+    this._occT = (this._occT ?? 0) - rdt;
+    if (this._occT <= 0) {
+      this._occT = 0.5;
+      this.hud.occluders = this.touchControls.occluders();
+    }
     this.hud.update(rdt, this.game);
     this.touchControls.sync(this.game.hud);
   }
@@ -328,7 +335,7 @@ export class UI {
       if (!isPlayer(p.killer)) return;
       const t = p.target ?? {};
       const pts = Number.isFinite(p.score) ? `+${p.score}` : '';
-      if (t.isAce) this.hud.callout('ace', 'ACE DOWN', [t.name, pts].filter(Boolean).join('  '), 3);
+      if (t.isAce) this.hud.callout('ace', 'LEAD DOWN', pts, 3);
       else if (t.kind && !/^(air|aircraft|fighter|bomber|helo|helicopter|jet|transport)$/i.test(t.kind)) this.hud.callout('ground', 'NEUTRALISED', pts);
       else this.hud.callout('kill', 'SPLASH', pts);
     });

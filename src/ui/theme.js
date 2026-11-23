@@ -27,7 +27,9 @@ export const PALETTES = {
   standard: {
     hostile: '#ff5b47',
     priority: '#ffc53d',
-    ace: '#ff4f8b',
+    // The flight lead is a hostile: same colour, told apart by its notched
+    // double frame, not by a fifth hue.
+    ace: '#ff5b47',
     friendly: '#69c8ff',
     ground: '#ff7a4a',
     warning: '#ff4036',
@@ -39,7 +41,7 @@ export const PALETTES = {
   deutan: {
     hostile: '#ff9a1f',
     priority: '#ffffff',
-    ace: '#ffd23d',
+    ace: '#ff9a1f',
     friendly: '#4aa3ff',
     ground: '#ffb84d',
     warning: '#ffd400',
@@ -51,7 +53,7 @@ export const PALETTES = {
   tritan: {
     hostile: '#ff4a5a',
     priority: '#ffffff',
-    ace: '#ff8fb0',
+    ace: '#ff4a5a',
     friendly: '#5ff2ff',
     ground: '#ff6b7a',
     warning: '#ff2d55',
@@ -63,11 +65,16 @@ export const PALETTES = {
 
 export const HALO = 'rgba(2,8,12,0.72)';
 export const HALO_SOFT = 'rgba(2,8,12,0.42)';
+/** Glyph halo: lighter than the stroke halo so small text keeps its counters. */
+export const HALO_TEXT = 'rgba(2,8,12,0.6)';
 
 export function resolveTheme(settings = {}) {
   const ink = INKS[settings.hudColor] ?? INKS.glacier;
   const pal = PALETTES[settings.palette] ?? PALETTES.standard;
-  return { ...ink, ...pal, halo: HALO, haloSoft: HALO_SOFT };
+  // The amber ink would collide with the amber priority/objective channel;
+  // under it, priority moves to white so "objective" still reads apart.
+  const priority = settings.hudColor === 'amber' && pal === PALETTES.standard ? '#ffffff' : pal.priority;
+  return { ...ink, ...pal, priority, halo: HALO, haloSoft: HALO_SOFT, haloText: HALO_TEXT };
 }
 
 /** Colour for a target marker given its role. */

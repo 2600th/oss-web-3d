@@ -62,7 +62,8 @@ export class Hud {
     this._tracks = new Map();
     this._radarRange = 8000;
     this.touch = false;
-    this.safe = { top: 0, right: 0, bottom: 0, left: 0 };
+    this.occluders = []; // touch button rects, CSS px (UI refreshes them)
+    this.safe ={ top: 0, right: 0, bottom: 0, left: 0 };
     this.keyHint = { flares: 'C' };
   }
 
@@ -262,8 +263,11 @@ export class Hud {
     ctx.textAlign = align;
     ctx.textBaseline = baseline;
     if (halo) {
-      ctx.strokeStyle = this.theme.halo;
-      ctx.lineWidth = Math.max(2.5, size * 0.2);
+      // Thin, round-joined, partly transparent: at 10-12 px a heavier halo
+      // fills the counters and the glyphs read as embossed over snow.
+      ctx.strokeStyle = this.theme.haloText;
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.min(2.5, Math.max(1.25, size * 0.13)) * 2;
       ctx.strokeText(str, x, y);
     }
     ctx.fillStyle = color;
@@ -310,7 +314,13 @@ export class Hud {
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(L.cx, L.cy, L.ladderR * 1.12, L.ladderR, 0, 0, Math.PI * 2);
-    ctx.clip();
+    if (this.callouts.items.length) {
+      // Cut a window for the kill callout so a rung never strikes through it.
+      ctx.rect(L.callout.x - 112 * s, L.callout.y - 24 * s, 224 * s, 66 * s);
+      ctx.clip('evenodd');
+    } else {
+      ctx.clip();
+    }
 
     const lo = Math.max(-85, Math.floor((centrePitch - 35) / 5) * 5);
     const hi = Math.min(85, Math.ceil((centrePitch + 35) / 5) * 5);
@@ -454,18 +464,28 @@ export class Hud {
     const lockT = this._resolveLockTarget(d);
     const lockState = d.lock?.state ?? 'none';
     const off = [];
+    const on = [];
     for (const t of d.targets) {
       if (t.alive === false || !t.position) continue;
       const p = t.position;
       const dist = t.distance ?? (me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0);
       const color = targetColor(th, t);
-      const isLock = lockT && (lockT === t || lockT.id === t.id);
+      const isLock = !!lockT && (lockT === t || lockT.id === t.id);
       this._project(p.x, p.y, p.z, _p, 6);
-      if (_p.onScreen) {
-        this._drawMarker(t, _p.x, _p.y, dist, color, s, isLock, isLock ? lockState : 'none');
-      } else {
-        off.push({ t, dist, color, x: _p.x, y: _p.y });
-      }
+      // On touch, a marker under a button is as good as off-screen: hand it
+      // to the edge arrows, which stay clear of the thumbs.
+      const hidden = _p.onScreen && this._occluded(_p.x, _p.y, 18 * s);
+      if (_p.onScreen && !hidden) on.push({ t, dist, color, isLock, x: _p.x, y: _p.y });
+      else off.push({ t, dist, color, x: _p.x, y: _p.y });
+    }
+    // Labels only where they help: the lock, priority and lead targets, and
+    // the two nearest others. Everything else is a bare shape.
+    on.sort((a, b) => a.dist - b.dist);
+    let free = 2;
+    for (const o of on) {
+      const keyed = o.isLock || o.t.isTarget || o.t.isAce;
+      const labelled = keyed || free-- > 0;
+      this._drawMarker(o.t, o.x, o.y, o.dist, o.color, s, o.isLock, o.isLock ? lockState : 'none', labelled);
     }
     // Off-screen arrows: priority first, then nearest; capped.
     off.sort((a, b) => rankOff(b.t) - rankOff(a.t) || a.dist - b.dist);
@@ -476,7 +496,16 @@ export class Hud {
     this._drawGunPipper(d, game, L, s, lockT);
   }
 
-  _drawMarker(t, x, y, dist, color, s, isLock, lockState) {
+  _occluded(x, y, pad) {
+    const list = this.occluders;
+    if (!this.touch || !list?.length) return false;
+    for (const r of list) {
+      if (x > r.x - pad && x < r.x + r.w + pad && y > r.y - pad && y < r.y + r.h + pad) return true;
+    }
+    return false;
+  }
+
+  _drawMarker(t, x, y, dist, color, s, isLock, lockState, labelled = true) {
     const ctx = this.ctx;
     const th = this.theme;
     const near = Math.max(0, 1 - dist / 6000);
@@ -527,9 +556,9 @@ export class Hud {
       ctx.lineTo(x + 6 * s, yy - 6 * s);
       this._stroke(color, 2);
     }
+    if (!labelled) return;
     // labels
-    const showName = t.name && (t.isAce || t.isTarget || isLock || dist < 2500);
-    if (showName) {
+    if (t.name) {
       const tag = t.isAce ? t.name.toUpperCase() : t.name;
       this._text(tag, x, y - m - (t.isAce ? 22 : t.isTarget ? 20 : 9) * s, color, (t.isAce ? 12 : 11) * s, {
         font: FONT_SANS,
@@ -557,6 +586,11 @@ export class Hud {
     if (Math.hypot(_e.x - rd.x, _e.y - rd.y) < clear) {
       if (rd.y > L.h / 2) _e.y = rd.y - clear;
       else _e.y = rd.y + clear;
+    }
+    // and never under a touch button: walk in toward the box centre
+    for (let i = 0; i < 40 && this._occluded(_e.x, _e.y, 14 * s); i++) {
+      _e.x += (ab.cx - _e.x) * 0.06;
+      _e.y += (ab.cy - _e.y) * 0.06;
     }
     const big = o.t.isTarget || o.t.isAce;
     const a = _e.angle;
@@ -1001,6 +1035,8 @@ export class Hud {
   _drawObjective(d, L, s) {
     const o = d.objective;
     if (!o?.text) return;
+    // In portrait the new-orders banner takes this line's place outright.
+    if (L.portrait && this.banner) return;
     const th = this.theme;
     const ctx = this.ctx;
     let { x, y } = L.objective;
@@ -1251,7 +1287,7 @@ export class Hud {
     ctx.lineTo(cx - 4.5 * s, cy + 5 * s);
     ctx.closePath();
     this._fillHalo(th.ink);
-    this._text(`${Math.round(range / 1000)}`, cx + r * 0.72, cy + r * 0.86, th.dim, 10 * s, { align: 'left' });
+    this._text(`${Math.round(range / 1000)} km`, cx + r * 0.7, cy + r * 0.88, th.dim, 10 * s, { align: 'left' });
   }
 
   // ------------------------------------------------ banner, callouts, radio --
@@ -1335,7 +1371,11 @@ export class Hud {
     ctx.globalAlpha = a;
     ctx.fillStyle = 'rgba(3,8,12,0.7)';
     ctx.fillRect(x0, y0, W, H);
-    if (call) this._text(call, x0 + 12 * s, y0 + 7 * s + lh / 2, th.priority, fs, { font: FONT_SANS, weight: 700, align: 'left', halo: false });
+    // Speaker in the symbology ink, set apart by weight and a rule, so amber
+    // stays reserved for objectives.
+    ctx.fillStyle = th.ink;
+    ctx.fillRect(x0, y0, 2 * s, H);
+    if (call) this._text(call, x0 + 12 * s, y0 + 7 * s + lh / 2, th.ink, fs, { font: FONT_SANS, weight: 700, align: 'left', halo: false });
     let y = y0 + 7 * s + lh / 2;
     for (const ln of lines) {
       this._text(ln, x0 + 12 * s + cw, y, '#eef6f8', fs, { font: FONT_SANS, align: 'left', halo: false });

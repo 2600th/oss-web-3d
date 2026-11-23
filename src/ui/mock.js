@@ -18,7 +18,7 @@ const AIR_NAMES = ['Bandit 1', 'Bandit 2', 'Bandit 3', 'Bandit 4', 'Bandit 5'];
 const RADIO = [
   { callsign: 'Trishul 2', text: 'Two bandits, high, your left ten o’clock. Engaging the trailer.', priority: 2 },
   { callsign: 'Netra', text: 'Trishul flight, picture: four groups, bullseye two-seven-zero for twelve.', priority: 1 },
-  { callsign: 'Karakoram', text: 'You are a long way from home, little fishbed.', priority: 3 },
+  { callsign: 'Trishul 2', text: 'Their lead is high and slow, top of the stack. He is yours.', priority: 2 },
   { callsign: 'Trishul 2', text: 'Missile in the air, defending! Flares, flares.', priority: 3 },
   { callsign: 'Netra', text: 'Gun position on the north spur is still active. Recommend you re-attack from the east.', priority: 1 },
 ];
@@ -109,7 +109,7 @@ export class HudMock {
     air(3, AIR_NAMES[2], 3800, -900, 420);
     air(4, AIR_NAMES[3], -2600, 1500, 300);
     air(5, AIR_NAMES[4], 5200, 2600, -200);
-    air(6, 'Karakoram', 1700, 700, 180, { isAce: true });
+    air(6, 'Lead', 1700, 700, 180, { isAce: true });
     air(7, 'Trishul 2', 600, -420, 40, { team: 'friendly', kind: 'fighter', lockable: false });
     ground(10, 'SAM site', 6200, -1400, 'sam', { isTarget: true });
     ground(11, 'AAA', 4200, 900, 'aaa');
