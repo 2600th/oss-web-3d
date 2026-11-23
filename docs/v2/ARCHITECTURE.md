@@ -89,6 +89,17 @@ vfx 70, audio 80, camera/post extras 85, ui/hud 90.
   terrain adds displacement, mirror it there (CPU and GPU must agree within ~1 m).
 - Dev hooks: in dev builds `window.__game` and `window.__renderer` exist.
 
+## Cross-area hooks
+
+- `game.post.addSceneStage(fn, order)` — composite in linear HDR before bloom/tone
+  mapping; `fn(colorNode, {scenePass, depth, velocity, camera, renderer})`.
+  Atmosphere/aerial perspective ~20, clouds ~30, VFX distortion/heat ~60.
+- `game.env.cloudShadow` — TSL `Fn(worldPos) -> float`; apply with
+  `material.receivedShadowNode = Fn(([s]) => s.mul(env.cloudShadow(positionWorld)))`.
+- `game.env.inCloud` (0..1), `game.env.sunDirection`, `game.env.sun`.
+- `scene.fogNode` (three WebGPU) is the per-material place for aerial perspective if
+  the atmosphere owner prefers it over a depth-based post stage.
+
 ## Event catalogue (`game.events`)
 
 Positions are `THREE.Vector3` (copies unless stated "live"). Entities are live objects
