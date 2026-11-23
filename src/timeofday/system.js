@@ -3,6 +3,8 @@ import { BASE_EXPOSURE } from '../world/system.js';
 import { NightStage } from '../world/atmosphere/night/nightStage.js';
 import { LightSprites } from '../world/timeofday/lights/LightSprites.js';
 import { attachNavLights, attachHeadlights, villageLights, addVillageLights } from '../world/timeofday/lights/fixtures.js';
+import { HeadlightBeams } from '../world/timeofday/lights/HeadlightBeams.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
 
 /**
  * Time-of-day system (`game.systems.timeofday`). Auto-registered by main.js;
@@ -70,9 +72,34 @@ export function createSystem(game) {
     return handles;
   };
   const detach = (object3d) => {
+    beamWanted.delete(object3d);
+    beams?.remove(object3d);
     if (!lit.has(object3d)) return;
     sprites.removeGroup(object3d);
     lit.delete(object3d);
+  };
+
+  // Headlight beams (HeadlightBeams): light volumes drawn in the VFX layer,
+  // which can read scene depth. Created once the VFX system is up; vehicles
+  // that got headlights before that are queued in `beamWanted`.
+  const beamWanted = new Map(); // object3d -> { entity, halfWidth, height, front }
+  let beams = null;
+  const headlights = (object3d, entity, opts = {}) => {
+    const handles = attach(object3d, entity, attachHeadlights, opts);
+    if (handles && !beamWanted.has(object3d)) {
+      const b = { entity, ...opts };
+      beamWanted.set(object3d, b);
+      beams?.add(object3d, b);
+    }
+    return handles;
+  };
+  const ensureBeams = () => {
+    if (beams || !enabled) return;
+    const vfx = game.systems.vfx;
+    if (!vfx?.ready || !vfx.scene || !vfx.shared) return;
+    beams = new HeadlightBeams(vfx.shared, { tier: low && tierName !== 'low' ? 'medium' : tierName, heightAt: terrainHeight });
+    vfx.scene.add(beams.mesh);
+    for (const [obj, b] of beamWanted) beams.add(obj, b);
   };
 
   // ----------------------------------------------------------------- post glue
@@ -175,7 +202,8 @@ export function createSystem(game) {
     lights: sprites,
     stage,
     attachNavLights: (object3d, opts) => attach(object3d, null, attachNavLights, opts),
-    attachHeadlights: (object3d, opts) => attach(object3d, null, attachHeadlights, opts),
+    attachHeadlights: (object3d, opts) => headlights(object3d, opts?.entity ?? null, opts),
+    get beams() { return beams; },
     detachLights: detach,
     cloudFlash: (position, opts) => stage.flash(position, opts),
 
@@ -198,7 +226,7 @@ export function createSystem(game) {
       });
       ev.on?.('aircraft:despawn', ({ entity }) => detach(entity?.object3d));
       ev.on?.('vehicle:spawn', ({ entity }) => {
-        if (entity?.object3d) attach(entity.object3d, entity, attachHeadlights);
+        if (entity?.object3d) headlights(entity.object3d, entity);
       });
     },
 
@@ -222,27 +250,33 @@ export function createSystem(game) {
           if (e?.kind !== 'truck' || !e.alive || !e.object3d || lit.has(e.object3d)) continue;
           const lamps = e.object3d.getObjectByName('headlights');
           const p = lamps?.children?.[0]?.position;
-          if (p) attach(e.object3d, e, attachHeadlights, { halfWidth: Math.abs(p.x), height: p.y, front: p.z - 0.3 });
-          else if (env.night > 0.3) attach(e.object3d, e, attachHeadlights);
-        }
-        for (const [obj, rec] of lit) {
-          if (rec.entity && (rec.entity.alive === false || !obj.parent)) detach(obj);
+          if (p) headlights(e.object3d, e, { halfWidth: Math.abs(p.x), height: p.y, front: p.z - 0.3 });
+          else if (env.night > 0.3) headlights(e.object3d, e);
         }
       }
     },
 
     lateUpdate(dt) {
+      // A destroyed vehicle's lamps (sprites and beam) go out on the frame it
+      // dies, not on the next one-second scan.
+      for (const [obj, rec] of lit) {
+        if (rec.entity && (rec.entity.alive === false || !obj.parent)) detach(obj);
+      }
+      ensureBeams();
       // after the camera and the aircraft have their final pose for the frame
       const h = tod.horizonRadiance;
       if (h) stage.u.fog.value.set(h[0], h[1], h[2]);
       stage.update(dt, game.camera.position);
       for (const obj of lit.keys()) obj.updateWorldMatrix(true, false);
       sprites.update(game.camera, env.night);
+      beams?.update(game.camera, env.night);
     },
 
     dispose() {
       sprites.mesh.removeFromParent();
       sprites.dispose();
+      beams?.mesh.removeFromParent();
+      beams?.dispose();
     },
   };
   return system;
