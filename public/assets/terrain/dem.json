@@ -28,7 +28,7 @@
     {
       "id": "hi",
       "file": "kargil-hi.stp",
-      "bytes": 9246025,
+      "bytes": 9228146,
       "resolution": 3073,
       "cellMetres": [
         29.2665666572445,
@@ -36,12 +36,12 @@
       ],
       "heightMin": 2487,
       "heightMax": 5949,
-      "sha256": "4c192aa0f5eeba5c9877f543abf2790ae53327c5f182d7ae20f1b5e8d6470cb6"
+      "sha256": "4b3ad08ec0384415ab3911aef97f28cecc21d8db1a6781b80b1518416f19f461"
     },
     {
       "id": "lo",
       "file": "kargil-lo.stp",
-      "bytes": 4850099,
+      "bytes": 4854893,
       "resolution": 2049,
       "cellMetres": [
         43.89984998586675,
@@ -49,7 +49,7 @@
       ],
       "heightMin": 2487,
       "heightMax": 5950,
-      "sha256": "52f4bbafed544275665237eb004d9aa5032aa3001116e4f42831ee04a050a602"
+      "sha256": "ebe35d2b35113e1e7f6e827fa0dcc8c2f5ce36b7e5b6099a4e0c76b43a6288c2"
     }
   ],
   "rivers": {

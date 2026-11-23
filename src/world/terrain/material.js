@@ -165,7 +165,14 @@ export function buildTerrainMaterial({ DEM, tex, nodes, layers, uniforms, qualit
     // The carved bed is wider than the water: the stream braids inside it, so
     // small nallahs thin out to threads and the rest of the bed shows as gravel.
     const bed = sdf.add(float(1).sub(tI).mul(300)).toVar();
-    const edge = bed.add(4).add(sC.height.mul(6)).add(sA.height.mul(3.5)).toVar();
+    // [water] The braid noise frays the banks but must not cut the channel.
+    // Narrow nallahs used to render as a chain of pools (their bed was
+    // narrower than the 29 m grid the field is sampled on; the build now
+    // rasterises every channel at least 22 m half-wide). The noise fades out
+    // where the field is a few metres inside the bed, so every stream keeps a
+    // continuous thread.
+    const braid = sC.height.mul(6).add(sA.height.mul(3.5)).mul(smoothstep(-9, -4, sdf));
+    const edge = bed.add(4).add(braid).toVar();
     const water = smoothstep(0.9, -0.9, edge).toVar();
 
     // [textures] outcrops start a little lower (0.6 -> 0.54) and follow the

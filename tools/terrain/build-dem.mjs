@@ -57,6 +57,10 @@ const SETS = [
   { id: 'hi', res: 3073, outer: [1537, 769] },
   { id: 'lo', res: 2049, outer: [1025, 513] },
 ];
+// how far under the lowest ground across a channel its water may sit
+const LIFT_DEPTH = 2;
+// deepest a channel may cut below the lowest ground across it
+const MAX_CUT = 8;
 const FLOW_BASE = 0.35; // length of the stored flow vector on a level reach
 const FLOW_FALL_MAX = 0.09; // fall (m per m) at which the stored flow vector reaches length 1
 const DRAIN_MIN = -0.3; // log10 km^2 below which drainage is not recorded (hillslope noise)
@@ -298,9 +302,39 @@ function traceRivers({ F, dir, acc }, n, cellX, cellZ, minX, minZ) {
     smooth(px, 10, true);
     smooth(pz, 10, true);
     smooth(w, 24, false);
+    // The smoothed path cuts corners of the D8 staircase. On steep side
+    // streams it then lies up the valley wall, metres above the D8 cell the
+    // level came from, and carving down to that level dug slot trenches into
+    // the hillside. Lift the level to just under the lowest ground across the
+    // channel at the smoothed position, so the bed stays a flat shelf.
+    const half = Math.max(cellX, cellZ) * 0.75;
+    const ground = (x, z) => {
+      const gx = Math.min(n - 1, Math.max(0, Math.round((x - minX) / cellX)));
+      const gz = Math.min(n - 1, Math.max(0, Math.round((z - minZ) / cellZ)));
+      return F[gz * n + gx];
+    };
+    const lift = (depth) => {
+      for (let i = 0; i < m; i++) {
+        const a = Math.max(0, i - 1), b = Math.min(m - 1, i + 1);
+        let tx = px[b] - px[a], tz = pz[b] - pz[a];
+        const tl = Math.hypot(tx, tz) || 1;
+        const r = Math.max(half, w[i] / 2);
+        const nx = -tz / tl * r, nz = tx / tl * r;
+        const low = Math.min(ground(px[i], pz[i]), ground(px[i] + nx, pz[i] + nz), ground(px[i] - nx, pz[i] - nz));
+        ws[i] = Math.max(ws[i], low - depth);
+      }
+    };
+    lift(LIFT_DEPTH);
     for (let i = 1; i < m; i++) ws[i] = Math.min(ws[i], ws[i - 1]); // water never runs uphill
     smooth(ws, 6, false);
+    lift(LIFT_DEPTH);
     for (let i = 1; i < m; i++) ws[i] = Math.min(ws[i], ws[i - 1]);
+    // Where the path still crosses a spur the monotone level can lie tens of
+    // metres under it. Cap the cut there and let the water step up over the
+    // spur: a short rise nobody sees beats a slot canyon whose walls throw
+    // black blocks of terrain shadow.
+    lift(MAX_CUT);
+    smooth(ws, 2, false);
     // Fall of the water surface (m per m), over ~8 vertices so SRTM steps do not read as waterfalls.
     const fall = new Float64Array(m);
     for (let i = 0; i < m; i++) {
@@ -324,6 +358,13 @@ function rasteriseRivers(lines, n, cellX, cellZ, minX, minZ) {
   const fx = new Float32Array(N);
   const fz = new Float32Array(N);
   const REACH = 110;
+  // The bank-distance field is sampled bilinearly on this grid (~29 m). A
+  // channel narrower than about 1.5 cells falls between texel centres: the
+  // sampled distance only dips below zero where the centreline passes near a
+  // texel, and a 20 m nallah rendered as a chain of pools. Rasterise every
+  // channel at least MIN_HALF wide so a negative texel always lies within half
+  // a cell of the centreline (the shader frays it back into a thread).
+  const MIN_HALF = Math.max(cellX, cellZ) * 0.75;
   for (const L of lines) {
     for (let s = 0; s < L.m - 1; s++) {
       const ax = L.px[s];
@@ -335,7 +376,7 @@ function rasteriseRivers(lines, n, cellX, cellZ, minX, minZ) {
       const len2 = ex * ex + ez * ez;
       if (len2 < 1e-6) continue;
       const len = Math.sqrt(len2);
-      const r = Math.max(L.w[s], L.w[s + 1]) / 2 + REACH;
+      const r = Math.max(MIN_HALF, Math.max(L.w[s], L.w[s + 1]) / 2) + REACH;
       const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - r - minX) / cellX));
       const i1 = Math.min(n - 1, Math.ceil((Math.max(ax, bx) + r - minX) / cellX));
       const j0 = Math.max(0, Math.floor((Math.min(az, bz) - r - minZ) / cellZ));
@@ -345,7 +386,7 @@ function rasteriseRivers(lines, n, cellX, cellZ, minX, minZ) {
         const qz = minZ + j * cellZ - az;
         const t = Math.min(1, Math.max(0, (qx * ex + qz * ez) / len2));
         const d = Math.hypot(qx - ex * t, qz - ez * t);
-        const e = d - (L.w[s] + (L.w[s + 1] - L.w[s]) * t) / 2;
+        const e = d - Math.max(MIN_HALF, (L.w[s] + (L.w[s + 1] - L.w[s]) * t) / 2);
         const k = j * n + i;
         if (e < edge[k]) {
           edge[k] = e;
@@ -367,17 +408,23 @@ const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b
 function carve(H, r, cell) {
   const WATER_DROP = 1.5; // water sits this far below the filled valley floor
   const flat = cell * 0.45; // keep the bed level a little past the bank so the shoreline lies on flat ground
+  // Safety net under the per-reach cap in traceRivers: a texel is never cut
+  // more than this below its own ground (the cross-channel ground can vary).
+  const TEXEL_CUT = 20;
   let cut = 0;
   for (let k = 0; k < H.length; k++) {
     const e = r.edge[k];
     if (e > 100) continue;
+    const orig = H[k];
     const ws = r.level[k] - WATER_DROP;
     const o = Math.max(0, e - flat);
     // gravel bar, then a bank, then a floodplain rising gently into the valley side
     const target = ws + 1.6 * smoothstep(0, cell, o) + 0.14 * Math.max(0, o - cell * 0.5);
-    if (e <= flat) { H[k] = ws; cut++; continue; }
+    if (e <= flat) { H[k] = Math.max(ws, orig - TEXEL_CUT); cut++; continue; }
     const floor = ws + 0.8 * smoothstep(0, cell, o);
-    H[k] = Math.max(floor, Math.min(H[k], target));
+    // the depth limit eases out across the bank so the bed still meets the slope smoothly
+    const limit = orig - TEXEL_CUT * (1 - smoothstep(0, cell * 2, o));
+    H[k] = Math.max(limit, Math.max(floor, Math.min(orig, target)));
   }
   return cut;
 }
