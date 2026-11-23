@@ -573,7 +573,9 @@ async function buildSkin({ rec, baseBuf, normalBuf, specBuf, bw, bh, up, native,
       if (aft > 0.01) {
         const th = Math.atan2(px, py - AXIS_Y);
         const stre = 0.45 + 0.55 * fbm(th * 4.2, 1.7, pz * 0.9);
-        const so = clamp(aft * aft * stre * 0.75) * P.soot * (1 - mm * 0.5);
+        // inside the jet pipe (normal toward the axis) the metal is burnt, not caked
+        const inward = (nx * px + ny * (py - AXIS_Y)) / Math.max(rad, 1e-3) < -0.3 ? 0.3 : 1;
+        const so = clamp(aft * aft * stre * 0.75) * P.soot * (1 - mm * 0.5) * inward;
         cr = mix(cr, SOOT[0], so); cg = mix(cg, SOOT[1], so); cb = mix(cb, SOOT[2], so);
         ro = mix(ro, 0.82, so);
         me *= 1 - so * 0.6;
@@ -756,7 +758,8 @@ async function build({ file, role, upscale = {} }, canonical) {
       const nimg = new Uint8Array(await webp(out.normal, W, H, 3, 92, { smartSubsample: true }));
       if (normalTex) normalTex.setImage(nimg).setMimeType('image/webp');
       else mat.setNormalTexture(doc.createTexture(`${rec.part}_normal`).setImage(nimg).setMimeType('image/webp'));
-      ormRaw = packORM(ow, oh, out.ao, out.rough, out.metal, W, H);
+      // no texel on the skin is ever fully dark: light bounces inside a duct or a wheel well
+      ormRaw = packORM(ow, oh, out.ao.map((v) => 0.14 + 0.86 * v), out.rough, out.metal, W, H);
     }
     const ormImg = new Uint8Array(await webp(ormRaw, ow, oh, 3, 90, { smartSubsample: true }));
     const orm = (specTex ?? doc.createTexture()).setName(`${rec.part}_orm`).setImage(ormImg).setMimeType('image/webp');

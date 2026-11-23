@@ -106,7 +106,7 @@ const INTERIOR = /cockpit/i;
 // [mig skin] Cockpit tub. The bake is the geometric sky visibility; the gain
 // stands for light bounced between the tub's own surfaces, which the bake
 // does not carry. COCKPIT_RECESS is the albedo left in a fully enclosed texel.
-const COCKPIT_AO_GAIN = 1.5;
+const COCKPIT_AO_GAIN = 1.3;
 const COCKPIT_RECESS = 0.55;
 
 /** Grime/panel-line driven roughness from the albedo map itself (no ORM in the source). */
