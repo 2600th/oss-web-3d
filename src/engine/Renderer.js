@@ -2,7 +2,8 @@ import * as THREE from 'three/webgpu';
 import { QUALITY, pickTier } from './Quality.js';
 
 const IS_WINDOWS = typeof navigator !== 'undefined' &&
-  /Win/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? navigator.userAgent ?? '');
+  // `||`, not `??`: userAgentData.platform is '' under UA overrides / emulation
+  /Win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '');
 /** GPU adapter preference, or undefined where the browser ignores it (Windows). */
 export const POWER_PREFERENCE = IS_WINDOWS ? undefined : 'high-performance';
 

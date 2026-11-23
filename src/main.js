@@ -6,7 +6,9 @@ import { createRenderer, showStatus, handleDeviceLoss } from './core/BootLifecyc
 import { loadDEM } from './world/terrain/heightfield.js';
 import { Game } from './game/Game.js';
 
-inject();
+// The analytics script only exists on the Vercel deployment; on a local
+// `vite preview` it is a 404 plus a console log on every load.
+if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) inject();
 
 // Boot stage timings (ms since navigation start), shown by ?perfhud and in
 // window.__perf.boot; tools/perf/README.md uses them for the load-time table.

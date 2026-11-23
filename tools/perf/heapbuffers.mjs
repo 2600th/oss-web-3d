@@ -32,7 +32,8 @@ const targets = new Set(want.slice(0, top));
 // walk retainers up to 4 levels for the top buffers
 let frontier = new Set(targets);
 const parents = new Map();
-for (let depth = 0; depth < 5; depth++) {
+const DEPTH = Number(process.env.DEPTH ?? 5);
+for (let depth = 0; depth < DEPTH; depth++) {
   const next = new Set();
   for (let n = 0; n < count; n++) {
     for (let e = firstEdge[n]; e < firstEdge[n + 1]; e += E) {
@@ -51,7 +52,7 @@ for (let depth = 0; depth < 5; depth++) {
 }
 const label = (n) => `${types[nodes[n * N + iType]]}:${strings[nodes[n * N + iName]].slice(0, 50)}`;
 const chain = (n, d = 0) => {
-  if (d > 4) return '';
+  if (d > DEPTH - 1) return "";
   const p = parents.get(n)?.[0];
   if (!p) return '';
   return ` <- ${p[1]} of ${label(p[0])}` + chain(p[0], d + 1);

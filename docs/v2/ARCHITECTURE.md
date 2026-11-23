@@ -367,3 +367,37 @@ when unavoidable; say so in your report.
   Terrain additions: `ready`, `material(s)`, `stats`, `height`, `verify()`,
   `crackTest()`, `gpuTime()` (dev; use `?gputime`). Rivers are shaded in the
   terrain material (`src/world/water/river.js`), there is no separate water mesh.
+
+- **engine perf + robustness (additive).** Details and numbers:
+  `docs/v2/evidence/polish-perf/README.md`, tooling: `tools/perf/README.md`.
+  - Boot: `src/core/BootLifecycle.js` `createRenderer(canvas, params)` picks
+    WebGPU when an adapter and device are actually returned (the probed device is
+    passed to `WebGPURenderer({ device })`), else WebGL2 with one `console.info`;
+    the `#boot-status` overlay is shown only when neither backend works.
+    `window.__boot` holds stage marks (ms since navigation start).
+  - Renderer: `r.renderScale` / `r.setRenderScale(s)` (adaptive resolution
+    multiplies the tier pixel ratio), `r.poll()` once per frame (DPR and size
+    changes; resizes coalesced to one per frame), `r.onLost(info)` and `r.lost`,
+    exported `POWER_PREFERENCE` (undefined on Windows). Timestamp queries are on
+    by default on WebGPU.
+  - Device / context loss: the loop stops and an overlay offers Reload; a second
+    loss in the same tab on WebGPU offers "Restart in compatibility mode"
+    (`?webgl`). Systems do not need to handle it.
+  - Perf: `src/engine/Perf.js` (`installPerf`), `GpuProfiler.js` (three
+    `InspectorBase`; per-pass GPU ms by render target / quad material name, so
+    **name your RTT/quad materials** if you want them labelled), `AdaptiveResolution.js`,
+    `PerfHud.js` (lazy chunk). Flags: `?perfhud`, `?gputime`, `?noadaptive`,
+    `?adaptive`, `?gpubudget=ms`, `?scale=`, `?notimestamps`. `window.__perf`
+    exists in dev or with `?perfhud`/`?gputime`.
+  - PostFX: the auto-exposure / sun-visibility meters render and read back every
+    4th frame (`METER_EVERY`), not every frame.
+  - Terrain: `VIEW_LAYER = 1`, `SHADOW_LAYER = 2` (exported from Terrain.js).
+    Blocks are culled per frame against both the view and the sun shadow frustum
+    and carry only the layer they are needed on; the main camera enables layer 1
+    and the sun shadow camera layers 0 and 2. Other objects stay on layer 0 and
+    are unaffected. CPU copies of terrain textures are released after upload
+    (`tex.onUpdate`): do not read `tex.image.data` of terrain textures at runtime
+    (use `terrainHeight` etc.).
+  - AI: the hostile fighter GLB is preloaded 4 s after the first `flow:state`,
+    not during boot.
+  - Analytics are not injected on localhost / 127.0.0.1.
