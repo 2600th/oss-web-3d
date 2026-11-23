@@ -122,6 +122,25 @@ export class Clouds {
       focusPos: uniform(new THREE.Vector3()),
       blendFresh: uniform(0.12),
       blendStale: uniform(0.02),
+      // Near field: finer steps for the first kilometres (same tier scaling),
+      // detail warp (in detail-tile units) and how fast history yields to new
+      // samples when the cloud is close (parallax, fine detail).
+      stepNear: uniform(20 * Math.min(2.5, Math.max(0.7, 64 / steps))),
+      warp: uniform(0.3),
+      blendNear: uniform(0.4),
+      blendBoost: uniform(0),
+      // Lightning: a point light inside the cloud volume plus a sheet term.
+      flashPos: uniform(new THREE.Vector3()),
+      flashColor: uniform(new THREE.Vector3(0.75, 0.82, 1)),
+      flash: uniform(0),
+      flashRadius: uniform(1100),
+      flashAmb: uniform(0),
+      baseDark: uniform(0.5),
+      baseRag: uniform(640),
+      baseRelief: uniform(4),
+      diffuse: uniform(0.035),
+      // Rain shafts under storm cells (0 = none).
+      rain: uniform(0),
     };
 
     // --- static inputs -----------------------------------------------------
@@ -166,6 +185,23 @@ export class Clouds {
     ];
     this._write = 0;
 
+    // Resolved cloud layer for other screen-space consumers (the VFX layer):
+    // colour.a = transmittance, aux.r = front distance (km), aux.a = 1 once
+    // written. `visibilityAt(screenUv, viewDistanceMetres)` is how much of
+    // something at that distance survives the cloud in front of it.
+    this.occColor = texture(this.history[0].textures[0]);
+    this.occAux = texture(this.history[0].textures[1]);
+    this.visibilityAt = Fn(([st, distM]) => {
+      const a = this.occAux.sample(st).toVar();
+      const T = this.occColor.sample(st).a;
+      const front = a.r.mul(1000);
+      // `front` is the transmittance-weighted mean depth, about one optical
+      // depth inside the cloud: ramp from clear to fully behind around it.
+      const soft = front.mul(0.04).add(45);
+      const k = smoothstep(front.sub(soft), front.add(soft.mul(2)), distM);
+      return mix(float(1), mix(float(1), T, k), a.a);
+    });
+
     this._quad = new THREE.QuadMesh();
     this._weatherMaterial = this._material('Clouds.weatherRaw', this._weatherPass());
     this._dilateMaterial = this._material('Clouds.weather', this._dilatePass());
@@ -208,21 +244,20 @@ export class Clouds {
    * Cloud density 0..1 at world position p with altitude h (h includes the
    * planet-curvature drop). `detail` adds the high-frequency erosion.
    */
-  _density(p, h, w, detail, interiorOut = null, near = null, lod = null) {
+  _density(p, h, w, detail, { interiorOut = null, reliefOut = null, near = null, near2 = null, lod = null, fade = null } = {}) {
     const u = this.u;
+    // `lod` fades the detail AND widens the rim (long march steps); `fade`
+    // only fades the detail (light taps far from the camera).
+    const dfade = lod ?? fade;
     const { hn } = this._heights(h, w);
     const sh = texture3D(this.shapeTarget.texture, p.mul(vec3(1 / SHAPE_TILE, 1.2 / SHAPE_TILE, 1 / SHAPE_TILE)).add(u.windShape), 0);
-    // Condensation-level base: flat in the large, but not knife-cut - it sags
-    // a little with the weather and is ragged at the scale of the billows.
-    const lift = w.b.mul(260).add(sh.g.sub(0.45).mul(420));
-    // The column narrows toward a rounded top.
-    const profile = smoothstep(0, 260, h.sub(u.base).sub(lift)).mul(float(1).sub(smoothstep(0.18, 1.0, hn)));
     // Low-frequency body (Perlin-Worley, 2 %..98 % measured 0.48..0.88), then
     // carve the creases between Worley billows (0.7-1.4 km) out of it so the
     // surface reads as cauliflower rather than as a smooth blob.
     const body = saturate(sh.r.sub(0.5).div(0.36));
     const billow = saturate(sh.b.mul(0.6).add(sh.a.mul(0.4)).sub(0.28).div(0.42));
     const n = body.sub(float(1).sub(billow).mul(u.billow)).toVar();
+    let rag = null;
     if (detail) {
       // High-frequency Worley displaces the surface itself (not just the rim):
       // wispy and inverted at the base, billowy toward the top (Schneider 2015).
@@ -230,12 +265,16 @@ export class Clouds {
       // the features, which would otherwise alias into hatching.
       const erode = u.detailStrength.mul(0.5).toVar();
       const sample = () => {
-        const dp = p.mul(1 / DETAIL_TILE).add(u.windDetail).toVar();
+        // Distort the detail lookup with the (slow, large) billow channels of
+        // the shape volume: a cheap stand-in for curl noise that drags the
+        // erosion into streaks and hooks, most of all in the wispy base.
+        const warp = sh.gba.sub(0.5).mul(u.warp).mul(float(1).sub(saturate(hn).mul(0.6)));
+        const dp = p.mul(1 / DETAIL_TILE).add(u.windDetail).add(warp).toVar();
         const dt = texture3D(this.detailTarget.texture, dp, 0);
         const dfbm = dot(dt.rgb, vec3(0.625, 0.25, 0.125));
         const flip = saturate(hn.mul(2.5)).toVar();
         const coarse = mix(dfbm, float(1).sub(dfbm), flip).mul(u.detailStrength);
-        erode.assign(lod ? mix(coarse, erode, lod) : coarse);
+        erode.assign(dfade ? mix(coarse, erode, dfade) : coarse);
         if (near) {
           // Close to the camera one more, finer octave keeps the surface from
           // reading as a smooth blob (30-120 m features).
@@ -245,12 +284,33 @@ export class Clouds {
             erode.addAssign(mix(ffbm, float(1).sub(ffbm), flip).sub(0.5).mul(u.detailStrength).mul(0.55).mul(near));
           });
         }
+        if (near2) {
+          // Within a couple of kilometres a third octave (8-30 m): the ragged
+          // edge you see when a cloud passes right over the canopy.
+          If(near2.greaterThan(0.01), () => {
+            const tiny = texture3D(this.detailTarget.texture, dp.mul(9.7).add(vec3(0.71, 0.19, 0.43)), 0);
+            const tfbm = dot(tiny.rgb, vec3(0.5, 0.3, 0.2));
+            erode.addAssign(mix(tfbm, float(1).sub(tfbm), flip).sub(0.5).mul(u.detailStrength).mul(0.34).mul(near2));
+          });
+        }
       };
-      if (lod) If(lod.lessThan(0.99), sample); else sample();
+      if (dfade) If(dfade.lessThan(0.99), sample); else sample();
       n.subAssign(erode);
+      rag = erode.div(u.detailStrength).sub(0.5).mul(u.baseRag);
+      // > 0 where the erosion pushes the surface out (a hanging pouch), < 0 in a recess.
+      if (reliefOut) reliefOut.assign(float(0.5).sub(erode.div(u.detailStrength)));
     } else {
       n.subAssign(u.detailStrength.mul(0.5));
     }
+    // Condensation-level base: flat in the large, but not knife-cut - it sags
+    // a little with the weather, is ragged at the scale of the billows, and
+    // (with detail) hangs in scud and pouches at the scale of the erosion:
+    // from underneath a base has to have relief of its own, the body noise
+    // barely reaches it through the profile ramp.
+    let lift = w.b.mul(260).add(sh.g.sub(0.45).mul(420));
+    if (rag) lift = lift.add(rag);
+    // The column narrows toward a rounded top.
+    const profile = smoothstep(0, 260, h.sub(u.base).sub(lift)).mul(float(1).sub(smoothstep(0.18, 1.0, hn)));
     // Re-centre: measured median of the carved noise is ~0.16, spread ~0.75.
     n.assign(saturate(n.add(0.2).div(0.75)));
     const cov = w.r;
@@ -431,7 +491,11 @@ export class Clouds {
       // A narrow forward lobe for the silver lining when looking toward the sun.
       const silver = hg(cosT, 0.96).mul(u.silver).toVar();
 
-      const t = t0.add(blue.mul(max(u.stepMin, t0.mul(u.stepGrow)))).toVar();
+      // Step length: fine for the first couple of kilometres (near-field detail
+      // needs samples closer together than its features), the tier's base step
+      // in the middle distance, then growing with distance.
+      const stepAt = (tt) => max(min(u.stepMin, max(u.stepNear, tt.mul(0.03))), tt.mul(u.stepGrow));
+      const t = t0.add(blue.mul(stepAt(t0))).toVar();
       const T = float(1).toVar();
       const S = vec3(0).toVar();
       const frontAcc = float(0).toVar();
@@ -443,7 +507,7 @@ export class Clouds {
       const fineDt = float(0).toVar();
       Loop(Math.round(STEPS * 1.75), () => {
         If(t.greaterThanEqual(tEnd).or(T.lessThan(0.012)), () => { Break(); });
-        const dtBase = max(u.stepMin, t.mul(u.stepGrow)).toVar();
+        const dtBase = stepAt(t).toVar();
         const dt = select(fineLeft.greaterThan(0.5), fineDt, dtBase).toVar();
         const p = cam.add(dir.mul(t)).toVar();
         const h = p.y.add(t.mul(t).mul(hk)).toVar();
@@ -464,9 +528,11 @@ export class Clouds {
           fineLeft.assign(max(fineLeft.sub(1), 0));
         }).Else(() => {
           const interior = float(0).toVar();
-          const near = float(1).sub(smoothstep(3500, 7000, t));
+          const near = float(1).sub(smoothstep(3500, 7000, t)).toVar();
+          const near2 = float(1).sub(smoothstep(700, 2200, t));
           const lod = saturate(dtBase.sub(90).div(200));
-          const d = this._density(p, h, w, true, interior, near, lod).toVar();
+          const relief = float(0).toVar();
+          const d = this._density(p, h, w, true, { interiorOut: interior, reliefOut: relief, near, near2, lod }).toVar();
           const hit = d.greaterThan(0.003);
           If(hit.and(wasEmpty.greaterThan(0.5)).and(lastAdv.greaterThan(1)), () => {
             // Just crossed into cloud from empty air: the surface lies somewhere in
@@ -482,6 +548,10 @@ export class Clouds {
           }).ElseIf(hit, () => {
             // --- light march toward the sun ------------------------------
             const tau = float(0).toVar();
+            // Near the camera the first light taps see the eroded surface too,
+            // so small billows shadow each other instead of being lit as one
+            // smooth body.
+            const lfade = float(1).sub(near).toVar();
             let off = 0;
             LIGHT.forEach((len, k) => {
               const o = off + len * 0.5;
@@ -489,7 +559,8 @@ export class Clouds {
               const lp = p.add(u.sunDir.mul(o)).toVar();
               const lh = h.add(u.sunDir.y.mul(o));
               const lw = k < 2 ? w : this._weatherAt(lp).toVar();
-              tau.addAssign(this._density(lp, lh, lw, false).mul(len));
+              const ld = k < 2 && !this.low ? this._density(lp, lh, lw, true, { fade: lfade }) : this._density(lp, lh, lw, false);
+              tau.addAssign(ld.mul(len));
             });
             tau.mulAssign(u.sigma);
             const sun = float(0).toVar();
@@ -505,14 +576,40 @@ export class Clouds {
             const hs = saturate(hn);
             const inScatter = mix(u.crease, float(1), pow(interior, 0.6)).mul(mix(float(0.55), float(1), smoothstep(0.0, 0.25, hs)));
             sun.mulAssign(mix(inScatter, float(1), saturate(cosT).mul(0.7)));
-            const amb = mix(u.ambBot, u.ambTop, hs).mul(mix(float(0.55), float(1), hs)).mul(u.ambScale).mul(mix(float(0.7), float(1), interior));
+            // Ambient, as two hemispheres with their own occlusion. Sky light
+            // from above has to get through the cloud over the sample (tied to
+            // the sun's optical depth: where the sun gets in, so does the sky);
+            // ground bounce and horizon haze from below through the cloud
+            // under it (one density tap straight down). Seen from underneath
+            // this is what gives a base its relief - hanging billows catch the
+            // light from below, recesses go dark - and the column term darkens
+            // the base under the tall cores toward the fringes.
+            const under = this.low ? float(0.35) : this._density(p.sub(vec3(0, 110, 0)), h.sub(110), w, true, { fade: lfade });
+            // (Floors: light scattered many times inside the cloud never quite
+            // dies, and a black pit in a white cloud reads as a hole.)
+            const botVis = mix(float(0.3), float(1), exp(under.mul(u.sigma).mul(-110)));
+            const topVis = mix(max(exp(tau.mul(-0.07)), 0.12), float(1), hs.mul(hs));
+            const column = mix(float(1), u.baseDark, smoothstep(0.15, 0.8, w.r.div(u.covMax)).mul(float(1).sub(hs)));
+            // The light under a cloud comes in sideways (bright ground and haze
+            // toward the horizon), so what hangs lowest catches it and the
+            // recesses between do not: shade the base by its own relief.
+            const pouch = mix(float(1), clamp(relief.mul(u.baseRelief).add(0.85), 0.35, 1.35), float(1).sub(smoothstep(0.0, 0.5, hs)));
+            const amb = u.ambTop.mul(topVis).add(u.ambBot.mul(botVis).mul(column).mul(pouch)).mul(u.ambScale).add(u.flashColor.mul(u.flashAmb));
             // Storm cells absorb: darker bases.
             const absorb = float(1).sub(u.storm.mul(w.b.mul(0.4).add(0.3)).mul(float(1).sub(hs.mul(0.75))));
             // Deep multiple scattering: light that has lost all direction still
             // fills the interior, more so near the top (keeps the inside of a
             // sunlit cloud bright when you fly through it).
             sun.addAssign(u.deep.mul(mix(float(0.35), float(1), hs)));
-            const L = u.sunE.mul(sun).mul(u.sunScale).add(amb).mul(absorb);
+            // Diffuse transmission (two-stream): sunlight that has scattered its
+            // way down through the whole cloud. It falls off as 1/(1 + k tau),
+            // not exponentially, which is why a thin cloud has a bright base
+            // and a deep one a dark base, grading from the core to the rim.
+            sun.addAssign(u.diffuse.mul(saturate(tau.mul(0.15))).div(tau.mul(0.11).add(1)));
+            // Lightning: a point source inside the volume.
+            const fv = p.sub(u.flashPos);
+            const fd = dot(fv, fv).div(u.flashRadius.mul(u.flashRadius)).add(1);
+            const L = u.sunE.mul(sun).mul(u.sunScale).add(amb).mul(absorb).add(u.flashColor.mul(u.flash.div(fd.mul(fd))));
 
             const dtc = max(min(dt, tEnd.sub(t)), 0);
             const stepT = exp(d.mul(u.sigma).mul(dtc).negate()).toVar();
@@ -531,6 +628,44 @@ export class Clouds {
             wasEmpty.assign(select(fineLeft.greaterThan(0.5), wasEmpty, float(1)));
             fineLeft.assign(max(fineLeft.sub(1), 0));
           });
+        });
+      });
+
+      // --- rain shafts under storm cells -----------------------------------
+      // The part of the ray below the cloud base, sampled against the weather
+      // map: grey veils hanging under the wet cells.
+      If(u.rain.greaterThan(0.01), () => {
+        const ra = select(below, float(0), select(rB.valid.and(rB.hi.greaterThan(0)), max(rB.lo, 0), BIG)).toVar();
+        const rb = min(min(rB.hi, sceneDist), 45000).toVar();
+        If(rb.greaterThan(ra.add(50)), () => {
+          const N = 6;
+          const seg = rb.sub(ra).div(N).toVar();
+          const tauR = float(0).toVar();
+          const tMid = float(0).toVar();
+          for (let i = 0; i < N; i++) {
+            const tt = ra.add(seg.mul(blue.add(i))).toVar();
+            const rp = cam.add(dir.mul(tt)).toVar();
+            const rw = this._weatherAt(rp);
+            const streak = texture(this.weatherTarget.texture, rp.xz.div(WEATHER_EXTENT / 11).add(u.windWeather.mul(11)), 0).r;
+            const wet = saturate(rw.r.sub(0.3).div(0.3)).mul(rw.b.mul(0.7).add(0.3)).mul(smoothstep(0.1, 0.6, streak));
+            tauR.addAssign(wet);
+            tMid.addAssign(wet.mul(tt));
+          }
+          tMid.assign(tMid.div(max(tauR, 1e-4)));
+          const Tr = exp(tauR.mul(seg).mul(u.rain).mul(-1.2e-4)).toVar();
+          const rainCol = u.ambTop.mul(0.55).add(u.ambBot.mul(0.45)).mul(0.8).add(u.flashColor.mul(u.flashAmb));
+          const wr = float(1).sub(Tr).toVar();
+          If(below, () => {
+            // rain lies in front of the cloud above it
+            S.assign(rainCol.mul(wr).add(S.mul(Tr)));
+            frontAcc.assign(frontAcc.mul(Tr).add(wr.mul(tMid)));
+            wAcc.assign(wAcc.mul(Tr).add(wr));
+          }).Else(() => {
+            S.addAssign(rainCol.mul(wr).mul(T));
+            frontAcc.addAssign(wr.mul(T).mul(tMid));
+            wAcc.addAssign(wr.mul(T));
+          });
+          T.mulAssign(Tr);
         });
       });
 
@@ -610,12 +745,45 @@ export class Clouds {
         hi.assign(max(hi, s));
       }
 
-      // Reproject through the cloud's own depth.
+      // Reproject through the cloud's own depth, dilated to the nearest cloud
+      // in the 3x3 march neighbourhood: a sky pixel next to a close cloud must
+      // follow that cloud's parallax, otherwise its history holds the edge
+      // where it was a frame ago and the clamp rebuilds it in march-sized
+      // blocks (the stair-stepped rim).
+      const BIGF = float(1e6);
+      const frontD = select(curAux.b.greaterThan(0.04), curAux.r, BIGF).toVar();
+      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const a = mAux.sample(uvM.add(texel.mul(vec2(ox, oy))));
+        frontD.assign(select(a.b.greaterThan(0.04), min(frontD, a.r), frontD));
+      }
+      const hasCloud = frontD.lessThan(1e5);
+      frontD.assign(select(hasCloud, frontD, curAux.r));
       const dir = this._ray(st);
-      const world = u.camPos.add(dir.mul(curAux.r.mul(1000)));
+      const world = u.camPos.add(dir.mul(frontD.mul(1000)));
       const pv = u.prevView.mul(vec4(world, 1)).toVar();
       const puv = getScreenPosition(pv.xyz, u.prevProj).toVar();
-      const hist = hColor.sample(puv).toVar();
+      // Catmull-Rom history fetch (5 bilinear taps): plain bilinear reprojection
+      // blurs a little more every frame, which is most of why close clouds
+      // looked out of focus.
+      const hp = puv.mul(u.hSize);
+      const hc = floor(hp.sub(0.5)).add(0.5).toVar();
+      const hf = hp.sub(hc).toVar();
+      const w0 = hf.mul(hf.mul(float(1).sub(hf.mul(0.5))).sub(0.5));
+      const w1 = hf.mul(hf).mul(hf.mul(1.5).sub(2.5)).add(1);
+      const w2 = hf.mul(hf.mul(float(2).sub(hf.mul(1.5))).add(0.5));
+      const w3 = hf.mul(hf).mul(hf.mul(0.5).sub(0.5));
+      const w12 = w1.add(w2).toVar();
+      const inv = vec2(1).div(u.hSize);
+      const t0c = hc.sub(1).mul(inv).toVar();
+      const t3c = hc.add(2).mul(inv).toVar();
+      const t12 = hc.add(w2.div(w12)).mul(inv).toVar();
+      const wc = w12.x.mul(w12.y), wl = w0.x.mul(w12.y), wr = w3.x.mul(w12.y), wu = w12.x.mul(w0.y), wd = w12.x.mul(w3.y);
+      const hist = hColor.sample(t12).mul(wc)
+        .add(hColor.sample(vec2(t0c.x, t12.y)).mul(wl))
+        .add(hColor.sample(vec2(t3c.x, t12.y)).mul(wr))
+        .add(hColor.sample(vec2(t12.x, t0c.y)).mul(wu))
+        .add(hColor.sample(vec2(t12.x, t3c.y)).mul(wd))
+        .div(wc.add(wl).add(wr).add(wu).add(wd)).max(0).toVar();
       const histAux = hAux.sample(puv).toVar();
       const here = min(this._sceneDistance(depthNode, st, reversed), 1e6).mul(0.001).toVar();
       const onScreen = pv.z.lessThan(0).and(puv.x.greaterThan(0)).and(puv.x.lessThan(1)).and(puv.y.greaterThan(0)).and(puv.y.lessThan(1));
@@ -624,8 +792,12 @@ export class Clouds {
       const pad = hi.sub(lo).mul(0.75).add(0.02);
       const clamped = clamp(hist, lo.sub(pad), hi.add(pad));
 
-      const freshOut = mix(clamped, cur, select(valid, u.blendFresh, float(1)));
-      const staleOut = select(valid, mix(clamped, curLin, u.blendStale), curLin);
+      // Close cloud changes fast on screen: let new samples in sooner there.
+      const nearK = select(hasCloud, float(1).sub(smoothstep(1.5, 7, frontD)), float(0));
+      const bFresh = max(mix(u.blendFresh, u.blendNear, nearK), u.blendBoost);
+      const bStale = max(u.blendStale, u.blendBoost.mul(0.6));
+      const freshOut = mix(clamped, cur, select(valid, bFresh, float(1)));
+      const staleOut = select(valid, mix(clamped, curLin, bStale), curLin);
       colorOut.assign(select(fresh, freshOut, staleOut));
       const frontNew = select(fresh, curAux.r, select(valid, mix(histAux.r, curAux.r, 0.1), curAux.r));
       const limit = select(fresh, curAux.g, select(valid, histAux.g, curAux.g));
@@ -733,6 +905,8 @@ export class Clouds {
 
     this.node.colorNode.value = write.textures[0];
     this.node.auxNode.value = write.textures[1];
+    this.occColor.value = write.textures[0];
+    this.occAux.value = write.textures[1];
     this._write = 1 - this._write;
     this._prevView.copy(camera.matrixWorldInverse);
     this._prevProj.copy(camera.projectionMatrix);
