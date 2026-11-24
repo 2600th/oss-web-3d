@@ -6,6 +6,7 @@ import { terrainHeight, maxHeightAlong } from '../world/terrain/heightfield.js';
 import { clearLine } from '../combat/los.js';
 import { leadPoint } from '../combat/guidance.js';
 import { WEAPONS } from '../combat/weapons.js';
+import { AAM_RAIL } from '../vfx/core/sockets.js';
 import { AiFlight, AIRFRAMES } from './aiFlight.js';
 import { SKILLS, newMemory, decide, steer, employ } from './brain.js';
 import { DIFFICULTY, scaleSkill } from '../game/difficulty.js';
@@ -180,7 +181,10 @@ export class Fighter {
         ctx.world.releaseFlare(e, _v, _v2);
       }
       if (act.missile && ctx.player.alive) {
-        _v.copy(f.position).addScaledVector(f.forward, 8).addScaledVector(f.up, -1.2);
+        // off a wing rail (same airframe as the player's), alternating sides
+        this._rail = this._rail === 1 ? -1 : 1;
+        _right.crossVectors(f.forward, f.up).normalize();
+        _v.copy(f.position).addScaledVector(_right, this._rail * AAM_RAIL.x).addScaledVector(f.up, AAM_RAIL.y).addScaledVector(f.forward, -AAM_RAIL.z);
         ctx.world.fireMissile({ weapon: k.weapon, owner: e, target: ctx.player, position: _v, direction: f.forward, velocity: f.velocity });
         ctx.events.emit('ai:fire', { entity: e, fighter: this });
       }

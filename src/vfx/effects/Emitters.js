@@ -69,7 +69,8 @@ export class Emitters {
         randDir(_d);
         lit.spawn(L.shed, p.x, p.y, p.z, v.x * 0.6 + _d.x * 6, v.y * 0.6 + _d.y * 6, v.z * 0.6 + _d.z * 6, rnd(1.2, 2.4), 0.8 * big, rnd(4, 6.5) * big, 0.9, 0.9, 0.9, 0.5, 0.4);
       }
-      glow.spawn(G.flash, p.x, p.y, p.z, v.x, v.y, v.z, 0.1, 3 * big, 6 * big, 1, 0.8, 0.5, 1, 5);
+      // a short bright flash at the nozzle, not a fireball: it happens a few metres from the camera
+      glow.spawn(G.flash, p.x, p.y, p.z, v.x, v.y, v.z, 0.08, 1.2 * big, 2.6 * big, 1, 0.8, 0.5, 1, 4);
       this.vfx.lights.flash(p, 1, 0.7, 0.4, 2500 * big, 140, 0.25);
     }
     return item;
@@ -97,11 +98,17 @@ export class Emitters {
       _t.set(tx, ty, tz);
       item.trail.push(_t);
       const life = Math.max(dt * 2.5, 0.04);
-      glow.spawn(G.glow, tx, ty, tz, vel.x, vel.y, vel.z, life, 1.8 * big, 1.8 * big, 1, 0.88, 0.66, 1, 55);
-      glow.spawn(G.beacon, tx, ty, tz, vel.x, vel.y, vel.z, life, 8 * big, 8 * big, 1, 0.62, 0.3, 1, 1.6);
+      // The core and the beacon are sized to read at kilometres (where minPixels
+      // keeps them visible anyway); close up they shrink toward the real motor,
+      // or a launch fills the screen with an 8 m halo a few metres from the camera.
+      const dist = cam.distanceTo(p);
+      const near = Math.min(1, Math.max(0, (dist - 40) / 560));
+      const core = 1.8 * big * (0.4 + 0.6 * Math.min(1, dist / 150));
+      glow.spawn(G.glow, tx, ty, tz, vel.x, vel.y, vel.z, life, core, core, 1, 0.88, 0.66, 1, 55);
+      const bs = 8 * big * (0.15 + 0.85 * near);
+      glow.spawn(G.beacon, tx, ty, tz, vel.x, vel.y, vel.z, life, bs, bs, 1, 0.62, 0.3, 1, 1.6 * (0.25 + 0.75 * near));
       glow.spawn(G.motor, tx, ty, tz, vel.x, vel.y, vel.z, life, 1.1 * big, 1.1 * big, 1, 0.75, 0.42, 1, 14);
       v.lights.request(tx, ty, tz, 1, 0.7, 0.4, 1600 * big, 130);
-      const dist = cam.distanceTo(p);
       // close up, the motor is a 3-5 m white-yellow tongue, not a dot
       if (dist < 700) {
         const fl = Math.max(dt * 1.6, 0.03);

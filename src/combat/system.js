@@ -11,7 +11,7 @@ import { CombatVisuals } from './visuals.js';
 import { LockTracker, lockGeometry, pickTarget, cycleTarget } from './lock.js';
 import { leadPoint, ballisticImpact, rocketImpact } from './guidance.js';
 import { WEAPONS, PLAYER, SPECIALS } from './weapons.js';
-import { GUN_MUZZLE } from '../vfx/core/sockets.js';
+import { GUN_MUZZLE, AAM_RAIL } from '../vfx/core/sockets.js';
 
 export const order = 50;
 export function createSystem(game) { return new CombatSystem(game); }
@@ -59,6 +59,8 @@ export class CombatSystem {
     this._los = true;
     this._losTimer = 0;
     this._side = 1;
+    /** Seconds until each wing rail (-1 left, +1 right) shows a missile again. */
+    this._railEmpty = { '-1': 0, '1': 0 };
     this._threatActive = false;
     this._autoTimer = 0;
     this.radarRange = 12000;
@@ -135,6 +137,11 @@ export class CombatSystem {
     const live = this.active && p.alive && !f.crashed;
 
     for (const st of [this.msl, this.sp]) for (let i = 0; i < st.rails.length; i++) st.rails[i] = Math.max(0, st.rails[i] - dt);
+    for (const k in this._railEmpty) {
+      if (this._railEmpty[k] <= 0) continue;
+      this._railEmpty[k] -= dt;
+      if (this._railEmpty[k] <= 0) game.player?.setRail?.(+k, true);
+    }
     this.flares.cooldown = Math.max(0, this.flares.cooldown - dt);
 
     if (live) {
@@ -233,13 +240,20 @@ export class CombatSystem {
     if (st.ammo <= 0) return null;
     st.ammo--;
     this._side = -this._side;
-    const pos = _v.copy(f.position).addScaledVector(f.right, this._side * (w.type === 'rocket' ? 1.6 : 2.3)).addScaledVector(f.up, -1.0).addScaledVector(f.forward, 1.5);
+    // From the wing rail (the R-60 that hangs there in the model), alternating sides.
+    const pos = _v.copy(f.position).addScaledVector(f.right, this._side * AAM_RAIL.x).addScaledVector(f.up, AAM_RAIL.y).addScaledVector(f.forward, -AAM_RAIL.z);
     _dir.copy(f.forward);
     if (w.spread) {
       const r = this.world.rng;
       _dir.addScaledVector(f.right, (r() - 0.5) * 2 * w.spread).addScaledVector(f.up, (r() - 0.5) * 2 * w.spread);
     }
-    return this.world.fireMissile({ weapon: w, owner: this.player, target, position: pos, direction: _dir, velocity: f.velocity });
+    const m = this.world.fireMissile({ weapon: w, owner: this.player, target, position: pos, direction: _dir, velocity: f.velocity });
+    // the round on that rail is the one that just left: the rail stays bare until it reloads
+    if (w.type === 'missile' && this.game.player?.setRail) {
+      this.game.player.setRail(this._side, false);
+      this._railEmpty[this._side] = w.reload ?? 2;
+    }
+    return m;
   }
 
   /** Fire the selected missile / special. Returns true if something left the rail. */

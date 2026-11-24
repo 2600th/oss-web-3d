@@ -7,6 +7,8 @@ import { WEAPONS, damageAgainst } from './weapons.js';
 import { DIFFICULTY } from '../game/difficulty.js';
 
 const MAX_BULLETS = 768;
+/** Seconds a rail-launched missile flies unguided while it clears the launcher. */
+const RAIL_CLEAR = 0.15;
 const _a = new Vector3();
 const _d = new Vector3();
 const _p = new Vector3();
@@ -109,6 +111,12 @@ export class CombatWorld {
     const inherited = velocity ? velocity.length() : 0;
     const vel = new Vector3();
     if (w.type === 'bomb') vel.copy(velocity ?? dir);
+    // A rail-launched missile leaves with the launcher's whole velocity: the
+    // jet flies its path at some angle of attack to the nose, and taking only
+    // the speed (pointed down the nose) made every missile climb away from
+    // the rail at ~15 m/s. Rockets stay on the pod axis (the CCIP solution in
+    // guidance.rocketImpact assumes it); slow launchers get the old kick.
+    else if (w.type === 'missile' && velocity && inherited >= 80) vel.copy(velocity).addScaledVector(dir, w.launchBoost ?? 0);
     else vel.copy(dir).multiplyScalar(Math.max(inherited, 80) + (w.launchBoost ?? 0));
     const kind = w.type === 'bomb' ? 'bomb' : w.type === 'rocket' ? 'rocket'
       : w.kind ?? (target && target.class !== 'air' ? 'agm' : 'aam');
@@ -117,6 +125,8 @@ export class CombatWorld {
       position: position.clone(), velocity: vel, quaternion: new Quaternion(),
       alive: true, age: 0, lost: 0, motor: w.type !== 'bomb', guide,
       speed: vel.length(), lastRange: Infinity, isMissile: true,
+      // fired off an airframe: a moment of unguided separation along the rail
+      rail: w.type === 'missile' && velocity && inherited >= 80 ? dir.clone() : null,
     };
     // Hostile missiles turn harder / softer with the difficulty.
     if (w.maxG && m.team === 'hostile') m.maxG = w.maxG * this.difficulty.missile;
@@ -328,7 +338,11 @@ export class CombatWorld {
             m.target = tgt = null;
           }
         }
-        if (tgt) {
+        if (m.rail && m.age < RAIL_CLEAR) {
+          // Clearing the launcher: the seeker is not steering yet and the
+          // missile has none of the jet's lift, so it sags a little under it.
+          m.velocity.y -= G * dt;
+        } else if (tgt) {
           // Aim a little above a ground target so the last metres are not spent in the slope.
           if (tgt.class !== 'air' && !tgt.isFlare) { _n.copy(tgt.position); _n.y += 5; pnAcceleration(_a, m.position, m.velocity, _n, tgt.velocity, w.nav); }
           else pnAcceleration(_a, m.position, m.velocity, tgt.position, tgt.velocity, w.nav);
@@ -353,6 +367,9 @@ export class CombatWorld {
 
     m.position.addScaledVector(m.velocity, dt);
     _d.copy(m.velocity).normalize();
+    // Off the rail the body still points down the rail, then weathervanes
+    // onto its flight path (the jet's angle of attack, in the first frames).
+    if (m.rail && m.age < RAIL_CLEAR * 2) _d.lerp(m.rail, 1 - m.age / (RAIL_CLEAR * 2)).normalize();
     m.quaternion.setFromUnitVectors(_fwd, _d);
     if (m.age > w.life) return this._detonate(m, 'fuel');
 

@@ -77,11 +77,13 @@ export function defineTypes(lit, glow) {
 /** Trail styles. `spacing` is multiplied by the tier's trail spacing factor at creation. */
 export const TRAILS = {
   // air-to-air missile: thin, brilliant white, hangs for half a minute
-  aam: { radius: 0.7, growth: 2.0, life: 32, color: [0.97, 0.97, 0.98], opacity: 4.2, wobble: 9, rise: 0.25, glow: 2.2, wind: 1, spacing: 12 },
+  // (starts as a thin jet at the rail and swells over the first metres; the
+  // motor lights only the smoke next to the nozzle)
+  aam: { radius: 0.4, growth: 2.0, life: 32, color: [0.97, 0.97, 0.98], opacity: 4.2, wobble: 9, rise: 0.25, glow: 2.2, glowFade: 30, onset: 0.6, wind: 1, spacing: 12, taper: 6 },
   // surface-to-air: fat booster plume
-  sam: { radius: 1.5, growth: 3.2, life: 40, color: [0.9, 0.89, 0.87], opacity: 5.2, wobble: 14, rise: 0.5, glow: 3.0, wind: 1, spacing: 16 },
-  agm: { radius: 0.7, growth: 1.7, life: 30, color: [0.95, 0.95, 0.95], opacity: 4.0, wobble: 9, rise: 0.25, glow: 2.2, wind: 1, spacing: 12 },
-  rocket: { radius: 0.35, growth: 0.9, life: 12, color: [0.8, 0.8, 0.8], opacity: 1.8, wobble: 4, rise: 0.2, glow: 1.6, wind: 1, spacing: 9 },
+  sam: { radius: 1.5, growth: 3.2, life: 40, color: [0.9, 0.89, 0.87], opacity: 5.2, wobble: 14, rise: 0.5, glow: 3.0, glowFade: 18, wind: 1, spacing: 16 },
+  agm: { radius: 0.4, growth: 1.7, life: 30, color: [0.95, 0.95, 0.95], opacity: 4.0, wobble: 9, rise: 0.25, glow: 2.2, glowFade: 30, onset: 0.6, wind: 1, spacing: 12, taper: 6 },
+  rocket: { radius: 0.35, growth: 0.9, life: 12, color: [0.8, 0.8, 0.8], opacity: 1.8, wobble: 4, rise: 0.2, glow: 1.6, glowFade: 30, wind: 1, spacing: 9 },
   flare: { radius: 1.2, growth: 2.2, life: 9, color: [0.95, 0.95, 0.97], opacity: 2.2, wobble: 4, rise: 0.4, glow: 2.6, wind: 1, spacing: 5 },
   // dark, thin at the piece and swelling behind it, wandering as it tumbles
   debris: { radius: 0.3, growth: 1.3, life: 7, color: [0.04, 0.038, 0.036], opacity: 3.2, wobble: 6, rise: 0.6, glow: 0, wind: 1, spacing: 4, taper: 6 },

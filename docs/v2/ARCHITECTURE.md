@@ -1181,3 +1181,24 @@ and `tools/vfx/**`. Evidence and write-up: `docs/v2/evidence/polish-vfx/`.
   maps onto it.
   - `camera/system.js` now passes `player:hit` severity through.
   - Before, every hit flashed at least 0.35.
+
+### Missile rail launch (changed)
+
+- **Launch point:** `AAM_RAIL` in `src/vfx/core/sockets.js` = (±2.11, -1.25, -0.985) m in model space.
+  - It is the R-60's mid-body on the wing rail, measured from the `stores` mesh.
+  - Player missiles, rockets and bombs (`combat/system.js _launch`) and hostile fighters' missiles (`ai/Fighter.js`) leave from it, alternating sides.
+  - Before: the player fired 2.5 m ahead of and 0.25 m above the rail; hostiles fired from the nose.
+- **Velocity:** `CombatWorld.fireMissile` gives a guided missile fired with a launcher velocity of ≥ 80 m/s the whole vector plus `dir * launchBoost`.
+  - Before: it took only the speed, pointed down the nose. That dropped the angle of attack, so missiles climbed off the rail.
+  - Rockets, and missiles from slow launchers, keep the old rule (`rocketImpact` CCIP assumes it).
+  - Such missiles carry `m.rail` (the launch direction). For `RAIL_CLEAR` = 0.15 s they fly unguided under gravity, then guidance takes over.
+  - The body turns from the rail axis onto the flight path over 0.3 s.
+- **Rail stores:** `Aircraft.load` splits `stores` into `stores_L` and `stores_R` before the material upgrade.
+  - `Aircraft.setRail(side, loaded)` shows or hides one.
+  - Combat hides the fired side's round until that side's reload has passed (`_railEmpty`).
+- **Trail styles:** new optional ribbon fields `glowFade` (1/s; default 9) and `onset` (s; default 0).
+  - They are stored in the free `iY.z` and `iY.w` slots.
+  - aam and agm use glowFade 30, onset 0.6 and taper 6, with radius 0.4 (was 0.7).
+  - sam uses glowFade 18; rocket uses 30.
+  - The missile core glow and beacon shrink toward the motor's real size inside 600 m. minPixels still keeps them visible at range.
+  - The ignition flash is 1.2–2.6 m (was 3–6 m).

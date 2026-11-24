@@ -147,6 +147,22 @@ test('a guided missile hits a non-manoeuvring target, scores and emits the catal
   assert.deepEqual([world.stats.mslFired, world.stats.mslHits, world.stats.airKills], [1, 1, 1]);
 });
 
+test("a rail launch keeps the jet's whole velocity: the missile does not climb off the rail", () => {
+  const { world, player } = makeWorld();
+  // nose level, flying 8 degrees nose-high of its path (sinking 30 m/s at 215 m/s)
+  const jetVel = v(0, -30, -213);
+  const start = v(0, 3000, 0);
+  const m = world.fireMissile({ weapon: 'msl', owner: player, position: start, direction: v(0, 0, -1), velocity: jetVel });
+  assert.ok(Math.abs(m.velocity.y - jetVel.y) < 1e-9, 'vertical velocity inherited, not dropped');
+  assert.ok(Math.abs(m.velocity.z - (jetVel.z - WEAPONS.msl.launchBoost)) < 1e-9, 'boost along the rail');
+  const fwd0 = v(0, 0, -1).applyQuaternion(m.quaternion);
+  assert.ok(fwd0.z < -0.9999, 'body points down the rail at launch');
+  fly(world, 0.1);
+  const jet = start.clone().addScaledVector(jetVel, 0.1);
+  assert.ok(m.position.y <= jet.y + 1e-6, `stays level with or below the jet that launched it (${(m.position.y - jet.y).toFixed(3)} m)`);
+  assert.ok(m.position.z < jet.z - 4, 'and pulls ahead of it');
+});
+
 test('a hostile missile can be beaten: flares decoy it and the player survives', () => {
   const { world, player, log } = makeWorld(() => 0); // every flare roll succeeds
   const sam = world.addTarget({ class: 'ground', team: 'hostile', position: v(0, 0, -2500), health: 50 });

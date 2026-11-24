@@ -13,3 +13,14 @@
  * centre, at the nose cone.
  */
 export const GUN_MUZZLE = Object.freeze({ x: 0, y: -1.31, z: -2.64 });
+
+/**
+ * AAM_RAIL: centre of the right-hand wing missile as it hangs on its launch
+ * rail (mirror x for the left one). Measured from the `stores` mesh of
+ * mig21.glb: the R-60 body is a 0.26 m fin cross-section centred at
+ * x +-2.11, y -1.25, nose at z -2.025; the flying aam_ir.glb is 2.08 m long
+ * with its origin at mid-body, so mid-body sits 1.04 m behind the nose. The
+ * old launch point (x 2.3, 1 m below and 1.5 m ahead of the centre) was
+ * 0.25 m high and 2.5 m ahead of the rail; hostiles fired from the nose.
+ */
+export const AAM_RAIL = Object.freeze({ x: 2.11, y: -1.25, z: -0.985 });

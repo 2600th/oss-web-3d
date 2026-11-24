@@ -17,6 +17,43 @@ function loadGLTF(url) {
   return cache.get(url);
 }
 
+/**
+ * The wing missiles on their rails are one mesh (`stores`) in the GLB. Split
+ * it by side (triangle centroid x in model space) into `stores_L` and
+ * `stores_R`, sharing the vertex buffers, so a launched round can leave its
+ * rail. Returns { L, R } or null if the mesh is not there.
+ */
+function splitStores(root, space) {
+  let src = null;
+  root.traverse((o) => { if (o.isMesh && o.name === 'stores') src = o; });
+  if (!src?.geometry?.index || !src.parent) return null;
+  space.updateWorldMatrix(true, true);
+  const m = new THREE.Matrix4().copy(space.matrixWorld).invert().multiply(src.matrixWorld);
+  const g = src.geometry, idx = g.index.array, pos = g.attributes.position;
+  const v = new THREE.Vector3();
+  const left = [], right = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    let x = 0;
+    for (let k = 0; k < 3; k++) x += v.fromBufferAttribute(pos, idx[t + k]).applyMatrix4(m).x;
+    (x < 0 ? left : right).push(idx[t], idx[t + 1], idx[t + 2]);
+  }
+  const half = (list, name) => {
+    const geo = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(g.attributes)) geo.setAttribute(k, a);
+    geo.setIndex(list);
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    const mesh = src.clone();
+    mesh.geometry = geo;
+    mesh.name = name;
+    src.parent.add(mesh);
+    return mesh;
+  };
+  const out = { L: half(left, 'stores_L'), R: half(right, 'stores_R') };
+  src.removeFromParent();
+  return out;
+}
+
 /** A node in the GLB that says it is already in runtime conventions (tools/blender/build_mig_surfaces.py). */
 function isBaked(root) {
   let baked = false;
@@ -92,6 +129,8 @@ export class Aircraft {
       }
     });
     this._source = root;
+    // before the material upgrade, which remembers each mesh's GLB material
+    this.rails = splitStores(root, this.model);
     upgradeAircraftMaterials(root, { tier: this.tier ?? 'high', role: this.role, env: this.env ?? null });
     this.surfaces = new SurfaceRig(root);
 
@@ -128,6 +167,12 @@ export class Aircraft {
   updateSurfaces(dt, flight) {
     if (!this.surfaces?.ok || !flight) return;
     this.surfaces.update(Math.min(dt, 0.1), demandsFromFlight(flight, this._demands));
+  }
+
+  /** Show or hide the wing missile on one rail (side -1 left, +1 right) — the one that just launched. */
+  setRail(side, loaded) {
+    const m = this.rails?.[side < 0 ? 'L' : 'R'];
+    if (m) m.visible = loaded;
   }
 
   /** Copy pose from a flight model (position + orientation). */

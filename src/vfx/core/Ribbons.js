@@ -68,7 +68,13 @@ export class Ribbons {
    * wind (0..1), spacing (m), lump (0..1, default 1: how much the radius
    * swells and necks along the trail; a contrail is a clean line, 0),
    * taper (m: the first metres of a trail grow from a point instead of
-   * starting at full radius, for debris streamers) }.
+   * starting at full radius, for debris streamers), glowFade (1/s, default 9:
+   * how fast the motor light leaves the smoke behind it; a missile's is short,
+   * so the light stays on the metres next to the nozzle rather than on the
+   * last tenths of a second, which right after a rail launch is the whole
+   * trail beside the jet), onset (s, default 0: the swelling eases in over
+   * this long, so a missile's exhaust is a tight jet for its first tenths of
+   * a second instead of a 2 m tube beside the jet that launched it) }.
    */
   create(style) {
     return new Trail(this, style);
@@ -83,7 +89,7 @@ export class Ribbons {
     d[o + 16] = s.radius; d[o + 17] = s.growth; d[o + 18] = s.life; d[o + 19] = trail.seed;
     d[o + 20] = s.color[0]; d[o + 21] = s.color[1]; d[o + 22] = s.color[2]; d[o + 23] = s.opacity * trail.strength;
     d[o + 24] = s.wobble; d[o + 25] = s.rise; d[o + 26] = s.glow; d[o + 27] = s.wind;
-    d[o + 28] = s.lump ?? 1; d[o + 29] = s.taper ?? 0; d[o + 30] = 0; d[o + 31] = 0;
+    d[o + 28] = s.lump ?? 1; d[o + 29] = s.taper ?? 0; d[o + 30] = s.glowFade ?? 0; d[o + 31] = s.onset ?? 0;
     this.owner[i] = trail;
     this.dirty.mark(i);
   }
@@ -145,7 +151,8 @@ export class Ribbons {
       const lump = sin(dist.mul(0.043).add(seed.mul(40))).mul(0.22).add(sin(dist.mul(0.117).add(seed.mul(17))).mul(0.12)).mul(iY.x).add(1);
       // taper: the first `iY.y` metres grow out of a point (debris streamers)
       const taper = select(iY.y.greaterThan(0), smoothstep(0, iY.y.max(1e-3), dist).mul(0.85).add(0.15), float(1));
-      return iS.x.add(iS.y.mul(sqrt(age))).mul(lump).mul(taper);
+      const onset = select(iY.w.greaterThan(0), smoothstep(0, iY.w.max(1e-3), age), float(1));
+      return iS.x.add(iS.y.mul(sqrt(age)).mul(onset)).mul(lump).mul(taper);
     };
 
     const bA = iA.w, bB = iB.w;
@@ -202,6 +209,7 @@ export class Ribbons {
     const v6 = varying(vec4(iX.z, iS.x, mix(rA0.div(rA), rB0.div(rB), tA), mix(rA0.div(rA), rB0.div(rB), tB)));
     // cloud shadow where the segment has drifted to (one shadow-map tap per vertex)
     const v7 = varying(sh.cloudShadow(drift(iA.xyz, bA)));
+    const vFade = varying(select(iY.z.greaterThan(0), iY.z, float(9)));
 
     material.fragmentNode = Fn(() => {
       const D = normalize(vPos);
@@ -340,7 +348,7 @@ export class Ribbons {
       const waterLit = sh.vapourLight(ndl, dot(D, u.sunDirView), v7).mul(mix(float(0.85), float(1.05), n2));
       const col = v5.rgb.mul(mix(smokeLit, waterLit, water)).toVar();
       // rocket motor lighting the first metres of smoke
-      const hot = glowK.mul(exp(age.mul(-9))).mul(prof.mul(0.8).add(0.2));
+      const hot = glowK.mul(exp(age.mul(vFade).negate())).mul(prof.mul(0.8).add(0.2));
       col.addAssign(fireRamp(hot.mul(1.2)));
       return vec4(col.mul(alpha), alpha);
     })();
