@@ -9,6 +9,7 @@ import { generateBlueNoise } from './blueNoise.js';
 import { DEM, terrainHeight } from '../terrain/heightfield.js';
 import { CLOUD_SHADOW_PATH } from '../shadows/shadowMath.js'; // [shadows]
 import { PassGuard } from './passGuard.js';
+import { HISTORY_MAX, STALE_GAIN, SURFACE_REL, SURFACE_ABS_KM, cameraCut } from './temporal.js';
 
 /**
  * Volumetric clouds.
@@ -23,8 +24,9 @@ import { PassGuard } from './passGuard.js';
  * Rendering follows the same sources and takram's three-clouds: the march runs at
  * reduced resolution, one pixel of every 2x2 block per frame (Bayer order) with
  * blue-noise ray offsets; a resolve pass reprojects the history (using the
- * cloud's own front depth), rejects it across depth discontinuities, clamps it to
- * the current neighbourhood and blends; the final composite is a depth-aware
+ * cloud's own front depth), takes it only from texels that stopped at the same
+ * scene surface, clamps it to the current neighbourhood and blends by how many
+ * samples it already holds (temporal.js); the final composite is a depth-aware
  * (joint bilateral) upsample to full resolution.
  *
  * Passes, in order each frame:
@@ -201,8 +203,9 @@ export class Clouds {
     this._write = 0;
 
     // Resolved cloud layer for other screen-space consumers (the VFX layer):
-    // colour.a = transmittance, aux.r = front distance (km), aux.a = 1 once
-    // written. `visibilityAt(screenUv, viewDistanceMetres)` is how much of
+    // colour.a = transmittance, aux.r = front distance (km), aux.a > 0 once
+    // written (the history's sample count / HISTORY_MAX, see _resolvePass).
+    // `visibilityAt(screenUv, viewDistanceMetres)` is how much of
     // something at that distance survives the cloud in front of it.
     this.occColor = texture(this.history[0].textures[0]);
     this.occAux = texture(this.history[0].textures[1]);
@@ -214,7 +217,7 @@ export class Clouds {
       // depth inside the cloud: ramp from clear to fully behind around it.
       const soft = front.mul(0.04).add(45);
       const k = smoothstep(front.sub(soft), front.add(soft.mul(2)), distM);
-      return mix(float(1), mix(float(1), T, k), a.a);
+      return select(a.a.greaterThan(0), mix(float(1), T, k), float(1));
     });
 
     this._quad = new THREE.QuadMesh();
@@ -230,6 +233,9 @@ export class Clouds {
     this._probePending = false;
     this._prevView = new THREE.Matrix4();
     this._prevProj = new THREE.Matrix4();
+    this._poseA = {};
+    this._poseB = {};
+    this._pose = null; // camera pose of the last cloud frame (see renderPasses)
     this._size = new THREE.Vector2();
 
     /** TSL Fn(worldPos) -> sun visibility through the cloud layer (0..1). */
@@ -838,6 +844,32 @@ export class Clouds {
     return { fn, output: outputStruct(colorOut, auxOut) };
   }
 
+  /**
+   * Temporal reconstruction: this frame's sparse march + last frame's result.
+   *
+   * [cloud flicker] Three things here used to let one frame's raw samples
+   * (one jittered ray per 2x2 block, bilinearly spread) through to the screen:
+   *
+   *  - History was all-or-nothing on ONE depth compare at the pixel centre. The
+   *    scene is rendered with a new sub-pixel jitter every frame (TRAA), so
+   *    along every silhouette that has cloud behind it (the far ridge line,
+   *    the aircraft) that compare flipped from frame to frame, and each flip
+   *    threw the history away. Now a pixel whose own history stopped at
+   *    another surface takes the nearest history texel that stopped at its
+   *    surface instead.
+   *  - The fallback estimate (`curLin`) mixed march samples from both sides of
+   *    such an edge: samples that ended on the aircraft carry no cloud, and
+   *    bled clear sky into the cloud beside it, in a different block pattern
+   *    each frame. It is now a joint-bilateral mix of the samples that stopped
+   *    at this pixel's surface.
+   *  - A texel without history took one guess and then moved off it at the
+   *    steady-state rates (2 % a frame, 12 % on its own turn every fourth
+   *    frame): sky uncovered by the aircraft, the frame after a camera cut and
+   *    the start of every recording stayed noisy and block-shaped for a second
+   *    or more. aux.a now counts the samples a texel holds and the blend is a
+   *    running mean until it reaches the steady-state rates (historyBlend in
+   *    temporal.js). Converged texels blend exactly as before.
+   */
   _resolvePass(depthNode, reversed) {
     const u = this.u;
     const colorOut = property('vec4');
@@ -848,6 +880,10 @@ export class Clouds {
     this._histAux = texture(this.history[1].textures[1]);
     const hColor = this._histColor;
     const hAux = this._histAux;
+    const NEIGHBOURS = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+    const QUAD = [[0, 0], [1, 0], [0, 1], [1, 1]];
+    // explicit level 0: an implicit-derivative fetch is not allowed inside a branch (WGSL)
+    const at = (tex, q) => tex.sample(q).level(0);
 
     const fn = Fn(() => {
       const st = uv();
@@ -858,23 +894,18 @@ export class Clouds {
       const uvM = block.add(0.5).div(u.mSize).toVar();
       const cur = mColor.sample(uvM).toVar();
       const curAux = mAux.sample(uvM).toVar();
-      // Bilinear reconstruction of the sparse samples at this pixel.
-      const uvLin = pix.sub(u.bayer).div(SUB).add(0.5).div(u.mSize);
-      const curLin = mColor.sample(uvLin).toVar();
+      // The scene surface this pixel's ray ends on (km), and what counts as "the same".
+      const here = min(this._sceneDistance(depthNode, st, reversed), 1e6).mul(0.001).toVar();
+      const tol = here.mul(SURFACE_REL).add(SURFACE_ABS_KM).toVar();
 
-      // Neighbourhood bounds of the current samples (texel-centred 3x3, so the
-      // box spans the blue-noise spread of this frame's ray offsets). The pad
-      // below keeps the clamp loose: it only has to stop gross ghosting, and a
-      // tight box would pull the history toward each frame's noise.
-      const lo = min(cur, curLin).toVar();
-      const hi = max(cur, curLin).toVar();
+      // Neighbourhood of the current samples (texel-centred 3x3): colour bounds
+      // (the box spans the blue-noise spread of this frame's ray offsets; the
+      // pad below keeps the clamp loose: it only has to stop gross ghosting,
+      // and a tight box would pull the history toward each frame's noise), the
+      // nearest cloud, and whether every sample stopped at this pixel's surface.
+      const lo = vec4(cur).toVar();
+      const hi = vec4(cur).toVar();
       const texel = vec2(1).div(u.mSize);
-      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        const s = mColor.sample(uvM.add(texel.mul(vec2(ox, oy))));
-        lo.assign(min(lo, s));
-        hi.assign(max(hi, s));
-      }
-
       // Reproject through the cloud's own depth, dilated to the nearest cloud
       // in the 3x3 march neighbourhood: a sky pixel next to a close cloud must
       // follow that cloud's parallax, otherwise its history holds the edge
@@ -882,12 +913,43 @@ export class Clouds {
       // blocks (the stair-stepped rim).
       const BIGF = float(1e6);
       const frontD = select(curAux.b.greaterThan(0.04), curAux.r, BIGF).toVar();
-      for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        const a = mAux.sample(uvM.add(texel.mul(vec2(ox, oy))));
-        frontD.assign(select(a.b.greaterThan(0.04), min(frontD, a.r), frontD));
+      const limitDev = abs(curAux.g.sub(here)).toVar();
+      for (const [ox, oy] of NEIGHBOURS) {
+        const q = uvM.add(texel.mul(vec2(ox, oy)));
+        const sm = mColor.sample(q);
+        const am = mAux.sample(q).toVar();
+        lo.assign(min(lo, sm));
+        hi.assign(max(hi, sm));
+        frontD.assign(select(am.b.greaterThan(0.04), min(frontD, am.r), frontD));
+        limitDev.assign(max(limitDev, abs(am.g.sub(here))));
       }
       const hasCloud = frontD.lessThan(1e5);
       frontD.assign(select(hasCloud, frontD, curAux.r));
+
+      // This frame's estimate at a pixel that was not marched: bilinear
+      // reconstruction of the sparse samples; where a depth edge runs through
+      // the neighbourhood, only of those that stopped at this pixel's surface.
+      const fM = pix.sub(u.bayer).div(SUB).toVar(); // this pixel in march-texel index space
+      const curLin = mColor.sample(fM.add(0.5).div(u.mSize)).toVar();
+      const curLinOk = float(1).toVar(); // curLin describes this pixel's surface
+      If(limitDev.greaterThan(tol), () => {
+        const b0 = floor(fM).toVar();
+        const wf = fM.sub(b0).toVar();
+        const acc = vec4(0).toVar();
+        const wsum = float(0).toVar();
+        for (const [ox, oy] of QUAD) {
+          const q = b0.add(vec2(ox + 0.5, oy + 0.5)).div(u.mSize);
+          const same = abs(at(mAux, q).g.sub(here)).lessThan(tol);
+          const bil = (ox ? wf.x : float(1).sub(wf.x)).mul(oy ? wf.y : float(1).sub(wf.y)).add(1e-3);
+          const wt = select(same, bil, float(0));
+          acc.addAssign(at(mColor, q).mul(wt));
+          wsum.addAssign(wt);
+        }
+        If(wsum.greaterThan(1e-4), () => { curLin.assign(acc.div(wsum)); }).Else(() => { curLinOk.assign(0); });
+      });
+      lo.assign(min(lo, curLin));
+      hi.assign(max(hi, curLin));
+
       const dir = this._ray(st).toVar();
       const world = u.camPos.add(dir.mul(frontD.mul(1000)));
       const pv = u.prevView.mul(vec4(world, 1)).toVar();
@@ -915,10 +977,29 @@ export class Clouds {
         .add(hColor.sample(vec2(t12.x, t3c.y)).mul(wd))
         .div(wc.add(wl).add(wr).add(wu).add(wd)).max(0).toVar();
       const histAux = hAux.sample(puv).toVar();
-      const here = min(this._sceneDistance(depthNode, st, reversed), 1e6).mul(0.001).toVar();
       const onScreen = pv.z.lessThan(0).and(puv.x.greaterThan(0)).and(puv.x.lessThan(1)).and(puv.y.greaterThan(0)).and(puv.y.lessThan(1));
-      const sameSurface = abs(histAux.g.sub(here)).lessThan(here.mul(0.12).add(0.004));
-      const valid = onScreen.and(sameSurface).and(u.reset.lessThan(0.5));
+      const sameF = select(abs(histAux.g.sub(here)).lessThan(tol), float(1), float(0)).toVar();
+      If(sameF.lessThan(0.5).and(onScreen), () => {
+        // The history under this pixel stopped somewhere else (or is a blend
+        // across an edge). Of the four history texels around the reprojected
+        // point, take the one that stopped nearest this pixel's surface.
+        const hb = floor(puv.mul(u.hSize).sub(0.5)).toVar();
+        const bestDev = float(1e9).toVar();
+        const bestUv = vec2(puv).toVar();
+        for (const [ox, oy] of QUAD) {
+          const q = hb.add(vec2(ox + 0.5, oy + 0.5)).mul(inv).toVar();
+          const dev = abs(at(hAux, q).g.sub(here)).toVar();
+          If(dev.lessThan(bestDev), () => { bestDev.assign(dev); bestUv.assign(q); });
+        }
+        If(bestDev.lessThan(tol), () => {
+          histAux.assign(at(hAux, bestUv));
+          hist.assign(at(hColor, bestUv).max(0));
+          sameF.assign(1);
+        });
+      });
+      const valid = onScreen.and(sameF.greaterThan(0.5)).and(u.reset.lessThan(0.5));
+      // samples this history texel stands for (0: none, take the new value outright)
+      const n = select(valid, histAux.a.mul(HISTORY_MAX), float(0)).toVar();
       const pad = hi.sub(lo).mul(0.75).add(0.02);
       const clamped = clamp(hist, lo.sub(pad), hi.add(pad));
 
@@ -928,20 +1009,24 @@ export class Clouds {
       // whose parallax needs the fresh samples): the bright rims there are
       // where frame-to-frame noise and the march blocks showed most
       const glowR = smoothstep(0.88, 0.995, dot(dir, u.sunDir)).mul(float(1).sub(nearK));
-      const bFresh = max(mix(u.blendFresh, u.blendNear, nearK).mul(float(1).sub(glowR.mul(u.glowHistory))), u.blendBoost);
-      const bStale = max(u.blendStale, u.blendBoost.mul(0.6));
-      const freshOut = mix(clamped, cur, select(valid, bFresh, float(1)));
-      const staleOut = select(valid, mix(clamped, curLin, bStale), curLin);
-      const out = select(fresh, freshOut, staleOut).toVar();
+      const floorFresh = max(mix(u.blendFresh, u.blendNear, nearK).mul(float(1).sub(glowR.mul(u.glowHistory))), u.blendBoost);
+      const floorStale = max(u.blendStale, u.blendBoost.mul(0.6));
+      // historyBlend() in temporal.js
+      const aFresh = max(floorFresh, float(1).div(n.add(1)));
+      const aStale = max(floorStale, float(STALE_GAIN).div(n.add(STALE_GAIN)));
+      const out = select(fresh, mix(clamped, cur, aFresh), mix(clamped, curLin, aStale)).toVar();
+      const nNew = min(n.add(select(fresh, float(1), float(STALE_GAIN))), HISTORY_MAX);
       colorOut.assign(out);
       const frontNew = select(fresh, curAux.r, select(valid, mix(histAux.r, curAux.r, 0.1), curAux.r));
-      const limit = select(fresh, curAux.g, select(valid, histAux.g, curAux.g));
+      // The surface the stored colour was marched (or filtered) up to: this
+      // pixel's, unless nothing on its surface was available this frame.
+      const limit = select(fresh, curAux.g, select(valid.or(curLinOk.greaterThan(0.5)), here, curAux.g));
       // [night clouds] aux.b (opacity) scales the night stage's moonlit haze
       // over each cloud. It was this frame's raw sparse sample: on a distant
       // rim that flips between hit and miss every frame, block by block, so
       // the haze over every far cloud edge flickered at night. Use the
       // temporally resolved transmittance instead, like the colour.
-      auxOut.assign(vec4(frontNew, limit, saturate(float(1).sub(out.a)), 1));
+      auxOut.assign(vec4(frontNew, limit, saturate(float(1).sub(out.a)), nNew.div(HISTORY_MAX)));
       return vec4(0);
     });
     return { fn, output: outputStruct(colorOut, auxOut) };
@@ -1014,6 +1099,16 @@ export class Clouds {
     const cp = camera.position;
     if (!Number.isFinite(cp.x + cp.y + cp.z)) { u.reset.value = 1; return; }
     if (!this._guard.ready()) return;
+    // [cloud flicker] a cut (new shot, respawn, fast-forward with rendering
+    // off): last frame's clouds are a picture of somewhere else. Nothing told
+    // this layer; it reprojected them anyway and took a second to lose them.
+    const e = camera.matrixWorld.elements;
+    const pose = this._pose === this._poseA ? this._poseB : this._poseA;
+    pose.x = cp.x; pose.y = cp.y; pose.z = cp.z;
+    pose.fx = -e[8]; pose.fy = -e[9]; pose.fz = -e[10];
+    pose.tanHalfFov = 1 / Math.max(1e-6, Math.abs(camera.projectionMatrix.elements[5]));
+    if (cameraCut(this._pose, pose)) u.reset.value = 1;
+    this._pose = pose;
     const size = renderer.getDrawingBufferSize(this._size);
     const mw = Math.max(1, Math.ceil(size.x * this.scale / SUB));
     const mh = Math.max(1, Math.ceil(size.y * this.scale / SUB));

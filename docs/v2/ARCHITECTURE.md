@@ -1249,3 +1249,41 @@ and write-up: `docs/v2/evidence/afterburner/`.
 - **Dev note:** the VFX camera uniforms are written in `VfxSystem.lateUpdate`.
   Posing `game.camera` by hand while `game.paused` leaves them stale; use
   `__vfxTest.cam()`.
+
+## Cloud flicker, day (changed)
+
+Evidence, numbers and what is still open: `docs/v2/evidence/cloud-flicker-day/`.
+
+- **God rays (`src/fx/post/godRays.js`, `godRayMath.js`):** at a low sun the
+  shafts were the main flicker over clouds and horizon. Three causes, three
+  changes:
+  - emitter mask: 16 overlapping 2x2 footprints per mask texel instead of 4
+    side by side (`emitterTaps`), so the sun and thin lit rims no longer emit
+    by how they happen to align with the footprints;
+  - new `EmitterHistory` pass: the mask is accumulated over time
+    (`EMITTER_BLEND` 0.14), reprojected by camera rotation only (emitters are
+    sky), with a mip chain;
+  - the radial march reads that at the mip whose texel is one step long
+    (`rayMarchLod`), and its air factor takes the nearest of four depths.
+- **`createGodRays()` result (changed):** carries `.history` and
+  `.updateCamera(camera, cut)` next to `.mask`. `PostFX` calls `updateCamera`
+  once a frame from `_updateCamera`, lists `g.history` between the mask and
+  the march in the wrapper, calls `history.restart()` on frames where the rays
+  are skipped, and disposes it on rebuild.
+- **Cloud resolve (`src/world/clouds/Clouds.js`, `temporal.js`):** this is
+  what removed the horizon flicker at golden hour and dusk.
+  - history aux `.a` is now the sample count of the texel (0..1 of
+    `HISTORY_MAX` 16). Blend weight is `historyBlend()`: a running mean while
+    the history is young, the old floors (`blendFresh`, `blendStale`) once it
+    is not. `.b` is still the resolved opacity (night stage).
+  - at depth edges the bilinear guess for a pixel not marched this frame only
+    uses march texels on the pixel's own surface (`sameSurface`), and a history
+    fetch that straddles two surfaces picks the nearest matching texel.
+  - `renderPasses` resets the history on a camera cut (`cameraCut()`: 400 m,
+    25 degrees or a third of the field of view in one frame).
+- **Dev note:** FRAME-type nodes (cloud passes, TRAA, the god-ray history) only
+  advance when three's animation loop ticks `renderer._nodes.nodeFrame`. A
+  loop that calls `post.render()` by hand, such as `__capture.step()`, renders
+  with clouds and TRAA frozen; `__capture.record()` is unaffected.
+- **Dev note:** a pass texture's `.sample(uv).level(lod)` drops the uv (its
+  `clone()` keeps neither); set `levelNode` on the sampled node instead.
