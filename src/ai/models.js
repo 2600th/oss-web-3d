@@ -5,6 +5,7 @@
 import * as THREE from 'three/webgpu';
 import { Aircraft } from '../flight/Aircraft.js';
 import { tryLoadModel } from '../combat/visuals.js';
+import { CATALOG } from '../assets/catalog.js';
 
 const mat = (color, rough = 0.85, metal = 0.1) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
 const M = {
@@ -201,16 +202,6 @@ export class UnitLOD extends THREE.LOD {
 const _lodPos = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 
-// The catalogue, reached through a glob like combat/visuals.js does, so a
-// gameplay-only checkout without the assets area still builds.
-const catalogModules = import.meta.glob('../assets/catalog.js');
-let catalogPromise = null;
-function getCatalog() {
-  const load = Object.values(catalogModules)[0];
-  catalogPromise ??= load ? load().then((m) => m.CATALOG ?? {}).catch(() => ({})) : Promise.resolve({});
-  return catalogPromise;
-}
-
 /** LOD switch distance of a catalogue entry's level `i`, or null without one. */
 function lodDistance(entry, i) {
   const l = entry?.lods?.[i];
@@ -224,7 +215,7 @@ function lodDistance(entry, i) {
  * unit model's catalog id, bounds or sockets sees the same thing as before.
  */
 async function loadUnitLOD(id, opts = {}) {
-  const entry = (await getCatalog())[id];
+  const entry = CATALOG[id];
   const dist = (opts.lod ?? 0) === 0 ? lodDistance(entry, 1) : null; // a pinned level stays pinned
   const [near, far] = await Promise.all([
     tryLoadModel(id, opts),
@@ -358,7 +349,7 @@ export async function hostileFighterModel() {
     lod.name = 'hostile-lod';
     lod.addLevel(near, 0, 0.1);
     lod.addLevel(far, HOSTILE_LOD1_DISTANCE, 0.1);
-    lod.linkNodes((await getCatalog()).mig21_hostile?.pivots ?? []);
+    lod.linkNodes(CATALOG.mig21_hostile?.pivots ?? []);
     g.add(lod);
   } else {
     g.add(near);

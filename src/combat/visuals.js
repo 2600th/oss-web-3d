@@ -4,6 +4,7 @@
 // switch on when no `game.systems.vfx` is registered, so the game is readable
 // in a gameplay-only checkout.
 import * as THREE from 'three/webgpu';
+import { loadModel, CATALOG } from '../assets/loadModel.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -16,30 +17,11 @@ const _c = new THREE.Color();
 const MISSILE_ASSET = { msl: 'aam_ir', hobs: 'aam_hobs', lraam: 'aam_long', rkt: 'rocket', bomb: 'bomb', e_aam: 'aam_ir', e_aam_ace: 'aam_hobs', e_manpads: 'sam', e_sam: 'sam_large' };
 const EXPLOSION_RADIUS = { small: 14, medium: 30, large: 55, huge: 110 };
 
-/**
- * The art area's loader (src/assets/loadModel.js). Reached through a glob so a
- * gameplay-only checkout without it still builds and falls back to primitives.
- */
-const loaderModules = import.meta.glob('../assets/loadModel.js');
-const catalogModules = import.meta.glob('../assets/catalog.js');
-let apiPromise = null;
-function loadApi() {
-  if (!apiPromise) {
-    const load = Object.values(loaderModules)[0];
-    const cat = Object.values(catalogModules)[0];
-    apiPromise = load && cat
-      ? Promise.all([load(), cat()]).then(([l, c]) => ({ loadModel: l.loadModel, catalog: c.CATALOG ?? {} })).catch(() => null)
-      : Promise.resolve(null);
-  }
-  return apiPromise;
-}
-
-/** `loadModel(id, opts)` from the asset catalogue, or null when the id (or the loader) is absent. */
+/** `loadModel(id, opts)` from the asset catalogue, or null when the id is absent or fails to load. */
 export async function tryLoadModel(id, opts) {
-  const api = await loadApi();
-  if (!api?.loadModel || !api.catalog[id]) return null;
+  if (!CATALOG[id]) return null;
   try {
-    return (await api.loadModel(id, opts)) ?? null;
+    return (await loadModel(id, opts)) ?? null;
   } catch (e) {
     console.warn('[assets] failed to load', id, e);
     return null;
