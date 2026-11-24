@@ -1,12 +1,14 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { capturePlugin } from './tools/capture/vite-capture.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 // Anchored to this project's root: a '**/.claude/**' glob also matched the
 // root itself when the project *is* an agent worktree (.claude/worktrees/x),
 // which silently disabled file watching there (stale modules, no HMR).
-const IGNORED_DIRS = ['.claude', 'legacy', 'legacy-tools'];
+// `captures` holds frames written by the dev capture tool (tools/capture).
+const IGNORED_DIRS = ['.claude', 'legacy', 'legacy-tools', 'captures', 'trailer'];
 const ignored = (file) => {
   const rel = path.relative(root, file);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
@@ -16,6 +18,8 @@ const ignored = (file) => {
 
 export default defineConfig({
   base: './',
+  // dev only: frame-exact video capture (src/game/dev/capture.js -> captures/<clip>/)
+  plugins: [capturePlugin({ dir: path.join(root, 'captures') })],
   server: {
     host: '127.0.0.1',
     port: 5173,

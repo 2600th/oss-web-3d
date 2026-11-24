@@ -26,7 +26,7 @@ const GROUP = {
   pitchDown: 'Flight', pitchUp: 'Flight', rollLeft: 'Flight', rollRight: 'Flight', yawLeft: 'Flight', yawRight: 'Flight',
   throttleUp: 'Flight', brake: 'Flight', controlMode: 'Flight',
   fireMissile: 'Combat', fireGun: 'Combat', switchWeapon: 'Combat', flares: 'Combat', targetNext: 'Combat', optic: 'Combat',
-  camera: 'View', lookTarget: 'View', missileCam: 'View', pause: 'View',
+  camera: 'View', lookTarget: 'View', missileCam: 'View', cinematicCam: 'View', pause: 'View',
 };
 // menu-only actions are not worth a row in the controls reference
 const HIDDEN = new Set(['confirm', 'back']);

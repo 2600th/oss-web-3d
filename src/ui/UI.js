@@ -476,6 +476,13 @@ export class UI {
       if (p.weapon !== 'gun') this.hud.callout('hit', 'STRUCK', '', 1.1);
       this.rumbler.pulse(RUMBLE.hit);
     });
+    // In-flight cinematic camera (H): the instruments are drawn for the
+    // pilot's view, so the HUD canvas steps aside while the director runs.
+    ev.on('camera:cinematic', ({ name, state } = {}) => {
+      if (name !== 'director') return;
+      const el = this.hud?.canvas;
+      if (el) el.style.visibility = state === 'start' ? 'hidden' : '';
+    });
     const inbound = new Map(); // hostile missile -> its shooter
     ev.on('missile:launch', ({ missile: m } = {}) => {
       if (!m) return;

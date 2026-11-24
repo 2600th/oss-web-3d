@@ -6,7 +6,11 @@
 //   ?bot         let the bot fly the sortie       (?bot=god: and cannot be shot down)
 //   ?speed=3     time scale
 //   window.__bot(true|false|'god'), window.__game.dev
+//   window.__capture   frame-exact video capture (capture.js)
+//   window.__trailer   trailer shooting helpers (trailer.js)
 import { Bot } from './Bot.js';
+import { installCapture } from './capture.js';
+import { installTrailer } from './trailer.js';
 import { terrainHeight } from '../../world/terrain/heightfield.js';
 import { CLOUD } from '../../ai/brain.js';
 import { ROUGH_AIR } from '../../ai/Fighter.js';
@@ -249,6 +253,8 @@ export function install(game) {
   };
 
   if (q.get('debug') !== '0') dev.overlay = createOverlay(game);
+  dev.capture = installCapture(game);
+  dev.trailer = installTrailer(game, dev);
   return dev;
 }
 

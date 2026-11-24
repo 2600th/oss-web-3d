@@ -258,7 +258,7 @@ export class CameraRig {
 
   /**
    * Play a named cinematic path (see camera/cinematics.js): 'orbit', 'title',
-   * 'flyby', 'reveal', 'sortie'. Returns a promise resolved when it ends or is
+   * 'flyby', 'reveal', 'sortie', 'mount', 'director'. Returns a promise resolved when it ends or is
    * stopped. opts: { focus: {position, orientation, velocity}, duration,
    * blend (in), blendOut, ...path opts }
    */
@@ -560,13 +560,14 @@ export class CameraRig {
   _cinematicView(dt) {
     const o = this._override;
     o.t += dt;
+    o.out.up = null; // a path may set it (airframe-mounted shots roll with the jet)
     o.def.pose(o.t, o.state, o.ctx, o.out);
     if (o.out.cut) this.cut = true;
     const cam = this.camera;
     cam.position.copy(o.out.position);
     const ground = terrainHeight(cam.position.x, cam.position.z) + 4;
     if (cam.position.y < ground) cam.position.y = ground;
-    cam.up.copy(WORLD_UP);
+    cam.up.copy(o.out.up ?? WORLD_UP);
     cam.lookAt(o.out.target);
     if (o.out.roll) cam.rotateZ(o.out.roll);
     if (o.out.dof) this.dofOut = { ...o.out.dof };

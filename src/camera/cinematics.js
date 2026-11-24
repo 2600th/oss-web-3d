@@ -129,6 +129,55 @@ const TITLE_SHOTS = [
   },
 ];
 
+/** Model-space point (m; nose -Z, up +Y, right +X) on the focus's airframe -> world. */
+function bodyPoint(focus, p, out) {
+  axes(focus);
+  return out.copy(focus.position).addScaledVector(_r, p[0]).addScaledVector(_u, p[1]).addScaledVector(_f, -p[2]);
+}
+
+/**
+ * A camera bolted to the airframe: `offset` and `look` are model-space points,
+ * optionally drifting (m/s per axis) over the shot. The camera rolls with the
+ * jet (out.up = the airframe's up), with a little buffet so it reads as
+ * mounted, not floating. Wing-rail, over-the-shoulder, tail and nozzle shots.
+ */
+function mountPose(t, s, focus, out) {
+  const o = s.offset, d = s.drift;
+  const p = d ? [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t] : o;
+  bodyPoint(focus, p, out.position);
+  bodyPoint(focus, s.look, out.target);
+  out.up = (s.up ??= new THREE.Vector3()).copy(_u);
+  const k = s.shake ?? 0.015;
+  if (k) {
+    out.position.addScaledVector(_r, noise1(t * 9, 11) * k).addScaledVector(_u, noise1(t * 9, 12) * k);
+    out.target.addScaledVector(_u, noise1(t * 4, 13) * k * 6);
+  }
+  out.fov = s.fov ?? 55;
+  out.roll = 0;
+  if (s.dof) setDof(out, s.dof, out.position.distanceTo(focus.position), Math.max(20, out.position.distanceTo(out.target)));
+}
+
+const mountShot = (dur, opts) => ({
+  dur,
+  init(st) { Object.assign(st, opts, { up: null }); },
+  pose(tt, st, f, out) { mountPose(tt, st, f, out); },
+});
+
+/**
+ * In-flight cinematic camera (the director): cuts between shots that work
+ * whatever the jet is doing, framed live around it. The player keeps flying.
+ */
+const DIRECTOR_SHOTS = [
+  TITLE_SHOTS[0], // low tracking shot, long lens up at the jet
+  mountShot(5, { offset: [3.3, -1.15, 4.6], look: [2.1, -1.3, -60], fov: 50, shake: 0.02 }), // under the wing, behind the rail missile
+  TITLE_SHOTS[3], // long lens from far behind
+  mountShot(5, { offset: [0.55, 0.95, -0.9], look: [0, 0.3, -80], fov: 66, shake: 0.008 }), // over the pilot's shoulder
+  TITLE_SHOTS[1], // airshow pass
+  mountShot(5, { offset: [-1.6, -0.4, -6.4], look: [0, -0.6, 6], fov: 60, shake: 0.015 }), // off the nose, looking back down the fuselage
+  mountShot(5, { offset: [0, -2.4, 17], look: [0, -0.5, -40], fov: 44, shake: 0.03, dof: 0.4 }), // low behind the tail
+  TITLE_SHOTS[2], // high three-quarter orbit
+];
+
 export const CINEMATICS = {
   /** Close, slow orbit around the jet: hangar-reveal energy. */
   orbit: {
@@ -198,6 +247,44 @@ export const CINEMATICS = {
     },
   },
 
+  /**
+   * Airframe-mounted camera (see mountPose). opts: offset [x,y,z], look
+   * [x,y,z] (model space), drift [dx,dy,dz] m/s, fov, shake (m), dof (0..1),
+   * duration (Infinity: until stopped).
+   */
+  mount: {
+    duration: Infinity,
+    init: (ctx, o) => ({ offset: o.offset ?? [0, 2.4, 18], look: o.look ?? [0, 0, -40], drift: o.drift ?? null, fov: o.fov ?? 55, shake: o.shake ?? 0.015, dof: o.dof ?? 0, up: null }),
+    pose(t, s, ctx, out) { mountPose(t, s, ctx.focus, out); },
+  },
+
+  /**
+   * Cinematic camera in flight: cuts between DIRECTOR_SHOTS on their own
+   * clock until stopped (the camera system toggles it; danger ends it).
+   */
+  director: {
+    duration: Infinity,
+    init: (ctx, o) => {
+      const s = { shot: o.startShot ?? 0, t0: 0, sub: {} };
+      DIRECTOR_SHOTS[s.shot].init(s.sub, ctx.focus);
+      return s;
+    },
+    pose(t, s, ctx, out) {
+      let shot = DIRECTOR_SHOTS[s.shot];
+      out.cut = false;
+      if (t - s.t0 >= shot.dur) {
+        s.shot = (s.shot + 1) % DIRECTOR_SHOTS.length;
+        s.t0 = t;
+        s.sub = {};
+        shot = DIRECTOR_SHOTS[s.shot];
+        shot.init(s.sub, ctx.focus);
+        out.cut = true;
+      }
+      shot.pose(t - s.t0, s.sub, ctx.focus, out);
+      out.shift = 0;
+    },
+  },
+
   /** Reveal: start at the nose looking back at the pilot, swing out to the chase position. */
   reveal: {
     duration: 4.5,
@@ -254,4 +341,4 @@ export function cinematicDuration(def, state) {
   return state?.duration ?? def.duration;
 }
 
-export { TITLE_SHOTS };
+export { TITLE_SHOTS, DIRECTOR_SHOTS };

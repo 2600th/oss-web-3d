@@ -281,6 +281,21 @@ export function createSystem(game) {
     update(dt) {
       if (actionPressed('camera', 'KeyC')) rig.cycleMode();
       if (actionPressed('missileCam', 'KeyB')) rig.options.missileCam = !rig.options.missileCam;
+      // Cinematic camera: the director cuts between shots around the jet while
+      // the player flies; toggled off, or ended by a threat, a weapon, the
+      // camera key or the jet coming down.
+      if (actionPressed('cinematicCam', 'KeyH') && game.playerControl) {
+        if (rig.cinematicName === 'director') rig.stopCinematic('director');
+        else if (!dangerNow()) rig.playCinematic('director', { blendOut: 0.8 }).catch(() => {});
+      }
+      // (another override — kill cam, missile cam — can take the camera over
+      // without a stop; tell listeners the director is gone either way)
+      const directing = rig.cinematicName === 'director';
+      if (api._directing && !directing) game.events.emit('camera:cinematic', { name: 'director', state: 'end' });
+      api._directing = directing;
+      if (rig.cinematicName === 'director' && (!game.playerControl || game.flight?.crashed || input?.pressed?.fireMissile || input?.pressed?.fireGun || input?.pressed?.camera || dangerNow())) {
+        rig.stopCinematic('director');
+      }
       const pad = input?.gamepad;
       rig.lockHeld = actionHeld('lookTarget', 'KeyV') || !!pad?.buttons?.[11]?.pressed || !!api.devLock;
       rig.devLockTarget = api.devLock || null;

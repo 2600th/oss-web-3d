@@ -49,6 +49,7 @@ export const DEFAULT_BINDINGS = {
   camera:       { label: 'Camera',           keys: ['KeyC'], pad: [PAD.BACK] },
   lookTarget:   { label: 'Look at target (hold)', keys: ['KeyG'], pad: [PAD.R3] },
   missileCam:   { label: 'Missile camera on/off', keys: ['KeyB'], pad: [PAD.RIGHT] },
+  cinematicCam: { label: 'Cinematic camera on/off', keys: ['KeyH'], pad: [PAD.LEFT] },
   optic:        { label: 'Recon optic (hold)', keys: ['KeyV'], pad: [PAD.UP] },
   controlMode:  { label: 'Standard / Expert controls', keys: ['KeyM'], pad: [PAD.DOWN] },
   pause:        { label: 'Pause',            keys: ['Escape', 'KeyP'], pad: [PAD.START] },

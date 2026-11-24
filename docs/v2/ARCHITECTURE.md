@@ -1202,3 +1202,21 @@ and `tools/vfx/**`. Evidence and write-up: `docs/v2/evidence/polish-vfx/`.
   - sam uses glowFade 18; rocket uses 30.
   - The missile core glow and beacon shrink toward the motor's real size inside 600 m. minPixels still keeps them visible at range.
   - The ignition flash is 1.2–2.6 m (was 3–6 m).
+
+### Cinematic camera and frame capture (new)
+
+- **Cinematic camera (H / d-pad left):** the `director` cinematic path in `camera/cinematics.js` cuts between `DIRECTOR_SHOTS` while the player flies.
+  - The shots are: low tracking, under-wing rail camera, long lens from behind, over the shoulder, airshow pass, off the nose looking back, low behind the tail, and a high orbit.
+  - The camera system ends it on danger, on weapon fire, on the camera key, when control is lost, or when the jet crashes.
+  - `camera:cinematic {name: 'director', state}` hides the HUD canvas while it runs.
+- **`mount` path (new):** an airframe-mounted camera.
+  - `offset` and `look` are given in model space, with optional `drift`, `fov`, `shake` and `dof`.
+  - Its pose sets `out.up` to the airframe's up, so it rolls with the jet. `CameraRig._cinematicView` honours `out.up`, which is reset every frame.
+- **Frame capture (dev only):**
+  - `window.__capture` (`src/game/dev/capture.js`) steps the game at exactly 1/fps.
+  - Each frame it renders through the renderer's animation loop, snapshots the canvas in the same task, and has a worker JPEG-encode and POST it.
+  - The POST goes to the dev-server middleware `tools/capture/vite-capture.mjs`, which writes `captures/<clip>/NNNNN.jpg`; `captures/` is gitignored and not watched.
+  - Encode with `node tools/capture/encode.mjs <clip>`.
+  - `PostFX.fixedDt`, when set, replaces the wall-clock frame time, so motion blur and exposure match the footage.
+  - The tab must be visible. A background tab never presents, and snapshots taken after presentation come back stale or empty.
+- **Trailer helpers (dev only):** `window.__trailer` (`src/game/dev/trailer.js`) can start a sortie with the god-mode bot, fast-forward without rendering until a condition holds, pick the view, missile cam or kill cam, and record.

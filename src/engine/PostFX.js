@@ -714,7 +714,9 @@ export class PostFX {
 
   render() {
     const now = performance.now();
-    const dt = this._last ? Math.min(0.25, (now - this._last) / 1000) : 1 / 60;
+    // `fixedDt` (dev capture, src/game/dev/capture.js): a fixed frame time, so
+    // motion blur and exposure match the footage's 1/30 s, not the slow capture.
+    const dt = this.fixedDt ?? (this._last ? Math.min(0.25, (now - this._last) / 1000) : 1 / 60);
     this._last = now;
     this._frameNo = (this._frameNo ?? 0) + 1;
     if (this.r.tier !== this._tier) this._build();

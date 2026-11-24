@@ -12,3 +12,6 @@ assets/source/
 # Local scratch: development notes, captures and probe scripts.
 .agent/
 .superpowers/
+
+# Frames and clips written by the dev capture tool (tools/capture).
+captures/
