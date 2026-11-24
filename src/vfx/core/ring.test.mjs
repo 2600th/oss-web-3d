@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Ring, DirtyRanges, Pool, explosionRadius, plumeState, vapourAmount, vapourGates, vapourCone, speedOfSound, rankLights,
+  Ring, DirtyRanges, Pool, explosionRadius, plumeState, airState, shockCells, burnerState, burnerStep, vapourAmount, vapourGates, vapourCone, speedOfSound, rankLights,
 } from './ring.js';
 
 test('vapour gates: tip threads need some moisture, the wing sheet needs humid air', () => {
@@ -72,6 +72,84 @@ test('plume: dry thrust is short and has no diamonds; reheat is long with diamon
   assert.ok(wet.core > dry.core * 3);
   assert.ok(Math.abs(wet.length - wetN.length) < 1e-9, 'boolean reheat at full throttle equals reheat = 1');
   assert.equal(plumeState(undefined, undefined).diamonds, 0);
+});
+
+test('air: ISA pressure and density fall with altitude', () => {
+  const sl = airState(0), a5 = airState(5000), a11 = airState(11000), a15 = airState(15000);
+  assert.ok(Math.abs(sl.pressure - 1) < 1e-9 && Math.abs(sl.density - 1) < 1e-9);
+  assert.ok(Math.abs(a5.pressure - 0.533) < 0.005, `5 km pressure ${a5.pressure}`);
+  assert.ok(Math.abs(a5.density - 0.601) < 0.005, `5 km density ${a5.density}`);
+  assert.ok(Math.abs(a11.pressure - 0.2234) < 0.003);
+  assert.ok(a15.pressure < a11.pressure && a15.T === 216.65);
+  assert.equal(airState(-50).density, 1);
+});
+
+test('shock cells: about a nozzle diameter on the runway, longer fast and high', () => {
+  const ground = shockCells(0, 0), fight = shockCells(5000, 0.75), high = shockCells(10000, 1.5);
+  assert.ok(ground.npr > 1.83, 'the jet is under-expanded even standing still');
+  assert.ok(ground.spacing > 0.7 && ground.spacing < 1.2, `ground ${ground.spacing}`);
+  assert.ok(fight.spacing > ground.spacing * 1.25, `fight ${fight.spacing}`);
+  assert.ok(high.spacing > fight.spacing * 1.25 && high.spacing < 2.6, `high ${high.spacing}`);
+  // altitude alone (same Mach) spreads them: colder intake air, higher pressure ratio
+  assert.ok(shockCells(10000, 0.75).spacing > shockCells(0, 0.75).spacing * 1.15);
+  // a bigger nozzle scales the cells with it
+  assert.ok(Math.abs(shockCells(0, 0, 0.9).spacing - 2 * ground.spacing) < 1e-9);
+  for (const c of [shockCells(20000, 3), shockCells(undefined, undefined), shockCells(-100, -1)]) {
+    assert.ok(Number.isFinite(c.spacing) && c.spacing > 0);
+  }
+});
+
+test('plume: thin air makes it longer, with wider-spaced, fainter diamonds', () => {
+  const low = plumeState(1, true, 300, 0.6), high = plumeState(1, true, 9000, 0.9);
+  assert.ok(high.length > low.length * 1.2);
+  assert.ok(high.spacing > low.spacing);
+  assert.ok(high.contrast < low.contrast && high.contrast > 0.5);
+  assert.ok(high.spread > low.spread && high.spread <= 1);
+  assert.ok(low.diamonds >= 4 && low.diamonds <= 12, `cells in the flame ${low.diamonds}`);
+  // dry thrust does not care about the reheat terms
+  assert.equal(plumeState(0.8, false, 9000, 0.9).length, plumeState(0.8, false, 0, 0).length);
+});
+
+test('burner: lights with a pop that lunges and settles, collapses cleanly', () => {
+  const dt = 1 / 60;
+  const s = burnerState();
+  const dry = plumeState(0.8, false, 5000, 0.7), wet = plumeState(1, true, 5000, 0.7);
+  for (let i = 0; i < 120; i++) burnerStep(s, dry, dt);
+  assert.equal(s.pop, 0);
+  assert.equal(s.lit, false);
+  assert.ok(Math.abs(s.flameLength - dry.length) < 1e-3);
+  // light-up: flagged exactly once
+  let flags = 0, peak = 0, peakAt = 0, powerPeak = 0;
+  const at = {};
+  for (let i = 1; i <= 120; i++) {
+    burnerStep(s, wet, dt);
+    if (s.lightUp) flags++;
+    if (s.flameLength > peak) { peak = s.flameLength; peakAt = i * dt; }
+    powerPeak = Math.max(powerPeak, s.power);
+    at[i] = s.flameLength;
+  }
+  assert.equal(flags, 1);
+  assert.ok(peak > wet.length * 1.08, `the flame overshoots (${peak} vs ${wet.length})`);
+  assert.ok(peakAt > 0.05 && peakAt < 0.35, `lunge peaks at ${peakAt}s`);
+  assert.ok(at[1] < wet.length * 0.75, 'it is not there on the first frame');
+  assert.ok(Math.abs(at[42] - wet.length) < wet.length * 0.05, 'settled by 0.7 s');
+  assert.ok(powerPeak <= wet.core * 2.2);
+  assert.ok(s.pop < 1e-3 && s.lit);
+  // collapse: monotonic, most of the way down in half a second, no pop
+  let prev = s.flameLength;
+  for (let i = 0; i < 30; i++) {
+    burnerStep(s, dry, dt);
+    assert.ok(s.flameLength <= prev + 1e-9);
+    assert.equal(s.pop, 0);
+    prev = s.flameLength;
+  }
+  assert.ok(s.reheat < 0.06 && s.flameLength < dry.length + 0.5);
+  // relight pops again
+  burnerStep(s, wet, dt);
+  assert.equal(s.lightUp, true);
+  // a huge frame time does not overshoot or go NaN
+  const big = burnerStep(burnerState(), wet, 5);
+  assert.ok(Number.isFinite(big.flameLength) && big.flameLength <= wet.length * 1.55 + 1e-9);
 });
 
 test('vapour needs load or alpha, and speed', () => {

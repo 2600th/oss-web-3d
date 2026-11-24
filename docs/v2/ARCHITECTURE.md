@@ -1220,3 +1220,32 @@ and `tools/vfx/**`. Evidence and write-up: `docs/v2/evidence/polish-vfx/`.
   - `PostFX.fixedDt`, when set, replaces the wall-clock frame time, so motion blur and exposure match the footage.
   - The tab must be visible. A background tab never presents, and snapshots taken after presentation come back stale or empty.
 - **Trailer helpers (dev only):** `window.__trailer` (`src/game/dev/trailer.js`) can start a sortie with the god-mode bot, fast-forward without rendering until a condition holds, pick the view, missile cam or kill cam, and record.
+
+### Afterburner exhaust (changed)
+
+Owner paths: the engine section of `src/vfx/effects/AircraftFx.js`,
+`src/vfx/core/Shells.js`, the plume functions in `src/vfx/core/ring.js`,
+`BURNER` and `G.burner` / `G.lightUp` in `src/vfx/effects/types.js`. Evidence
+and write-up: `docs/v2/evidence/afterburner/`.
+
+- **`plumeState(throttle, reheat, altitude = 0, mach = 0, nozzleRadius = 0.45)` (changed):**
+  two more optional arguments, and the result gains `spacing` (shock-cell
+  length, m), `contrast` and `spread`. `diamonds` is now the number of cells in
+  the flame (`length / spacing`), not 3 to 5.
+- **`airState(altitude)`, `shockCells(altitude, mach, nozzleRadius)` (new):** ISA air and
+  the Prandtl-Pack cell length of the under-expanded jet.
+- **`burnerState()`, `burnerStep(state, target, dt)` (new):** per-aircraft burner
+  dynamics (light-up pop, stage-up, collapse). `AircraftFx` items hold one as
+  `item.plume`; `item.wasReheat` is gone.
+- **`Shells(shared, capacity, mode, opts = {})` (changed):**
+  - `add()` takes four more optional numbers, stored in a new instance
+    attribute `sE` (bound for `'plume'` only).
+  - Plume params are now: `q` = power, cell spacing (m), hot-metal glow, reheat;
+    `e` = rich (light-up), seed, shock contrast, spread.
+  - The plume material is premultiplied alpha, not additive.
+  - `opts.low` selects the 6-sample plume. `AircraftFx` sets it on the low tier.
+- **Removed:** the reheat halo sprite and the light-up sparks. `G.core` is only
+  spawned on dry thrust.
+- **Dev note:** the VFX camera uniforms are written in `VfxSystem.lateUpdate`.
+  Posing `game.camera` by hand while `game.paused` leaves them stale; use
+  `__vfxTest.cam()`.

@@ -68,11 +68,32 @@ export function defineTypes(lit, glow) {
     muzzle: glow.type({ drag: 2, gravity: 0, shape: 4, stretch: 0.0025, sizePow: 0.6, fadeIn: 0, fadeOut: 0.5, flicker: 0.4 }),
     // missile motor flame seen close: a stretched white-yellow tongue
     motorFlame: glow.type({ drag: 0, gravity: 0, shape: 4, stretch: 0.05, sizePow: 1, fadeIn: 0, fadeOut: 0.5, flicker: 0.35 }),
+    // a lit afterburner far off, where the flame itself is under a pixel wide
+    burner: glow.type({ drag: 0, gravity: 0, shape: 0, minPixels: 2.2, flicker: 0.3, sizePow: 1, fadeIn: 0, fadeOut: 0.5 }),
+    // reheat light-up: the soft bloom of the torch leaving the pipe
+    lightUp: glow.type({ drag: 1.5, gravity: 0, shape: 0, sizePow: 0.5, fadeIn: 0.08, fadeOut: 0.7 }),
     // lightning-lit droplets / far rain curtain
     streak: glow.type({ drag: 0, gravity: 0, shape: 1, stretch: 0.08, minPixels: 1, sizePow: 1, fadeIn: 0.2, fadeOut: 0.4 }),
   };
   return { L, G };
 }
+
+/**
+ * Afterburner numbers that are about the picture, not the engine (the engine
+ * side is plumeState / burnerStep in core/ring.js).
+ * `light` is a point-light intensity: irradiance on a surface d metres away
+ * is light / d^2, against about 4.4 for the noon sun and 0.3 for the moon
+ * here. 220 at night is the brightest thing on the tail; by day it is scaled
+ * by `lightDay`, a warm tint on the fin and tailplanes rather than a second sun
+ * (the exposure follows the scene far less than the scene darkens, so one
+ * physical value cannot serve both).
+ */
+export const BURNER = {
+  light: 220, lightDay: 0.2, lightRange: 60, flashLight: 1.6,
+  lightUpGlow: 0.7,
+  dot: 2.4, dotNear: 250, dotFar: 900,
+  dryRange: 1200,
+};
 
 /** Trail styles. `spacing` is multiplied by the tier's trail spacing factor at creation. */
 export const TRAILS = {
