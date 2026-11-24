@@ -11,16 +11,19 @@
  *   wet       droplets on the lens: rises in cloud, dries over a few seconds
  *
  * G tolerance is modelled as a stress reservoir rather than an instantaneous
- * threshold: a 9 G snap for half a second is survivable, 7 G held through a
- * full turn is not. That is what makes greyout feel earned instead of random.
+ * threshold: a 9 G snap is shrugged off and a 7 G turn can be held for a good
+ * while, but 8-9 G held through several seconds greys out. Tuned for play,
+ * not realism: a dogfight turn should not be fighting the screen (it used to
+ * start at 5.2 G and grey out a held 8 G turn in about 1.6 s).
  */
 export const SCREEN_DEFAULTS = Object.freeze({
-  gOnset: 5.2, // +G at which stress starts to accumulate
-  gRate: 0.22, // stress per second per G above onset
-  gRecover: 0.45, // stress recovery per second below onset (scaled by margin)
-  negOnset: -1.6, // -G at which redout stress builds
-  negRate: 0.5,
-  negRecover: 0.8,
+  gOnset: 6.5, // +G at which stress starts to accumulate
+  gRate: 0.12, // stress per second per G above onset
+  gRecover: 0.6, // stress recovery per second below onset (scaled by margin)
+  negOnset: -2.0, // -G at which redout stress builds
+  negRate: 0.4,
+  negRecover: 0.9,
+  greyFrom: 0.3, // stress at which the first desaturation shows
   damageDecay: 1.1, // 1/s
   smearDecay: 6.0,
   flashDecay: 5.0,
@@ -101,7 +104,7 @@ export class ScreenState {
     else this.negStress -= o.negRecover * dt;
     this.negStress = Math.min(1.1, Math.max(0, this.negStress));
 
-    this.grey = smooth(0.15, 1.0, this.gStress);
+    this.grey = smooth(o.greyFrom, 1.0, this.gStress);
     this.red = smooth(0.1, 0.9, this.negStress);
 
     this.damage = decay(this.damage, o.damageDecay, dt);

@@ -32,12 +32,26 @@ test('exposure adaptation: frame-rate independent, faster toward bright', () => 
 
 test('G-LOC: brief high G is survivable, sustained high G greys out, recovery', () => {
   const s = new ScreenState();
-  for (let i = 0; i < 30; i++) s.update(1 / 60, { gLoad: 9 }); // 0.5 s snap
-  assert.ok(s.grey < 0.25, `snap pull grey ${s.grey}`);
+  for (let i = 0; i < 60; i++) s.update(1 / 60, { gLoad: 9 }); // 1 s snap
+  assert.ok(s.grey < 0.05, `snap pull grey ${s.grey}`);
   for (let i = 0; i < 6 * 60; i++) s.update(1 / 60, { gLoad: 8 }); // 6 s sustained
   assert.ok(s.grey > 0.9, `sustained grey ${s.grey}`);
   for (let i = 0; i < 6 * 60; i++) s.update(1 / 60, { gLoad: 1 });
   assert.ok(s.grey < 0.01, `recovered ${s.grey}`);
+});
+
+test('G-LOC is relaxed for play: a held 7 G turn stays clear, recovery is quick', () => {
+  const s = new ScreenState();
+  for (let i = 0; i < 5 * 60; i++) s.update(1 / 60, { gLoad: 7 }); // 5 s dogfight turn
+  assert.ok(s.grey < 0.05, `7 G turn grey ${s.grey}`);
+  const p = new ScreenState();
+  for (let i = 0; i < 2 * 60; i++) p.update(1 / 60, { gLoad: 7.5 }); // auto pull-up off a ridge
+  assert.ok(p.grey < 0.02, `pull-up grey ${p.grey}`);
+  const t = new ScreenState();
+  for (let i = 0; i < 8 * 60; i++) t.update(1 / 60, { gLoad: 9 });
+  assert.ok(t.grey > 0.9, `held 9 G grey ${t.grey}`);
+  for (let i = 0; i < 2 * 60; i++) t.update(1 / 60, { gLoad: 1 });
+  assert.ok(t.grey < 0.1, `2 s to recover ${t.grey}`);
 });
 
 test('redout from sustained negative G', () => {

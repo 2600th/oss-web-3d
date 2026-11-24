@@ -1249,3 +1249,6 @@ and write-up: `docs/v2/evidence/afterburner/`.
 - **Dev note:** the VFX camera uniforms are written in `VfxSystem.lateUpdate`.
   Posing `game.camera` by hand while `game.paused` leaves them stale; use
   `__vfxTest.cam()`.
+
+### G greyout relaxed for play (changed)
+`src/fx/ScreenState.js` — G stress now builds from 6.5 G (was 5.2) at 0.12 per s per G (was 0.22), recovers faster (0.6/s), and the first desaturation shows at stress 0.3. A held 7 G dogfight turn and the 7.5 G terrain pull-up stay clear; full-stick 8–9 G greys out after about 3 s and clears about 2 s after release (it used to grey a held 8 G turn out in about 1.6 s). Redout starts at -2 G. Purely visual: the flight model's G limits are unchanged.
