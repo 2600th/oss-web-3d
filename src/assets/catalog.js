@@ -65,7 +65,7 @@ export const CATALOG = {
       {
         url: "models/mig21_cockpit.glb",
         triangles: 132,
-        bytes: 46320
+        bytes: 45644
       }
     ],
     scale: 1,

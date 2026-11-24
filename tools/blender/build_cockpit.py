@@ -12,8 +12,11 @@ parented to `aircraft.model` with an identity transform:
   aux_screen_*   emissive faces over the smaller displays
   periscope      canopy-top rear-view periscope fairing + mirror
 
-Positions are found by ray-casting from the eye through points picked on
-the reference renders, so they sit on the real panel geometry.
+The `hud` socket is found by ray-casting from the eye through a point picked
+on the reference render. The display faces are not picked that way any more:
+each is the rectangle of its painted glass, mapped from the cockpit atlas
+through the panel's own UVs (tools/blender/probe-cockpit-screens.mjs prints
+the SCREENS table), and laid 2 mm proud of the panel face found under it.
 
 blender -b --python tools/blender/build_cockpit.py
 node tools/blender/optimize-glb.mjs assets/authoring/build/mig21_cockpit_raw.glb public/models/mig21_cockpit.glb
@@ -71,14 +74,72 @@ cam_down = make_cam(-30)
 hud_c, hud_n, hud_obj = ray(cam_fwd, 637, 330, only={'Object_30', 'Object_9'})
 print('HUD hit', hud_obj, tuple(round(v, 3) for v in hud_c), tuple(round(v, 2) for v in hud_n))
 
+# The displays are drawn in the cockpit atlas on flat panel faces that stand
+# upright and face the pilot (normal -Y here). name: the painted glass as
+# (x0, x1, z0, z1) in aircraft model space (Blender: x right, z up; printed by
+# tools/blender/probe-cockpit-screens.mjs), texture kind, and the window of
+# the texture it shows as (u0, v0, u1, v1), v up.
+#
+# The first version built each quad from three pixels picked on the -30 deg
+# reference view (top-left, top-right, bottom-left) and ray-cast from the eye.
+# Two of those picks landed on the stick grip, which stands between the eye and the
+# panel: mfd_screen came out as a shelf lying 72 deg off the panel with its
+# lower edge 10 cm towards the pilot, and aux_screen_c as a sliver across the
+# stick's side, its rows of digits running up and back. The three that did hit
+# their panel were parallelograms (a rectangle in the view is not one on the
+# panel), so the gunsight displays leaned 10 deg and left their painted glass
+# showing along two edges.
+FULL = (0.0, 0.0, 1.0, 1.0)
+TEXT_ROWS = 6  # rows of the readout texture (upgrade-cockpit-textures.mjs, textSVG)
 SCREENS = {
-    # name: (tl, tr, bl) pixels in the -30 deg view; colour; texture kind
-    'mfd_screen': ((672, 420), (814, 420), (672, 522), 'mfd'),
-    'aux_screen_c': ((560, 490), (600, 490), (560, 538), 'text'),
-    'aux_screen_l': ((432, 290), (464, 290), (432, 334), 'text'),
-    'aux_screen_r': ((810, 290), (842, 290), (810, 334), 'text'),
-    'aux_screen_tr': ((868, 250), (922, 250), (868, 306), 'mfd'),
+    'mfd_screen': ((0.0361, 0.1663, -0.2377, -0.1113), 'mfd', FULL),
+    # a 72 mm square: the top four rows, so a digit keeps the proportions it has
+    # on the narrow gunsight displays (the readout is drawn for their shape)
+    'aux_screen_c': ((-0.0913, -0.0198, -0.2766, -0.2048), 'text', (0.0, 1 - 4 / TEXT_ROWS, 1.0, 1.0)),
+    'aux_screen_l': ((-0.1295, -0.1104, 0.0439, 0.0758), 'text', FULL),
+    'aux_screen_r': ((0.1080, 0.1270, 0.0439, 0.0758), 'text', FULL),
+    'aux_screen_tr': ((0.1749, 0.2374, -0.0071, 0.0540), 'mfd', FULL),
 }
+PROUD = 0.002  # m in front of the panel face: clear of depth fighting, no visible parallax
+# The readout glass is painted white, and the atlas is ~1 px per mm: cover its
+# soft edge. The radar glass is painted black, so those quads stop at the art.
+BLEED = {'text': 0.001, 'mfd': 0.0}
+TEXT_ASPECT = (0.0191 + 2 * BLEED['text']) / (0.0319 + 2 * BLEED['text'])  # gunsight display, w / h
+
+
+def panel_under(x0, x1, z0, z1, n=9):
+    """Depth (y) of the pilot-facing panel face behind a model-space rectangle.
+
+    Rays run along the nose axis through a grid over the rectangle and pass
+    through whatever stands in front (stick, gunsight box): the panel is the
+    nearest depth that every ray meets on a face looking straight back at the
+    pilot. Also returns how many rays met anything else within 1 cm in front
+    of it, which would poke through the display.
+    """
+    dg = bpy.context.evaluated_depsgraph_get()
+    d = Vector((0, 1, 0))
+    seen = {}
+    rays = []
+    for j in range(n):
+        for i in range(n):
+            o = Vector((x0 + (x1 - x0) * (i + 0.5) / n, EYE.y, z0 + (z1 - z0) * (j + 0.5) / n))
+            hits = []
+            for _ in range(64):
+                hit, loc, nrm, _, obj, _ = sc.ray_cast(dg, o, d)
+                if not hit or loc.y > EYE.y + 1.0:
+                    break
+                hits.append((loc.y, nrm.y))
+                o = loc + d * 1e-4
+            rays.append(hits)
+            for key in {round(y, 3) for y, ny in hits if ny < -0.99}:
+                seen[key] = seen.get(key, 0) + 1
+    full = sorted(k for k, c in seen.items() if c == n * n)
+    if not full:
+        raise SystemExit(f'no flat panel face behind ({x0}, {x1}, {z0}, {z1}): {sorted(seen.items())}')
+    key = full[0]
+    depth = sum(y for hits in rays for y, ny in hits if ny < -0.99 and round(y, 3) == key) / (n * n)
+    proud = sum(1 for hits in rays if any(depth - 0.01 < y < depth - 1e-4 for y, _ in hits))
+    return depth, proud
 
 
 def screen_image(kind, w=256, h=256):
@@ -148,28 +209,28 @@ if hud_c is not None:
     C.empty('hud', hud_c, parent=root, collection=out_coll)
 
 mats = {k: emissive_mat(f'screen_{k}', screen_image(k)) for k in ('mfd', 'text')}
-for name, (tl, tr, bl, kind) in SCREENS.items():
-    a, na, oa = ray(cam_down, *tl)
-    b, nb, ob = ray(cam_down, *tr)
-    c, nc, oc = ray(cam_down, *bl)
-    if a is None or b is None or c is None:
-        print('SCREEN MISS', name)
-        continue
-    n = ((b - a).cross(c - a)).normalized()
-    if n.dot(EYE - a) < 0:
-        n = -n
-    off = n * 0.002
-    d = b + (c - a)
+for name, ((x0, x1, z0, z1), kind, (u0, v0, u1, v1)) in SCREENS.items():
+    depth, poking = panel_under(x0, x1, z0, z1)
+    if poking:
+        raise SystemExit(f'{name}: {poking} rays meet cockpit geometry within 1 cm in front of the panel')
+    e = BLEED[kind]
+    x0, x1, z0, z1 = x0 - e, x1 + e, z0 - e, z1 + e
+    y = depth - PROUD  # the pilot sits at smaller y
     bm = bmesh.new()
-    vs = [bm.verts.new(p + off) for p in (c, d, b, a)]  # bl, br, tr, tl
-    f = bm.faces.new(vs)
+    # bottom-left, bottom-right, top-right, top-left as the pilot sees them (x = his right, z = up)
+    corners = ((x0, z0, u0, v0), (x1, z0, u1, v0), (x1, z1, u1, v1), (x0, z1, u0, v1))
+    f = bm.faces.new([bm.verts.new((x, y, z)) for x, z, _, _ in corners])
     uv = bm.loops.layers.uv.new('UVMap')
-    for loop, t in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
-        loop[uv].uv = t
-    if f.normal.dot(EYE - a) < 0:
-        f.normal_flip()
+    for loop, (_, _, u, v) in zip(f.loops, corners):
+        loop[uv].uv = (u, v)
+    bm.normal_update()
+    if f.normal.dot(EYE - f.calc_center_median()) < 0:
+        raise SystemExit(f'{name}: face winds away from the eye (the texture would read mirrored)')
     C.mesh_obj(name, bm, mats[kind], collection=out_coll, parent=root)
-    print('SCREEN', name, oa, tuple(round(v, 3) for v in a), 'size', round((b - a).length, 3), round((c - a).length, 3))
+    # how far the texture is stretched on this quad (1 = a digit keeps its drawn proportions)
+    drawn = TEXT_ASPECT if kind == 'text' else 1.0
+    stretch = ((x1 - x0) / (z1 - z0)) / (drawn * (u1 - u0) / (v1 - v0))
+    print('SCREEN', name, 'panel y', round(depth, 4), 'size mm', round((x1 - x0) * 1000, 1), round((z1 - z0) * 1000, 1), 'texture stretch', round(stretch, 3))
 
 # periscope fairing on the canopy top (canopy apex measured at y~2.75, z~0.43)
 paint = C.pbr('periscope_paint', (0.32, 0.35, 0.38), rough=0.55, metal=0.2)

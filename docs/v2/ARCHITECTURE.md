@@ -1309,3 +1309,19 @@ Owner paths: `src/camera/**`, the kill and missile parts of `src/flight/CameraRi
   - New scenarios `__camTest('killMissile', {weapon, range, off, turn})` and `__camTest('killGround', {type, weapon, shot})`.
   - `kill` takes `{angle}`. Every scenario takes `{defer: true}`, which returns `go()` for frame-exact capture.
   - `game.systems.camera.forceProjectile`, `forceKillShot` and `forceAngle` skip the rolls.
+
+### Cockpit screens (fixed)
+
+- **What:** the five emissive display faces of the first-person overlay (`public/models/mig21_cockpit.glb`: `mfd_screen`, `aux_screen_c`, `aux_screen_l`, `aux_screen_r`, `aux_screen_tr`) now lie on the painted glass of the panel in `mig21.glb`. Evidence: `docs/v2/evidence/cockpit-screens/`.
+- **Was wrong:** no face was rotated or mirrored in its UVs. The faces were built from three pixels ray-cast from the eye.
+  - `mfd_screen` and `aux_screen_c` each had a pick land on the stick grip. The first lay 72 degrees off the panel, the second ran from the panel across to the grip.
+  - The other three were parallelograms leaning about 10 degrees.
+  - The amber readout had its lines closer together than its characters and was stretched 1.55x, so on the gunsight displays the digits fused into columns and read top to bottom.
+- **Source of truth:** each face is the rectangle of its art in the cockpit atlas, mapped through the panel's UVs.
+  - `tools/blender/probe-cockpit-screens.mjs` prints the `SCREENS` table (model-space rectangles). Run it again if the cockpit atlas or `cockpit_interior` changes.
+  - `tools/blender/build_cockpit.py` finds the panel face behind each rectangle and lays the quad 2 mm proud of it. It stops if cockpit geometry comes within 1 cm in front of a face.
+  - UVs: u runs to the pilot's right, the image top is up. `aux_screen_c` shows the top four of the six readout lines.
+- **Readout texture:** `textSVG` in `tools/blender/upgrade-cockpit-textures.mjs` is drawn for the 21 x 34 mm gunsight displays (`TEXT_ASPECT` in `build_cockpit.py`) and rendered into the square 512 px texture. Keep the two in step.
+- **Rebuild:** `decode-glb.mjs` on `assets/authoring/source/mig21_source.glb`, `inspect_mig.py`, `build_cockpit.py`, `optimize-glb.mjs`, then `upgrade-cockpit-textures.mjs`. Same compression as before (meshopt, mesh quantization, WebP); 45,644 bytes.
+- **Test:** `src/assets/cockpitScreens.test.mjs` reads the shipped GLB: upright rectangles, texture upright and unmirrored, 1-3 mm off the panel face.
+- **Left alone:** the `periscope` fairing looks like a floating grey lozenge when looking straight up, and the pilot body's open collar shows at the free-look yaw limit.
