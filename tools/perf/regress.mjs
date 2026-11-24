@@ -1,14 +1,16 @@
 // Perf regression gate: compare bench.js results against a baseline set and
 // the frame budgets; exit 1 on a regression.
-//   node tools/perf/regress.mjs <dir> <newPrefix> [basePrefix=after] [tolerance=0.25]
+//   node tools/perf/regress.mjs [dir=captures/perf] [newPrefix=new] [basePrefix=after] [tolerance=0.25]
 // Files are <prefix>-<tier>-<res>.json as written by bench.js (see README).
+// Without base files, only the hard budgets are checked.
 // A row regresses when its GPU total exceeds base * (1 + tolerance) + 0.15 ms
 // (timestamps are quantised to ~0.07-0.1 ms in Chrome, so tiny totals need an
 // absolute slack), or when it breaks the hard budget below.
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [dir = 'docs/v2/evidence/polish-perf/raw', prefix = 'new', base = 'after', tolArg] = process.argv.slice(2);
+const [dir = 'captures/perf', prefix = 'new', base = 'after', tolArg] = process.argv.slice(2);
+if (!fs.existsSync(dir)) { console.error(`no results directory ${dir} (write bench.js results there first)`); process.exit(2); }
 const tol = Number(tolArg ?? 0.25);
 // Hard budgets, GPU ms on the reference machine (RTX 5090). The brief's target
 // is high <= 8 ms at 1440p; we sit near 1.3 ms, so these are set to catch a

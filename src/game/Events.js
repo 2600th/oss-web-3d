@@ -2,7 +2,7 @@
  * Tiny synchronous event bus shared by all systems (`game.events`).
  * Gameplay emits; VFX, audio, HUD and camera react. Payloads are plain objects
  * that may hold live references (e.g. a missile entity whose position keeps
- * updating until `entity.alive === false`). See docs/v2/ARCHITECTURE.md for
+ * updating until `entity.alive === false`). See docs/ARCHITECTURE.md for
  * the event catalogue.
  */
 export class Events {

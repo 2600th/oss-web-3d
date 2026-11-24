@@ -3,7 +3,7 @@ import { lonLatToWorld } from './geo.js';
 /**
  * The single seam between the UI and the gameplay flow.
  *
- * Gameplay owns `game.flow` (docs/v2/ARCHITECTURE.md): `state`, `missions`,
+ * Gameplay owns `game.flow` (docs/ARCHITECTURE.md): `state`, `missions`,
  * `startMission(id)`, `pause()`, `resume()`, `retry()`, `quitToMenu()`, and it
  * emits `ui:screen`, `mission:complete` / `mission:failed`. Until that exists —
  * or when it is missing a method — this adapter supplies a thin local flow so

@@ -95,7 +95,7 @@ class VfxSystem {
     this.lights = new Lights(game.scene, cfg.lights);
     this.heatField = new Heat(shared);
     this.bolts = new Bolts(shared);
-    // ground blast marks for the terrain material to sample (see ARCHITECTURE)
+    // ground blast marks for the terrain material to sample (Terrain.setScorches; docs/ARCHITECTURE.md)
     this.scorches = new ScorchRing(32);
     const { L, G } = defineTypes(this.lit, this.glow);
     this.L = L; this.G = G;

@@ -36,8 +36,7 @@ import { riverSurface, riverReflection } from '../water/river.js';
 // Palette values are linear albedo.
 //
 // [textures] Re-graded against photos of the sector (Drass/Tololing, the
-// Kargil-Leh road, Kargil town, the Shingo/Indus gorges; see
-// docs/v2/evidence/polish-textures/README.md): slopes are grey-khaki to
+// Kargil-Leh road, Kargil town, the Shingo/Indus gorges): slopes are grey-khaki to
 // reddish-brown, rock is dark grey-brown (the old lavender `rockPurple` read
 // as purple patches under the blue aerial perspective), and the lit ground
 // is darker and more varied than the old pale tan.

@@ -4,7 +4,7 @@ import { lonLatToWorld } from './geo.js';
 
 /**
  * DEV ONLY: a busy dogfight written into `game.hud` and onto the event bus in
- * exactly the contract shapes (docs/v2/ARCHITECTURE.md), so the HUD can be
+ * exactly the contract shapes (docs/ARCHITECTURE.md), so the HUD can be
  * built, tuned and screenshotted before gameplay lands.
  *
  *   ?hudmock=1      dogfight wherever the jet is

@@ -4,8 +4,7 @@
  *   node tools/hud/hud-contrast.mjs <screenshot.png> <capture.json> [--json out.json]
  *
  * `screenshot.png` is the composited page (scene + HUD) at DPR 1;
- * `capture.json` is what the in-page helper (docs/v2/evidence/hud-legibility/
- * README.md) returns for the same frozen frame: the HUD canvas as a PNG data
+ * `capture.json` is what the in-page helper (tools/hud/hud-capture.js) returns for the same frozen frame: the HUD canvas as a PNG data
  * URL plus named regions {name, x0, y0, x1, y1} in CSS px.
  *
  * Per region: ink pixels are those the HUD canvas paints opaque (alpha > 0.5)

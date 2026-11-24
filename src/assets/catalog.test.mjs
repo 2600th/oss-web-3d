@@ -21,12 +21,12 @@ function glbNodeNames(file) {
 const PLANNED = ['mig21', 'mig21_hostile', 'aam_ir', 'sam', 'rocket', 'bomb', 'flare', 'sam_launcher', 'aaa_gun', 'radar',
   'truck', 'bunker', 'tent', 'supply_dump', 'helipad'];
 
-// LOD0 triangle budgets per kind (docs/v2/evidence/assets/README.md)
+// LOD0 triangle budgets per kind
 const BUDGET = { missile: 2000, rocket: 2000, bomb: 2000, flare: 500, pod: 3000, aaa: 8000, sam_site: 8000, radar: 8000,
   vehicle: 12000, artillery: 8000, helicopter: 8000, camp: 8000, position: 10000, base: 10000, cockpit: 40000, aircraft: 250000,
   pilot: 18000 };
 
-test('every planned id from ARCHITECTURE.md exists', () => {
+test('every planned asset id exists', () => {
   for (const id of PLANNED) assert.ok(CATALOG[id], `missing ${id}`);
 });
 

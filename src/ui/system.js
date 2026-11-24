@@ -1,7 +1,7 @@
 import { UI } from './UI.js';
 
 /**
- * UI + HUD system (auto-registered by src/main.js; see docs/v2/ARCHITECTURE.md).
+ * UI + HUD system (auto-registered by src/main.js; see docs/ARCHITECTURE.md).
  * Order 90: runs after gameplay has written `game.hud` and after the camera
  * rig has moved, so projected HUD symbology lands on the frame being drawn.
  */

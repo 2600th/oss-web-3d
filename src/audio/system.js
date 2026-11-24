@@ -9,7 +9,7 @@ import { closestApproach, missileUrgency } from './physics.js';
 
 /**
  * Audio system (order 80): owns the Web Audio graph and reacts to the
- * `game.events` contract (docs/v2/ARCHITECTURE.md). Public API on
+ * `game.events` contract (docs/ARCHITECTURE.md). Public API on
  * `game.systems.audio`:
  *
  *   setVolume(bus, v) / getVolume(bus)   bus: master|music|sfx|radio|ui|ambience, v 0..1 (persisted)

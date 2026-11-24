@@ -1,5 +1,5 @@
 /**
- * Art-assets runtime (auto-registered, see docs/v2/ARCHITECTURE.md "Systems").
+ * Art-assets runtime (auto-registered, see docs/ARCHITECTURE.md "Systems").
  *
  *  - Hands loadModel the quality tier and the Environment, so every model it
  *    returns gets the node-material recipes in ./materials.js (painted metal and

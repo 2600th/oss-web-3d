@@ -7,7 +7,7 @@
  * which is far below what a game sky can show. Positions are geometric: no
  * refraction (the atmosphere model does not bend rays either).
  *
- * World frame (docs/v2/ARCHITECTURE.md): +X east, +Y up, +Z south.
+ * World frame (docs/ARCHITECTURE.md): +X east, +Y up, +Z south.
  */
 
 const D2R = Math.PI / 180;

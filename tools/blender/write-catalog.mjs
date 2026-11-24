@@ -39,8 +39,7 @@ async function glbStats(url) {
 
 // ---------------------------------------------------------------- MiG-21 family
 // Sockets in aircraft model space (three: +X right, +Y up, nose -Z), matching
-// src/flight/Aircraft.js except `eye`, which is the measured pilot eye point
-// (docs/v2/evidence/assets/cockpit/README.md).
+// src/flight/Aircraft.js except `eye`, which is the measured pilot eye point.
 const MIG_SOCKETS = {
   eye: [0, 0.22, -2.95],
   hud: [0, 0.212, -3.364],

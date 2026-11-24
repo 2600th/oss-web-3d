@@ -1,7 +1,7 @@
 """mig21_cockpit.glb - first-person overlay for the player MiG-21.
 
 The War Thunder-derived mig21.glb already has a full cockpit (tub, panel,
-gunsight combiner, seat, canopy arch; see docs/v2/evidence/assets/cockpit/).
+gunsight combiner, seat, canopy arch).
 This overlay adds what it lacks for a first-person camera, in the same model
 space Aircraft.js presents (metres, nose -Z, origin = bbox centre), so it is
 parented to `aircraft.model` with an identity transform:
@@ -264,6 +264,6 @@ C.setup_render(res=RES, samples=24)
 C.sky_world(strength=1.2)
 C.sun(direction=(-0.3, 0.5, -0.8), energy=4.5)
 sc.camera = cam_down
-C.render(os.path.join(C.ROOT, 'docs', 'v2', 'evidence', 'assets', 'cockpit', 'overlay_eye_down_panel.png'))
+C.render(os.path.join(C.ROOT, 'captures', 'build_cockpit', 'overlay_eye_down_panel.png'))
 sc.camera = cam_fwd
-C.render(os.path.join(C.ROOT, 'docs', 'v2', 'evidence', 'assets', 'cockpit', 'overlay_eye_forward.png'))
+C.render(os.path.join(C.ROOT, 'captures', 'build_cockpit', 'overlay_eye_forward.png'))

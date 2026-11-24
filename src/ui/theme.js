@@ -86,7 +86,7 @@ export function resolveTheme(settings = {}) {
 /**
  * Halo strength for daylight, keyed by `k` in 0..1 (0 = night: exactly the
  * look above; 1 = full daylight). Measured over sunlit snow, white cumulus
- * and the burner glow (docs/v2/evidence/hud-legibility): the 0.68 glyph halo
+ * and the burner glow: the 0.68 glyph halo
  * left 10-11 px numerals at ~1.5:1 against their surround and the 0.74 `dim`
  * ink read as grey. In daylight the tight halo goes near-opaque and a touch
  * wider, a soft wide halo (low alpha) darkens the surround without a hard

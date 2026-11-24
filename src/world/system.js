@@ -1,6 +1,6 @@
 /**
  * Atmosphere + clouds system. Auto-registered by main.js (see
- * docs/v2/ARCHITECTURE.md, "Systems"); order 10 = world/atmosphere.
+ * docs/ARCHITECTURE.md, "Systems"); order 10 = world/atmosphere.
  *
  * The Environment itself is owned and updated by Game; this system only plugs
  * its screen-space stages into PostFX, calibrates PostFX's exposure reference

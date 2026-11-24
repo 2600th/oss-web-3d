@@ -144,7 +144,7 @@ export class Aircraft {
     this.sockets.wingtipL.position.set(-3.64, -0.777, 2.74);
     this.sockets.wingtipR.position.set(3.64, -0.777, 2.74);
     this.sockets.gun.position.set(GUN_MUZZLE.x, GUN_MUZZLE.y, GUN_MUZZLE.z);
-    this.sockets.cockpit.position.set(0, 0.22, -2.95); // measured pilot eye (docs/v2/evidence/assets/cockpit)
+    this.sockets.cockpit.position.set(0, 0.22, -2.95); // measured pilot eye
     this.loaded = true;
     return this;
   }

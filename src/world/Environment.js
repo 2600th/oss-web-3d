@@ -10,7 +10,7 @@ import { SHADOW_LAYER } from './terrain/Terrain.js'; // [shadows]
 /**
  * Sky, sun, ambient, aerial perspective and volumetric clouds.
  *
- * Public surface (see docs/v2/ARCHITECTURE.md):
+ * Public surface:
  *   sunDirection         THREE.Vector3, unit, world, toward the sun
  *   sun                  DirectionalLight; colour/intensity from atmospheric transmittance
  *   ambient              HemisphereLight fill (most ambient comes from scene.environment)

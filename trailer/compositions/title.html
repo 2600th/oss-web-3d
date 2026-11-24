@@ -1,0 +1,26 @@
+<template>
+  <style>
+      @font-face { font-family: 'Big Shoulders Display'; font-weight: 800; src: url('assets/fonts/big-shoulders-display-latin-800-normal.woff2') format('woff2'); }
+      @font-face { font-family: 'B612 Mono'; font-weight: 400; src: url('assets/fonts/b612-mono-latin-400-normal.woff2') format('woff2'); }
+      @font-face { font-family: 'B612'; font-weight: 700; src: url('assets/fonts/b612-latin-700-normal.woff2') format('woff2'); }
+    #root { position: absolute; inset: 0; }
+    #t-wrap { position: absolute; left: 0; right: 0; top: 330px; text-align: center; }
+    #t-word { display: inline-block; font-family: 'Big Shoulders Display'; font-weight: 800; font-size: 210px; line-height: 1; letter-spacing: 0.02em; color: #F2F4F5; text-transform: uppercase; text-shadow: 0 6px 40px rgba(0,0,0,0.45); }
+    #t-sub { margin-top: 26px; font-family: 'B612 Mono'; font-size: 40px; letter-spacing: 0.32em; color: #F2F4F5; }
+    #t-sub span { display: inline-block; opacity: 0; }
+  </style>
+  <div id="root" data-composition-id="title" data-width="1920" data-height="1080">
+    <div id="t-wrap">
+      <div id="t-word">SAFED SAGAR</div>
+      <div id="t-sub"><span>KARGIL</span> <span>HEIGHTS</span> <span>·</span> <span>1999</span></div>
+    </div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo('#t-word', { clipPath: 'inset(0% 100% 0% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 0.3333, ease: 'power3.out' }, 0);
+    tl.fromTo('#t-sub span', { opacity: 0, filter: 'blur(4px)' }, { opacity: 0.92, filter: 'blur(0px)', duration: 0.16, stagger: 0.09, ease: 'power2.out' }, 0.94);
+    tl.to('#t-wrap', { opacity: 0, filter: 'blur(8px)', duration: 0.2, ease: 'power3.in' }, 3.5333);
+    window.__timelines['title'] = tl;
+  </script>
+</template>

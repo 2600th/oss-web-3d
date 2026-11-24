@@ -1,7 +1,7 @@
 """Objective checks on the *shipped* (encoded) audio: decode every file in
 public/audio, measure integrated loudness (BS.1770-4), sample/true peak, RMS,
 clipping, loop-seam continuity and spectral centroid, then draw waveform +
-spectrogram contact sheets into docs/v2/evidence/audio/.
+spectrogram contact sheets into captures/audio-analyze/ (gitignored).
 
     python tools/audio/analyze.py
 """
@@ -16,7 +16,7 @@ from dsp import SR, decode, lufs, true_peak_db, peak_db, rms_db, mono  # noqa: E
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 PUB = os.path.join(ROOT, 'public', 'audio')
-EVID = os.path.join(ROOT, 'docs', 'v2', 'evidence', 'audio')
+EVID = os.path.join(ROOT, 'captures', 'audio-analyze')
 
 
 def seam(x, loop_start, loop_end):

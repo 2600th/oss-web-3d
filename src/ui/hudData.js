@@ -1,5 +1,5 @@
 /**
- * Normalise the `game.hud` snapshot (docs/v2/ARCHITECTURE.md) into a shape
+ * Normalise the `game.hud` snapshot (docs/ARCHITECTURE.md) into a shape
  * the renderer can trust, filling gaps from the flight model.
  *
  * Gameplay writes `game.hud` in update(); every field is optional. Attitude

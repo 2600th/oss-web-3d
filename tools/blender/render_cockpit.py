@@ -14,14 +14,14 @@ from mathutils import Vector
 sys.path.insert(0, os.path.dirname(__file__))
 import common as C
 
-out = (C.argv() or [os.path.join(C.ROOT, 'docs', 'v2', 'evidence', 'assets', 'cockpit')])[0]
+out = (C.argv() or [os.path.join(C.ROOT, 'captures', 'render_cockpit')])[0]
 bpy.ops.wm.open_mainfile(filepath=os.path.join(C.BUILD, 'mig21_normalised.blend'))
 C.setup_render(res=(1280, 720), samples=24)
 C.sky_world(strength=1.2)
 C.sun(direction=(-0.3, 0.5, -0.8), energy=4.5)
 
 # Eye points (blender coords). The Aircraft.js socket is (0, 0.95, -3.1) three
-# = (0, 3.1, 0.95) here; the measured pilot eye (see README) is lower and aft.
+# = (0, 3.1, 0.95) here; the measured pilot eye (Aircraft.js sockets.cockpit) is lower and aft.
 SOCKET = Vector((0, 3.1, 0.95))
 EYE = Vector((0, float(os.environ.get('EYE_Y', 2.95)), float(os.environ.get('EYE_Z', 0.22))))
 

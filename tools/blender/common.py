@@ -1,6 +1,6 @@
 """Shared helpers for the Safed Sagar Blender asset scripts.
 
-Conventions (see docs/v2/ARCHITECTURE.md):
+Conventions (see docs/ARCHITECTURE.md):
   * metres, +Y up, forward (nose / muzzle / vehicle front) = -Z in glTF/three.
   * Blender is Z-up; the glTF exporter maps Blender (x, y, z) -> glTF (x, z, -y).
     So in Blender we model with FRONT = +Y, UP = +Z, RIGHT = +X.

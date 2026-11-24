@@ -2,8 +2,7 @@
 
 Perf, load and lifecycle tooling. The browser scripts are run with the
 chrome-devtools MCP (`evaluate_script({ sourcePath })`), or pasted into a
-DevTools snippet. Results and the latest numbers are in
-`docs/v2/evidence/polish-perf/README.md`.
+DevTools snippet. Write result files to `captures/perf/` (gitignored).
 
 ## Rules for measuring in a shared browser
 
@@ -41,11 +40,11 @@ DevTools snippet. Results and the latest numbers are in
 |---|---|
 | `bench.js` | GPU benchmark, busy-combat scenario at a fixed pose. Per-category and top-pass GPU ms, flush wall time, draws, CPU. Open `?mission=free&gputime&quality=X`, set the viewport (`emulate 2560x1440x1`), run with `filePath` = `<dir>/<prefix>-<tier>-<res>.json` |
 | `summarize.mjs` | `node tools/perf/summarize.mjs <dir> <prefix>`: markdown table of bench results |
-| `regress.mjs` | `node tools/perf/regress.mjs <dir> <new> [base=after] [tol=0.25]`: fails (exit 1) if a tier/res grew beyond tolerance or broke its hard budget |
+| `regress.mjs` | `node tools/perf/regress.mjs [dir=captures/perf] [new] [base=after] [tol=0.25]`: fails (exit 1) if a tier/res grew beyond tolerance or broke its hard budget |
 | `ab.js` | A/B cost of one scene component at a time (hide, measure, restore) from the GPU total. Use for things inside the main scene pass, and on WebGL2 |
 | `imgdiff.mjs` | pixel diff of two screenshots, to show a perf change is invisible |
 | `sortie.js` | flies a full mission with the dev bot (invulnerable) plus assisted kills, until the debrief. Used for the WebGL2 runs. The dev bot alone loops `weapon:switch` and never finishes a strike phase |
-| `balance.js` + `balance-table.mjs` | difficulty measurement: batches of real bot sorties (`dev.run`, damage on, headless stepping) with per-run telemetry (kills by time, health by phase, minimum health, top-ups, first night contact, escaped trucks); the table script prints win rate, time, damage, failures and phase timing. Used for `docs/v2/evidence/polish-balance/` |
+| `balance.js` + `balance-table.mjs` | difficulty measurement: batches of real bot sorties (`dev.run`, damage on, headless stepping) with per-run telemetry (kills by time, health by phase, minimum health, top-ups, first night contact, escaped trucks); the table script prints win rate, time, damage, failures and phase timing |
 | `cycles.js` | N x (sortie, debrief, retry) then quit to menu. Records heap, `renderer.info.memory`, scene size, listeners and VFX counts per step in `window.__cycleRows` |
 | `heapsummary.mjs`, `heapbuffers.mjs` | `.heapsnapshot` analysis: largest groups; largest ArrayBuffers with retainer chains (`DEPTH=` env) |
 | `loadprobe.js` + `loadreport.js` | cold-load milestones and bytes by type. Pass the probe as `navigate_page({ initScript })`, then run the report. Boot stage marks are in `window.__boot` |
@@ -53,12 +52,14 @@ DevTools snippet. Results and the latest numbers are in
 ## Regression check
 
 ```
+mkdir -p captures/perf
 # in a fresh isolated tab, brought to front, dev server on 5193
 for tier in low medium high ultra, res in 1920x1080 2560x1440:
   navigate ?mission=free&gputime&quality=<tier>; emulate <res>x1
-  evaluate_script(sourcePath=tools/perf/bench.js, filePath=<dir>/new-<tier>-<1080|1440>.json)
-node tools/perf/regress.mjs <dir> new after
+  evaluate_script(sourcePath=tools/perf/bench.js, filePath=captures/perf/new-<tier>-<1080|1440>.json)
+node tools/perf/regress.mjs captures/perf new after
 ```
 
-Copy the baseline `docs/v2/evidence/polish-perf/raw/after-*.json` into
-`<dir>` first, or point `<dir>` at that folder.
+There is no checked-in baseline. Run the same loop on the commit you compare
+against first, with prefix `after` instead of `new`. Without base files the
+script still checks the hard budgets in `regress.mjs`.

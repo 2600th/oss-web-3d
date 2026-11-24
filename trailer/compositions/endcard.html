@@ -1,0 +1,31 @@
+<template>
+  <style>
+      @font-face { font-family: 'Big Shoulders Display'; font-weight: 800; src: url('assets/fonts/big-shoulders-display-latin-800-normal.woff2') format('woff2'); }
+      @font-face { font-family: 'B612 Mono'; font-weight: 400; src: url('assets/fonts/b612-mono-latin-400-normal.woff2') format('woff2'); }
+      @font-face { font-family: 'B612'; font-weight: 700; src: url('assets/fonts/b612-latin-700-normal.woff2') format('woff2'); }
+    #root { position: absolute; inset: 0; background: #000; }
+    #e-wrap { position: absolute; left: 0; right: 0; top: 352px; text-align: center; }
+    #e-word { display: inline-block; font-family: 'Big Shoulders Display'; font-weight: 800; font-size: 190px; line-height: 1; letter-spacing: 0.02em; color: #F2F4F5; }
+    #e-rule { width: 560px; height: 5px; margin: 30px auto 0; background: #FF9933; transform-origin: 0 50%; }
+    #e-cta { margin-top: 40px; font-family: 'B612 Mono'; font-size: 40px; color: #F2F4F5; }
+    #e-cta span { display: inline-block; opacity: 0; }
+    #e-credit { opacity: 0; position: absolute; left: 0; right: 0; top: 880px; text-align: center; font-family: 'B612 Mono'; font-size: 24px; line-height: 34px; color: rgba(242,244,245,0.55); }
+  </style>
+  <div id="root" data-composition-id="endcard" data-width="1920" data-height="1080">
+    <div id="e-wrap">
+      <div id="e-word">SAFED SAGAR</div>
+      <div id="e-rule"></div>
+      <div id="e-cta"><span>Play</span> <span>free</span> <span>in</span> <span>your</span> <span>browser</span></div>
+    </div>
+    <div id="e-credit" data-layout-ignore>Music: "Noir Now" by Drakensson (CC0) · Thunder: "Thunder Clap 1" by jzielke011 (CC BY 4.0)<br />All footage captured in game.</div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo('#e-word', { clipPath: 'inset(0% 100% 0% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 0.42, ease: 'power3.out' }, 0.68);
+    tl.fromTo('#e-rule', { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: 'expo.out' }, 1.05);
+    tl.fromTo('#e-cta span', { opacity: 0 }, { opacity: 1, duration: 0.18, stagger: 0.085, ease: 'power2.out' }, 2.04);
+    tl.fromTo('#e-credit', { opacity: 0 }, { opacity: 1, duration: 0.4, ease: 'power2.out' }, 2.7);
+    window.__timelines['endcard'] = tl;
+  </script>
+</template>

@@ -15,3 +15,19 @@ assets/source/
 
 # Frames and clips written by the dev capture tool (tools/capture).
 captures/
+
+# Python and Blender leftovers.
+__pycache__/
+*.pyc
+*.blend1
+
+# Trailer (HyperFrames project in trailer/): sources are tracked, heavy media
+# is not. Footage comes from tools/capture; renders from `npx hyperframes render`.
+trailer/.hyperframes/
+trailer/.media/
+trailer/renders/
+trailer/assets/footage/
+trailer/assets/music/
+trailer/assets/music-candidates/
+trailer/assets/voice/raw/
+trailer/share/

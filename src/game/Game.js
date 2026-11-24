@@ -44,7 +44,7 @@ export class Game {
     this.timeScale = 1;
     this.paused = false;
     this.events = new Events();
-    /** Per-frame snapshot for the HUD; shape documented in docs/v2/ARCHITECTURE.md. */
+    /** Per-frame snapshot for the HUD; shape documented in docs/ARCHITECTURE.md. */
     this.hud = {};
     this.systems = {};
     this._systemList = [];
