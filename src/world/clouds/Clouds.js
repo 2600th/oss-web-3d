@@ -932,10 +932,16 @@ export class Clouds {
       const bStale = max(u.blendStale, u.blendBoost.mul(0.6));
       const freshOut = mix(clamped, cur, select(valid, bFresh, float(1)));
       const staleOut = select(valid, mix(clamped, curLin, bStale), curLin);
-      colorOut.assign(select(fresh, freshOut, staleOut));
+      const out = select(fresh, freshOut, staleOut).toVar();
+      colorOut.assign(out);
       const frontNew = select(fresh, curAux.r, select(valid, mix(histAux.r, curAux.r, 0.1), curAux.r));
       const limit = select(fresh, curAux.g, select(valid, histAux.g, curAux.g));
-      auxOut.assign(vec4(frontNew, limit, curAux.b, 1));
+      // [night clouds] aux.b (opacity) scales the night stage's moonlit haze
+      // over each cloud. It was this frame's raw sparse sample: on a distant
+      // rim that flips between hit and miss every frame, block by block, so
+      // the haze over every far cloud edge flickered at night. Use the
+      // temporally resolved transmittance instead, like the colour.
+      auxOut.assign(vec4(frontNew, limit, saturate(float(1).sub(out.a)), 1));
       return vec4(0);
     });
     return { fn, output: outputStruct(colorOut, auxOut) };
