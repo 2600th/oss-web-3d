@@ -1,8 +1,9 @@
 import * as THREE from 'three/webgpu';
 import { Shells } from '../core/Shells.js';
 import { GUN_MUZZLE } from '../core/sockets.js';
-import { plumeState, vapourAmount, vapourGates, contrailAmount, vapourCone, speedOfSound, saturate, smoothstep, lerp } from '../core/ring.js';
+import { plumeState, burnerState, burnerStep, vapourAmount, vapourGates, contrailAmount, vapourCone, speedOfSound, saturate, smoothstep, lerp } from '../core/ring.js';
 import { rnd, randDir, readPose, makePose, isAlive } from './util.js';
+import { BURNER } from './types.js';
 import { sizeForRate } from '../core/fxmath.js';
 
 const _d = new THREE.Vector3();
@@ -49,7 +50,8 @@ export class AircraftFx {
     this.vfx = vfx;
     const game = vfx.game;
     this.items = new Map();
-    this.plumes = new Shells(vfx.shared, 24, 'plume');
+    // low tier: half the ray-march samples, one noise tap
+    this.plumes = new Shells(vfx.shared, 24, 'plume', { low: game.r?.tier?.name === 'low' });
     this.rings = new Shells(vfx.shared, 24, 'ring');
     this.cones = new Shells(vfx.shared, 12, 'vapour');
     this.plumes.mesh.renderOrder = 2;
@@ -86,9 +88,9 @@ export class AircraftFx {
     if (entity !== this.player && this._isPlayer(entity)) return this.items.get(this.player);
     if (this.items.has(entity)) return this.items.get(entity);
     const item = {
-      entity, pose: makePose(), plume: plumeState(0.7, false), vortexL: null, vortexR: null, contrail: null,
+      entity, pose: makePose(), plume: burnerState(), vortexL: null, vortexR: null, contrail: null,
       sheetL: null, sheetR: null, exhaust: null,
-      firing: false, g: 1, wasReheat: 0, seed: Math.random(),
+      firing: false, g: 1, seed: Math.random(),
     };
     this.items.set(entity, item);
     return item;
@@ -142,6 +144,9 @@ export class AircraftFx {
     this.plumes.begin();
     this.rings.begin();
     this.cones.begin();
+    // how much the sun outshines a flame's light on the airframe (0 night .. 1 noon)
+    const sun = v.shared.u.sunColor.value;
+    const daylight = smoothstep(0.3, 3, 0.3 * sun.r + 0.59 * sun.g + 0.11 * sun.b);
     for (const [entity, item] of this.items) {
       if (entity !== this.player && !isAlive(entity)) { this.remove(entity); continue; }
       if (!readPose(entity, item.pose, dt)) continue;
@@ -158,44 +163,67 @@ export class AircraftFx {
 
       // ---- engine: plume, glow, light, haze ----
       const eng = entity.engine ?? { throttle: 0.8, reheat: false };
-      const target = plumeState(eng.throttle, eng.reheat);
-      const k = 1 - Math.exp(-9 * dt);
-      const pl = item.plume;
-      for (const key of ['length', 'diamonds', 'core', 'glow', 'reheat']) pl[key] = lerp(pl[key], target[key], k);
+      const mach = speed / speedOfSound(pos.y);
+      const R = entity.nozzleRadius ?? MIG21.nozzleRadius;
+      // The burner keeps its own clock (light-up pop, collapse) whether or
+      // not anyone is near enough to see it.
+      const pl = burnerStep(item.plume, plumeState(eng.throttle, eng.reheat, pos.y, mach, R), dt);
       _p.copy(socket(entity, 'nozzle')).applyQuaternion(q).add(pos);
       if (near) {
-        // The exhaust is three things, all sized from the nozzle (0.44 m
-        // radius on the MiG-21) and all scaled by engine state:
-        //  - the nozzle ring: hot petals, dull red on dry thrust, bright in reheat
-        //  - the plume: nothing to speak of dry; in reheat a short flame with
-        //    shock diamonds (plumeState: about 8 m at full burner)
-        //  - a small core glow up the pipe, plus a point of light that keeps
-        //    a lit burner readable at range.
-        const R = entity.nozzleRadius ?? MIG21.nozzleRadius;
-        const flick = 0.92 + 0.08 * Math.sin(v.shared.time * 47 + item.seed * 9);
-        // one volumetric plume (chord-integrated: brightest seen end-on)
-        if (pl.core > 0.03) this.plumes.add(_p, _back, pl.length * flick, R, pl.core, pl.diamonds, pl.glow, pl.reheat);
+        // The exhaust, all sized from the nozzle (0.45 m radius on the
+        // MiG-21) and all driven by the burner state:
+        //  - the plume volume: nothing to speak of dry; in reheat a
+        //    turbulent flame with shock diamonds, and behind it, up the pipe,
+        //    the flameholder (Shells 'plume')
+        //  - the nozzle ring: the hot flaps, dull red dry, bright in reheat
+        //  - light: on the tail and whatever is close, a flash at light-up
+        //  - a dot that keeps a lit burner readable when the flame itself
+        //    is a pixel wide.
+        // Slow breathing of the whole flame on top of the turbulence the
+        // shader scrolls down it: two incommensurate rates, so it never
+        // reads as a pulse.
+        const t = v.shared.time, ph = item.seed * 40;
+        const breathe = 1 + 0.035 * Math.sin(t * 23 + ph) + 0.025 * Math.sin(t * 37.7 + ph * 1.7);
+        const hot = pl.reheat > 0.01;
+        // Dry, the volume is only worth drawing close in (the flameholder
+        // glow up the pipe and a stub of faint flame).
+        if (hot || dist < BURNER.dryRange) {
+          this.plumes.add(_p, _back, pl.flameLength * breathe, R, pl.power, pl.spacing, pl.glow, pl.reheat,
+            pl.pop, item.seed * 7, pl.contrast, pl.spread);
+        }
         // (the anchor is the exit plane: the band lines the last of the pipe)
         _p2.copy(_p).addScaledVector(_back, -0.36);
         this.rings.add(_p2, _back, 0.36, R * 0.9, 1, 0, pl.glow, 0);
         const life = Math.max(dt * 2.5, 0.04);
-        // the flameholder up the pipe: dull orange dry, bright orange-yellow in reheat
-        glow.spawn(G.core, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, R * 1.4, R * 1.4, 1, 0.5 + 0.2 * pl.reheat, 0.18 + 0.12 * pl.reheat, 1, 0.04 + pl.glow * 0.3 + pl.reheat * 1.1);
-        if (pl.reheat > 0.05) {
-          glow.spawn(G.halo, _p.x + _back.x * 1.5, _p.y + _back.y * 1.5, _p.z + _back.z * 1.5, vel.x, vel.y, vel.z, life, 3.4, 3.4, 1, 0.5, 0.2, 1, 0.05 * pl.reheat);
-          v.lights.request(_p.x + _back.x * 2.5, _p.y + _back.y * 2.5, _p.z + _back.z * 2.5, 1, 0.6, 0.3, 1100 * pl.reheat, 70);
-        }
-        if (dist < 500) v.heat(_p, _p2.copy(_p).addScaledVector(_back, 4 + pl.length * 1.6), 1.0, 0.35 + 0.65 * pl.glow);
-        // reheat lighting: a short pop of flame
-        if (target.reheat > 0 && item.wasReheat === 0) {
-          glow.spawn(G.flash, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, 0.12, 1.5, 3.5, 1, 0.7, 0.35, 1, 4);
-          for (let i = 0; i < 6; i++) {
-            randDir(_d);
-            glow.spawn(G.spark, _p.x, _p.y, _p.z, vel.x + _back.x * 60 + _d.x * 12, vel.y + _back.y * 60 + _d.y * 12, vel.z + _back.z * 60 + _d.z * 12, rnd(0.2, 0.5), 0.1, 0.02, 1, 0.7, 0.3, 1, 8);
+        // the turbine glow up the pipe on dry thrust (the flame takes over in reheat)
+        const dryCore = (0.04 + pl.glow * 0.3) * (1 - saturate(pl.reheat * 3));
+        if (dryCore > 0.01) glow.spawn(G.core, _p.x, _p.y, _p.z, vel.x, vel.y, vel.z, life, R * 1.4, R * 1.4, 1, 0.5, 0.18, 1, dryCore);
+        if (hot) {
+          // Far off the flame is thinner than a pixel: a dot with a pixel
+          // floor carries it, and is absent close in where it would be a
+          // halo over the real thing.
+          const far = smoothstep(BURNER.dotNear, BURNER.dotFar, dist);
+          if (far > 0.01) {
+            glow.spawn(G.burner, _p.x + _back.x * 2, _p.y + _back.y * 2, _p.z + _back.z * 2, vel.x, vel.y, vel.z, life,
+              R * 1.6, R * 1.6, 1, 0.62, 0.3, 1, BURNER.dot * far * pl.reheat * (1 + pl.pop));
           }
+          // The flame as a light: mid-plume, so the fin, the tailplane
+          // undersides and the ground under a low pass catch it.
+          const lightK = pl.reheat * (1 + BURNER.flashLight * pl.pop) * (0.9 + 0.1 * breathe) * lerp(1, BURNER.lightDay, daylight);
+          v.lights.request(_p.x + _back.x * 2.2, _p.y + _back.y * 2.2, _p.z + _back.z * 2.2, 1, 0.62, 0.3, BURNER.light * lightK, BURNER.lightRange);
+        }
+        if (dist < 500) {
+          // shimmer: the hot jet stays hot far past the visible flame
+          v.heat(_p, _p2.copy(_p).addScaledVector(_back, 5 + pl.length * (1.6 + 1.2 * pl.reheat)), 1.0 + 0.25 * pl.reheat, 0.35 + 0.65 * Math.min(1, pl.glow));
+        }
+        // Light-up: the flame's own lunge is the event (burnerStep's pop).
+        // Here only the soft bloom of the torch leaving the pipe, moving
+        // with the jet and gone in a tenth of a second.
+        if (pl.lightUp && dist < 3000) {
+          glow.spawn(G.lightUp, _p.x + _back.x * 0.3, _p.y + _back.y * 0.3, _p.z + _back.z * 0.3,
+            vel.x + _back.x * 25, vel.y + _back.y * 25, vel.z + _back.z * 25, 0.14, R * 1.6, R * 3.2, 1, 0.66, 0.3, 1, BURNER.lightUpGlow);
         }
       }
-      item.wasReheat = target.reheat;
       // Dry-thrust smoke: a thin sooty thread laid in the air along the
       // nozzle's path (it stays where it was made, so it curves through a
       // hard turn); it burns clean in reheat.
@@ -268,7 +296,6 @@ export class AircraftFx {
         }
       }
 
-      const mach = speed / speedOfSound(pos.y);
       const cone = near ? vapourCone(mach) : 0;
       if (cone > 0.02) {
         _p2.copy(pos).addScaledVector(_fwd, 0.5);

@@ -120,27 +120,109 @@ export function explosionRadius(size) {
   return EXPLOSION_SIZES[size] ?? EXPLOSION_SIZES.medium;
 }
 
+/** ISA air at altitude: temperature (K), and pressure and density relative to sea level. */
+export function airState(altitude) {
+  const h = Math.max(0, altitude || 0);
+  const T = Math.max(216.65, 288.15 - 0.0065 * h);
+  let pressure = Math.pow(T / 288.15, 5.2559);
+  if (h > 11000) pressure *= Math.exp(-(h - 11000) / 6341.6);
+  return { T, pressure, density: pressure * 288.15 / T };
+}
+
 /**
- * Afterburner plume shape from engine state.
- * Dry thrust gives a short faint plume; reheat lights the long plume with
- * shock diamonds. `reheat` may be a boolean (the player's FlightModel) or a
- * 0..1 amount.
+ * Shock cells of the reheat jet. The MiG-21's nozzle only converges, so above
+ * the critical pressure ratio (1.83 for hot gas) the jet leaves it
+ * under-expanded and finishes expanding outside, through a train of cells.
+ *
+ *   NPR      nozzle pressure ratio = engine pressure ratio x intake ram.
+ *            The R-25's EPR is about 2.6 at sea-level static and follows
+ *            corrected rpm (colder intake air -> more), so thin cold air and
+ *            speed both raise it.
+ *   mach     fully expanded jet Mach number, from NPR (gamma 1.3)
+ *   spacing  cell length, Prandtl-Pack: 1.306 D sqrt(Mj^2 - 1)
+ *
+ * About one nozzle diameter on the runway, 1.4 m in a Mach 0.75 fight at
+ * 5 km, over 2 m supersonic at 10 km.
  */
-export function plumeState(throttle, reheat) {
+export function shockCells(altitude = 0, mach = 0, nozzleRadius = 0.45) {
+  const { T } = airState(altitude);
+  const M = clamp(mach || 0, 0, 2.2);
+  const ram = 1 + 0.2 * M * M;
+  const epr = clamp(2.6 * Math.pow(288.15 / (T * ram), 1.5), 1.7, 3.6);
+  const npr = epr * 0.97 * Math.pow(ram, 3.5);
+  const G = 1.3;
+  const mj = Math.sqrt(Math.max(0, (2 / (G - 1)) * (Math.pow(npr, (G - 1) / G) - 1)));
+  return { npr, mach: mj, spacing: 1.306 * 2 * nozzleRadius * Math.sqrt(Math.max(mj * mj - 1, 0.05)) };
+}
+
+/**
+ * Afterburner plume shape from engine state and the air it burns in.
+ * Dry thrust gives a short faint stub; reheat lights the long flame with
+ * shock diamonds. `reheat` may be a boolean (the player's FlightModel) or a
+ * 0..1 amount. In thin air the flame mixes out more slowly (longer, about
+ * rho^-0.3), its cells are longer (shockCells) and fainter, and the jet
+ * swells where it leaves the nozzle.
+ */
+export function plumeState(throttle, reheat, altitude = 0, mach = 0, nozzleRadius = 0.45) {
   const th = saturate(throttle ?? 0);
   const rh = typeof reheat === 'number'
     ? saturate(reheat)
     : (reheat ? 0.45 + 0.55 * saturate((th - 0.86) / 0.14) : 0);
   const dry = smoothstep(0.35, 0.9, th);
+  const air = airState(altitude);
+  const cells = shockCells(altitude, mach, nozzleRadius);
   // Lengths in metres for a MiG-21-sized nozzle: military power shows a
-  // stub of faint flame, full reheat about 8 m with 4-5 shock diamonds.
+  // stub of faint flame, full reheat about 8 m at sea level and 11 m at 10 km.
+  const length = 0.6 + dry * 1.4 + rh * 6.0 * Math.pow(Math.max(air.density, 0.2), -0.3);
   return {
-    length: 0.6 + dry * 1.4 + rh * 6.0,
-    diamonds: rh > 0 ? 3 + rh * 2 : 0,
+    length,
+    spacing: cells.spacing,
+    diamonds: rh > 0 ? length / cells.spacing : 0,
     core: dry * 0.08 + rh * 0.9,
     glow: dry * 0.15 + rh,
     reheat: rh,
+    contrast: 0.5 + 0.5 * Math.sqrt(air.density),
+    spread: saturate((cells.npr - 1.9) / 6),
   };
+}
+
+/** A fresh, unlit burner for `burnerStep`. */
+export function burnerState() {
+  return {
+    length: 0.6, spacing: 1.2, diamonds: 0, core: 0, glow: 0, reheat: 0, contrast: 1, spread: 0,
+    lit: false, since: 10, lightUp: false, pop: 0, flameLength: 0.6, power: 0,
+  };
+}
+
+/** Seconds the light-up pop takes to die (e-folding); it has settled by about four of these. */
+export const LIGHT_UP_TAU = 0.15;
+
+/**
+ * Advance a burner toward `target` (a plumeState) by `dt`.
+ *
+ * Fuel reaches the spray rings and lights off the igniter torch at once, so
+ * the flame comes up fast (18/s) and overshoots: for a moment the pipe holds
+ * more fuel than the flame is burning, and it leaves as a long, wide, yellow
+ * torch (`pop`, 1 at light-up, gone in ~0.6 s) before the nozzle opens and the
+ * jet settles into its cells. Cancelling is slower (6.5/s): the flame shortens
+ * from the tail as the pipe empties.
+ *
+ * Sets `lightUp` on the frame the burner lights, `flameLength` and `power`
+ * (what to draw, pop included), and returns `s`.
+ */
+export function burnerStep(s, target, dt) {
+  s.lightUp = false;
+  if (target.reheat > 0) {
+    if (!s.lit) { s.lit = true; s.since = 0; s.lightUp = true; }
+  } else s.lit = false;
+  s.since += dt;
+  const up = 1 - Math.exp(-18 * dt), down = 1 - Math.exp(-6.5 * dt), k = 1 - Math.exp(-9 * dt);
+  for (const key of ['length', 'core', 'glow', 'reheat']) s[key] = lerp(s[key], target[key], target[key] > s[key] ? up : down);
+  for (const key of ['spacing', 'diamonds', 'contrast', 'spread']) s[key] = lerp(s[key], target[key], k);
+  s.pop = s.lit ? Math.exp(-s.since / LIGHT_UP_TAU) : 0;
+  s.flameLength = s.length * (1 + 0.55 * s.pop);
+  s.power = s.core * (1 + 1.2 * s.pop * s.pop);
+  return s;
 }
 
 /**
