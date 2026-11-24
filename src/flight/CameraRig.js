@@ -6,7 +6,9 @@ import {
 } from '../camera/cameraMath.js';
 import { CINEMATICS, cinematicDuration } from '../camera/cinematics.js';
 import { TimeWarp } from '../camera/timeWarp.js';
-import { lockView, missileView, killView, deathView, actionView, inDangerNow, springVec, newSpring } from '../camera/views.js';
+import { KILL, AIR_ANGLES } from '../camera/killCam.js';
+import { lockView, missileView, deathView, actionView, inDangerNow, springVec, newSpring } from '../camera/views.js';
+import { killView, projectileState, toImpact, shotState } from '../camera/killSequence.js';
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const _v = new THREE.Vector3();
@@ -42,7 +44,9 @@ export const RIDING = new Set(['chase', 'cockpit', 'hud', 'lock', 'action']);
  *   'lock'      target-lock framing (held)
  *   'action'    optional cinematic dogfight angles (options.actionCam, chase only)
  *   'missile'   follow the player's missile (opt-in toggle)
- *   'kill'      short slow-motion kill cam (never in danger)
+ *   'kill'      kill cam (camera/killSequence.js): a slow-motion ride on the
+ *               killing projectile for special kills, or a fast close shot of
+ *               the stricken target; never in danger, skippable
  *   'death'     detached wreck cam after a crash / shoot-down
  *   'cinematic' scripted path (playCinematic)
  * plus free look (orbit in chase, head turn in the cockpit) layered on top.
@@ -113,6 +117,8 @@ export class CameraRig {
     this._lastOut = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 62 };
     this._override = null; // { view, ... }
     this._lastKill = -1e9;
+    this._killEnd = -1e9;
+    this._swoop = null; // chase arrival offset after a kill cam cuts back
     this._initialised = false;
   }
 
@@ -133,6 +139,8 @@ export class CameraRig {
     this._prevReheat = !!flight.reheat;
     this.trauma = 0;
     this.look.yaw = this.look.pitch = this.look.targetYaw = this.look.targetPitch = 0;
+    // (listeners holding a kill-cam effect, such as an audio low-pass, hear it end)
+    if (this._override?.view === 'kill') this.game?.events?.emit('camera:killcam', { phase: 'end', shot: this._override.shot, reason: 'reset' });
     if (this._override && this._override.view !== 'cinematic') this._endOverride(false);
     this.warp.cancel();
     this._blend = null;
@@ -174,20 +182,34 @@ export class CameraRig {
     this._startBlend(blend);
   }
 
-  _endOverride(blend = 0.3) {
+  _endOverride(blend = 0.3, vel = null) {
     if (!this._override) return;
     const v = this._override.view;
-    if (v === 'kill' || v === 'missile') this.warp.cancel();
+    if (v === 'missile') this.warp.cancel();
+    else if (v === 'kill') this.warp.release(0.2);
     const res = this._override.resolve;
     this._override = null;
-    if (blend) this._startBlend(blend); else this.cut = true;
+    if (blend) this._startBlend(blend, vel);
+    else {
+      // an override that ends while it poses has already drawn this frame:
+      // the jump to the next view happens next frame, so cut then as well
+      this.cut = true;
+      this._cutNext = true;
+    }
     res?.();
   }
 
-  _startBlend(dur) {
+  /** Blend from the last pose; `vel` (m/s, optional) keeps the old lens moving: a hand-back with momentum. */
+  _startBlend(dur, vel = null) {
     if (!dur) { this.cut = true; this._blend = null; return; }
     this._blend = {
-      from: { pos: this._lastOut.pos.clone(), quat: this._lastOut.quat.clone(), fov: this._lastOut.fov, shift: this._lastOut.shift ?? 0 },
+      from: {
+        pos: this._lastOut.pos.clone(), quat: this._lastOut.quat.clone(), fov: this._lastOut.fov, shift: this._lastOut.shift ?? 0,
+        // with momentum, the old lens is carried in the jet's frame (offset
+        // from it) and keeps drifting at `vel` relative to it, easing off
+        vel: vel?.clone?.() ?? null,
+        rel: vel && this.game?.flight ? this._lastOut.pos.clone().sub(this.game.flight.position) : null,
+      },
       t: 0, dur,
     };
   }
@@ -208,31 +230,97 @@ export class CameraRig {
   }
 
   /**
-   * Slow-mo kill cam on a destroyed target; refused while in danger, within
-   * 6 s of the previous one, or for a kill too far away to be worth a look.
+   * Kill cam on a destroyed target (camera/killSequence.js).
+   *
+   * opts.shot: 'air' | 'ground' | 'brief' (the camera system picks it with
+   * killCam.killShot); without it the rig picks from the target's class.
+   * opts.angle (air: an AIR_ANGLES entry), opts.side (+1 / -1), opts.proxy
+   * (the stricken airframe, camera/wreckProxy.js). When the projectile cam
+   * is riding the shot that killed `target`, this is its impact instead.
+   * Refused while the kill cam is off, while another override (other than
+   * the missile cam) is on screen, and within the cooldown.
    */
-  killCam(target, position) {
-    if (!this.options.killCam || this.options.reducedMotion) return false;
-    if (this._override && this._override.view !== 'missile') return false;
-    const g = this.game;
-    const flight = g?.flight;
+  killCam(target, position, opts = {}) {
+    const o = this._override;
+    if (o?.view === 'kill' && o.phase === 'projectile') {
+      if (o.target !== target) return false;
+      toImpact(this, o, position, opts.proxy);
+      return true;
+    }
+    if (!this.options.killCam) return false;
+    if (o && o.view !== 'missile') return false;
+    const flight = this.game?.flight;
     const p = (position ?? target?.position)?.clone?.();
     if (!p || !flight) return false;
-    if (this._t - this._lastKill < 6) return false;
-    _v.copy(p).sub(flight.position);
-    const dist = _v.length();
-    if (dist > 6000) return false;
+    if (this._t - this._killEnd < KILL.cooldown) return false;
+    const air = target ? target.class === 'air' : false;
+    let shot = opts.shot;
+    if (!shot) {
+      if (p.distanceTo(flight.position) > 6000) return false;
+      shot = this.options.reducedMotion ? 'brief' : air ? 'air' : 'ground';
+    }
+    const side = opts.side ?? (Math.random() < 0.5 ? -1 : 1);
+    const angle = opts.angle ?? AIR_ANGLES[Math.floor(Math.random() * AIR_ANGLES.length)];
     this._lastKill = this._t;
-    // start beside the player->wreck line, low, so the sky frames the burst
-    const side = Math.random() < 0.5 ? 1 : -1;
-    const a0 = Math.atan2(_v.x, -_v.z) + Math.PI + side * 1.1;
-    const radius = clamp(dist * 0.25, 150, 260); // a large air burst is ~100 m across
-    this._beginOverride({
-      view: 'kill', target, center: p, t: 0, dur: 2.5, a0, radius, height: radius * 0.16 + 3, fov: 42,
-    }, 0);
+    this._beginOverride(shotState(this, { shot, target, position: p, angle, side, proxy: opts.proxy }), 0);
     this.cut = true;
-    if (this.options.slowMo) this.warp.start({ scale: 0.2, ease: 0.12, hold: 1.5, end: 2.35 });
+    this.game?.events?.emit('camera:killcam', { phase: 'start', shot, angle: shot === 'air' ? angle : undefined, target, position: p.clone() });
     return true;
+  }
+
+  /**
+   * Ride `projectile` (a live missile / rocket entity) in slow motion until
+   * it hits `target`; the kill then arrives through killCam(). The camera
+   * system decides when a shot qualifies (killCam.js wantsProjectileCam).
+   */
+  projectileCam(projectile, target, { side } = {}) {
+    if (!this.options.killCam || !projectile || !target) return false;
+    const o = this._override;
+    if (o && o.view !== 'missile') return false;
+    const s = side ?? (Math.random() < 0.5 ? -1 : 1);
+    const following = o?.view === 'missile' && o.missile === projectile;
+    this._lastKill = this._t;
+    this._beginOverride(projectileState(this, projectile, target, s), following ? 0.25 : 0);
+    if (!following) this.cut = true;
+    this.game?.events?.emit('camera:killcam', { phase: 'start', shot: 'projectile', target, position: projectile.position.clone() });
+    return true;
+  }
+
+  /** The kill cam's phase on screen ('projectile' | 'impact' | 'shot'), or null. */
+  get killPhase() { return this._override?.view === 'kill' ? this._override.phase : null; }
+
+  /** Real seconds since the last kill cam ended. */
+  get killSince() { return this._t - this._killEnd; }
+
+  /**
+   * End the kill cam. reason: 'done' (it ran its course: hand back with
+   * momentum), 'skip' (player input), 'danger', 'miss' (the projectile did
+   * not kill). Time comes back quickly in every case.
+   */
+  endKill(reason = 'done') {
+    const o = this._override;
+    if (o?.view !== 'kill') return;
+    this._killEnd = this._t;
+    const P = this.game?.flight?.position;
+    // a blend across more than a few hundred metres whips the lens across the
+    // terrain; beyond that the hand-back is a cut with the chase boom swooping in
+    const far = !P || this._lastOut.pos.distanceTo(P) > 260;
+    // the lens's own drift relative to the jet (the fly-away), for the hand-back
+    const vel = o.vel && P ? o.vel.clone().sub(this.game.flight.velocity ?? _v.set(0, 0, 0)) : null;
+    if (vel && vel.lengthSq() > 150 * 150) vel.setLength(150);
+    this.game?.events?.emit('camera:killcam', { phase: 'end', shot: o.shot, reason });
+    if (reason === 'done' && o.shot === 'brief') {
+      this._endOverride(0); // reduced motion: a plain cut
+    } else if (reason === 'skip' || reason === 'danger') {
+      if (reason === 'danger') this.warp.cancel(); // a skip eases back over 0.2 s
+      this._endOverride(far ? 0 : 0.25);
+    } else if (!far) {
+      this._endOverride(0.55, vel);
+    } else {
+      // too far to fly across: cut, and let the chase boom swoop in
+      this._endOverride(0);
+      if (!this.options.reducedMotion && this.mode === 'chase') this._swoop = new THREE.Vector3(2.5, 5, 22);
+    }
   }
 
   /**
@@ -310,7 +398,8 @@ export class CameraRig {
     this._t += rdt;
     this.warp.update(rdt);
     const cam = this.camera;
-    this.cut = this.cut || false;
+    this.cut = this.cut || !!this._cutNext;
+    this._cutNext = false;
     this.dofOut = null;
 
     // -- choose the view --------------------------------------------------
@@ -353,7 +442,7 @@ export class CameraRig {
       case 'lock': fov = lockView(this, rdt, flight) ?? this._chase(rdt, flight); break;
       case 'action': fov = actionView(this, rdt, flight) ?? this._chase(rdt, flight); break;
       case 'missile': fov = missileView(this, rdt, flight); break;
-      case 'kill': fov = killView(this, rdt, flight); break;
+      case 'kill': fov = killView(this, rdt); break;
       case 'death': fov = deathView(this, rdt); break;
       case 'cinematic': ({ fov, shift } = this._cinematicView(rdt)); break;
       default: fov = this._chase(rdt, flight); break;
@@ -372,6 +461,13 @@ export class CameraRig {
     if (this._blend && !this.cut) {
       const b = this._blend;
       b.t += rdt;
+      if (b.from.vel) {
+        if (b.from.rel) {
+          b.from.rel.addScaledVector(b.from.vel, rdt);
+          b.from.pos.copy(flight.position).add(b.from.rel);
+        } else b.from.pos.addScaledVector(b.from.vel, rdt);
+        b.from.vel.multiplyScalar(Math.exp(-2.5 * rdt));
+      }
       const k = easeInOut(b.t / b.dur);
       cam.position.lerpVectors(b.from.pos, cam.position, k);
       if (RIDING.has(view) && flight) {
@@ -486,6 +582,13 @@ export class CameraRig {
     if (this.cut) this._offSpring.init = false;
     const freq = chaseLagFreq(flight.airspeed, this.options.reducedMotion ? 0.5 : this.options.cameraLag);
     springVec(this._offSpring, _v, freq, 0.82, dt);
+    if (this._swoop) {
+      // back from a kill cam on a cut: the boom starts long and high and
+      // springs in, so the chase view arrives with momentum
+      this._offSpring.x.add(this._swoop);
+      this._offSpring.v.set(0, 0, 0);
+      this._swoop = null;
+    }
     this._offsetLocal.copy(this._offSpring.x);
     _v.copy(this._offsetLocal).applyQuaternion(flight.orientation);
     cam.position.copy(flight.position).add(_v);

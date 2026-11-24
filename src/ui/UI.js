@@ -483,6 +483,12 @@ export class UI {
       const el = this.hud?.canvas;
       if (el) el.style.visibility = state === 'start' ? 'hidden' : '';
     });
+    // The kill cam is an outside view too, and a moment apart from the score:
+    // no instruments, callouts or points over it.
+    ev.on('camera:killcam', ({ phase } = {}) => {
+      const el = this.hud?.canvas;
+      if (el && (phase === 'start' || phase === 'end')) el.style.visibility = phase === 'start' ? 'hidden' : '';
+    });
     const inbound = new Map(); // hostile missile -> its shooter
     ev.on('missile:launch', ({ missile: m } = {}) => {
       if (!m) return;

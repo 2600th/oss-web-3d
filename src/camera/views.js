@@ -4,8 +4,8 @@ import { clamp, damp, dampFactor, springStep, smoothstep, actionShot } from './c
 
 /**
  * Override and alternate views for CameraRig (src/flight/CameraRig.js):
- * lock-on, missile follow, kill cam, death cam, and the optional action
- * ("cinematic") camera for dogfights. Each `xxxView(rig, dt, flight)` poses
+ * lock-on, missile follow, death cam, and the optional action
+ * ("cinematic") camera for dogfights. The kill cam lives in killSequence.js. Each `xxxView(rig, dt, flight)` poses
  * `rig.camera` and returns the field of view; `rig.dofOut` may be filled for
  * the post chain's depth of field.
  *
@@ -150,36 +150,6 @@ export function missileView(rig, dt) {
   rig.dofOut = { amount: 0.7, focus: _a.length(), focal: Math.max(15, _a.length()) };
   if (o.hold > 1.5 || inDangerNow(g)) rig._endOverride(0.45);
   return o.fov ?? 50;
-}
-
-// ---------------------------------------------------------------- kill cam
-
-export function killView(rig, dt) {
-  const o = rig._override;
-  const g = rig.game;
-  o.t += dt;
-  // follow the wreck while it falls (live position), never below the ground
-  if (o.target?.position && o.target.position.distanceToSquared(o.center) < 4e6) o.center.lerp(o.target.position, dampFactor(5, dt));
-  const k = smoothstep(0, o.dur, o.t);
-  const a = o.a0 + o.t * 0.28;
-  const r = o.radius * (1 - 0.14 * k);
-  const cam = rig.camera;
-  cam.position.set(Math.sin(a) * r, o.height - k * o.height * 0.35, -Math.cos(a) * r).add(o.center);
-  clearGround(cam.position, 8);
-  cam.up.copy(WORLD_UP);
-  // look slightly above the burst: the fireball climbs, the sky frames it
-  cam.lookAt(_a.copy(o.center).addScaledVector(WORLD_UP, 3 + k * 4));
-  const d = cam.position.distanceTo(o.center);
-  rig.dofOut = { amount: 1, focus: d, focal: Math.max(40, d * 1.5), bokeh: 2 };
-  if (rig.devHold) o.t = Math.min(o.t, o.dur - 0.6);
-  if (inDangerNow(g)) { rig.warp.cancel(); rig._endOverride(0.25); return o.fov; }
-  if (o.t >= o.dur) {
-    // auto-return: a quick whip back to the chase unless it is far away
-    const far = cam.position.distanceTo(g?.flight?.position ?? cam.position) > 1500;
-    rig._endOverride(far ? 0 : 0.7);
-  }
-  o.fov = 42 - 6 * k;
-  return o.fov;
 }
 
 // ---------------------------------------------------------------- death cam
