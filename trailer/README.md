@@ -28,4 +28,4 @@ project. A HyperFrames project is HTML that the CLI renders to MP4.
    ```
 
 The footage, music and renders are not committed (see the root `.gitignore`).
-A web-size copy of the finished trailer is at [`docs/media/trailer.mp4`](../docs/media/trailer.mp4).
+A web-size copy of the finished trailer is [on the game site](https://oss-web-3d.vercel.app/media/trailer.mp4) (`public/media/trailer.mp4`).

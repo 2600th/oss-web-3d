@@ -2,9 +2,9 @@
 
 **Fly a MiG-21 through the real Kargil Himalaya. In your browser. No install.**
 
-[![Safed Sagar: afterburner, cockpit flak, a missile kill, a storm and a climb out of the cloud sea](docs/media/hero.webp)](docs/media/trailer.mp4)
+[![Safed Sagar: afterburner, cockpit flak, a missile kill, a storm and a climb out of the cloud sea](docs/media/hero.webp)](https://oss-web-3d.vercel.app/media/trailer.mp4)
 
-### [▶ Play it now](https://oss-web-3d.vercel.app) · [🎬 Watch the 57-second trailer](docs/media/trailer.mp4)
+### [▶ Play it now](https://oss-web-3d.vercel.app) · [🎬 Watch the 57-second trailer](https://oss-web-3d.vercel.app/media/trailer.mp4)
 
 ---
 
@@ -270,9 +270,9 @@ src/
   audio/      engine, SFX, music
   ui/         HUD, menus, briefing, debrief, settings
 tools/        terrain DEM build, Blender asset scripts, audio rendering, frame capture, perf
-public/       models, terrain packs, textures, audio, fonts, notices
+public/       models, terrain packs, textures, audio, fonts, notices, the trailer
 trailer/      the trailer as a HyperFrames project (cut list, radio, titles)
-docs/         ARCHITECTURE.md and the README media
+docs/         ARCHITECTURE.md and the README images
 ```
 
 - **How it fits together:** systems register themselves (`src/*/system.js`,
