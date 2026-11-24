@@ -72,18 +72,23 @@ export function installCapture(game) {
 
   const api = {
     /** Advance `seconds` at `fps` (rendered, not saved): settle a scene, let terrain stream in. */
+    // Driven by the renderer's animation loop, like record(): frame-based
+    // nodes (the clouds' temporal resolve, TRAA history) only advance on its
+    // ticks, so a plain loop of renders left them frozen through the lead-in.
     async step(seconds, fps = 30) {
       if (busy) throw new Error('capture busy');
       busy = true;
       hold();
-      try {
-        const n = Math.round(seconds * fps);
-        for (let i = 0; i < n; i++) {
-          frame(1 / fps);
-          r.poll?.();
-          if (i % 15 === 14) await new Promise((r2) => setTimeout(r2, 0)); // let workers deliver
-        }
-      } finally { busy = false; release(); }
+      const n = Math.round(seconds * fps);
+      let i = 0;
+      return await new Promise((resolve, reject) => {
+        const done = (err) => { r.renderer.setAnimationLoop(null); busy = false; release(); if (err) reject(err); else resolve(); };
+        r.renderer.setAnimationLoop(() => {
+          if (i >= n) return done(null);
+          try { frame(1 / fps); r.poll?.(); } catch (e) { return done(e); }
+          i++;
+        });
+      });
     },
 
     /**
