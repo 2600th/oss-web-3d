@@ -120,7 +120,11 @@ export class AircraftFx {
    * hot star at the muzzle, gone within a frame or two, then a puff of grey
    * gun smoke that the airflow strips back along the belly.
    */
-  muzzleFlash(pos, dir, vel = null, scale = 1) {
+  // lightScale: the flash's point light casts no shadow, so from the
+  // player's own cockpit (the muzzle is a few metres under the pilot) it lit
+  // the whole interior cream-white through the fuselage. The gun branch
+  // below passes a small scale when the camera is in that cockpit.
+  muzzleFlash(pos, dir, vel = null, scale = 1, lightScale = 1) {
     const { glow, lit, G, L, lights } = this.vfx;
     const vx = vel?.x ?? 0, vy = vel?.y ?? 0, vz = vel?.z ?? 0;
     // the star at the muzzle
@@ -133,7 +137,7 @@ export class AircraftFx {
       lit.spawn(L.gunSmoke, pos.x, pos.y, pos.z, vx * 0.55 + dir.x * 12, vy * 0.55 + dir.y * 12, vz * 0.55 + dir.z * 12,
         rnd(0.5, 0.9), 0.25 * scale, rnd(1.4, 2.2) * scale, 0.42, 0.42, 0.43, 0.32);
     }
-    lights.request(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z, 1, 0.78, 0.45, 420 * scale * rnd(0.6, 1), 30);
+    if (lightScale > 0) lights.request(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z, 1, 0.78, 0.45, 420 * scale * lightScale * rnd(0.6, 1), 30);
   }
 
   tracer(pos, vel) { this.vfx.tracers.fire(pos, vel); }
@@ -314,7 +318,10 @@ export class AircraftFx {
         // Tracers are drawn from combat's live rounds (core/Tracers.js); the
         // gun itself only contributes its flash and smoke here.
         _p2.copy(socket(entity, 'gun')).applyQuaternion(q).add(pos);
-        if (Math.random() < 0.8) this.muzzleFlash(_p2, _fwd, vel, 1);
+        // camera inside this airframe (cockpit view): keep the flash and
+        // smoke, drop its light (1.7 m from the eye, any of it floods the pit)
+        const inside = entity === this.player && dist < 12;
+        if (Math.random() < 0.8) this.muzzleFlash(_p2, _fwd, vel, 1, inside ? 0 : 1);
       }
     }
     this.plumes.end();
