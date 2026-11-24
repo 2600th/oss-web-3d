@@ -3,7 +3,8 @@ import { computeLayout } from './layout.js';
 import { projectPoint, boxClamp, gunLead } from './projection.js';
 import { worldToRadar, autoRange } from './radar.js';
 import { RadioQueue, Callouts } from './radio.js';
-import { resolveTheme, targetColor, isGround } from './theme.js';
+import { resolveTheme, adaptTheme, daylight, targetColor, isGround } from './theme.js';
+import { ownJetRects } from './ownJet.js';
 import {
   rect, overlap, inside, instrumentKeepOut, panelKeepOut, pickPlateSlot,
   labelTier, mustLabel, sortForLabels, foldMarkers, placeLabels, leaderSlots, easeAlpha,
@@ -67,7 +68,15 @@ export class Hud {
     this.data = {};
     this.radio = new RadioQueue();
     this.callouts = new Callouts();
-    this.theme = resolveTheme(settings);
+    this._baseTheme = resolveTheme(settings);
+    this.theme = this._baseTheme;
+    // Daylight halo factor (theme.js adaptTheme): eased toward the metered
+    // scene each frame; `haloBoost` (0..1) pins it (dev / evidence captures).
+    this._day = 1;
+    this._dayK = -1;
+    this.haloBoost = null;
+    // In the outside views, marker labels keep off the player's own jet.
+    this.ownJetObstacle = true;
     this.layout = null;
     this.dpr = 1;
     this.time = 0;
@@ -102,7 +111,9 @@ export class Hud {
 
   applySettings(settings) {
     this.settings = settings;
-    this.theme = resolveTheme(settings);
+    this._baseTheme = resolveTheme(settings);
+    this._dayK = -1;
+    this._applyDaylight();
     if (this.layout) this.resize(this.layout.w, this.layout.h);
   }
 
@@ -267,9 +278,29 @@ export class Hud {
       this._flickering = false;
     }
     if (!this.visible || !this.layout) return;
+    this._updateDaylight(dt, game);
     const d = normalizeHud(game.hud, game.flight, this.data);
     this._estimateVelocities(d.targets, dt);
     this.draw(d, game);
+  }
+
+  /**
+   * Ease the daylight factor toward the scene's metered brightness (PostFX
+   * stats; no readback of our own) and rebuild the theme only when it moves
+   * by a visible step, so the frame loop allocates nothing in steady state.
+   */
+  _updateDaylight(dt, game) {
+    const want = Number.isFinite(this.haloBoost) ? this.haloBoost : daylight(game.post?.stats);
+    if (Number.isFinite(this.haloBoost) || !(dt > 0)) this._day = want;
+    else this._day += (want - this._day) * (1 - Math.exp(-dt * 1.5));
+    this._applyDaylight();
+  }
+
+  _applyDaylight() {
+    const k = Math.round(Math.min(1, Math.max(0, this._day)) * 20) / 20;
+    if (k === this._dayK) return;
+    this._dayK = k;
+    this.theme = adaptTheme(this._baseTheme, k);
   }
 
   _estimateVelocities(targets, dt) {
@@ -359,8 +390,14 @@ export class Hud {
 
   _stroke(color, width) {
     const ctx = this.ctx;
-    ctx.strokeStyle = this.theme.halo;
-    ctx.lineWidth = width + 2.6;
+    const th = this.theme;
+    if (th.haloWide) {
+      ctx.strokeStyle = th.haloWide;
+      ctx.lineWidth = width + th.haloPad + th.haloWidePad;
+      ctx.stroke();
+    }
+    ctx.strokeStyle = th.halo;
+    ctx.lineWidth = width + th.haloPad;
     ctx.stroke();
     ctx.strokeStyle = color;
     ctx.lineWidth = width;
@@ -369,8 +406,14 @@ export class Hud {
 
   _fillHalo(color) {
     const ctx = this.ctx;
-    ctx.strokeStyle = this.theme.halo;
-    ctx.lineWidth = 2.6;
+    const th = this.theme;
+    if (th.haloWide) {
+      ctx.strokeStyle = th.haloWide;
+      ctx.lineWidth = th.haloPad + th.haloWidePad;
+      ctx.stroke();
+    }
+    ctx.strokeStyle = th.halo;
+    ctx.lineWidth = th.haloPad;
     ctx.stroke();
     ctx.fillStyle = color;
     ctx.fill();
@@ -383,10 +426,19 @@ export class Hud {
     ctx.textBaseline = baseline;
     if (halo) {
       // Thin, round-joined, partly transparent: at 10-12 px a heavier halo
-      // fills the counters and the glyphs read as embossed over snow.
-      ctx.strokeStyle = this.theme.haloText;
+      // fills the counters and the glyphs read as embossed over snow. In
+      // daylight a soft wide pass darkens the surround first (theme.js DAY).
+      const th = this.theme;
+      const [lo, hi, k] = th.textHalo;
+      const hw = Math.min(hi, Math.max(lo, size * k)) * 2;
       ctx.lineJoin = 'round';
-      ctx.lineWidth = Math.min(2.5, Math.max(1.25, size * 0.13)) * 2;
+      if (th.haloWide) {
+        ctx.strokeStyle = th.haloWide;
+        ctx.lineWidth = hw + th.haloWidePad;
+        ctx.strokeText(str, x, y);
+      }
+      ctx.strokeStyle = th.haloText;
+      ctx.lineWidth = hw;
       ctx.strokeText(str, x, y);
     }
     ctx.fillStyle = color;
@@ -576,6 +628,12 @@ export class Hud {
     }
     this._fpm = { x, y };
     const r = 7 * s;
+    // keep-out for next frame's target labels (the marker is placed first)
+    const fb = (this._fpmBox ??= { x0: 0, y0: 0, x1: 0, y1: 0, w: 2 });
+    fb.x0 = x - r * 2.6 - 3 * s;
+    fb.x1 = x + r * 2.6 + 3 * s;
+    fb.y0 = y - r * 1.9 - 3 * s;
+    fb.y1 = y + r + 3 * s;
     const stall = d.stall;
     const col = stall ? (this.blink(3) ? this.theme.caution : th.dim) : th.ink;
     ctx.beginPath();
@@ -657,6 +715,10 @@ export class Hud {
     if (this.touch) for (const r of this.occluders ?? []) obstacles.push(rect(r.x, r.y, r.x + r.w, r.y + r.h));
     const lockBox = lockT && lockState !== 'none' ? this._lockBox(d, lockT, s) : null;
     if (lockBox) obstacles.push(lockBox);
+    // the flight path marker (last frame's place: it is drawn after the markers)
+    if (this._fpmBox) obstacles.push(this._fpmBox);
+    const jets = this._ownJetRects(game, s);
+    for (let i = 0; i < jets; i++) obstacles.push(this._jetRects[i]);
     for (const o of shown) {
       const k = o.pip ? 4 * s : o.lm;
       const crest = !o.pip && (o.t.isAce || o.t.isTarget) ? 13 * s : 0; // chevron above the shape
@@ -753,6 +815,24 @@ export class Hud {
     // Lock reticle draws over everything else
     if (lockT && lockState !== 'none') this._drawLock(d, lockT, L, s);
     this._drawGunPipper(d, game, L, s, lockT);
+  }
+
+  /**
+   * Screen rects of the player's own jet in the outside views (label
+   * obstacles, in this._jetRects); returns how many, 0 in first person, with
+   * the airframe hidden or behind the camera.
+   */
+  _ownJetRects(game, s) {
+    this._jetCount = 0;
+    if (!this.ownJetObstacle) return 0;
+    const view = game.cameraRig?.view;
+    const p = game.player;
+    if (!p?.group || view === 'cockpit' || view === 'hud' || p.model?.visible === false || p.group.visible === false) return 0;
+    const out = (this._jetRects ??= []);
+    const n = ownJetRects(p.group.matrixWorld.elements, this._view, this._proj, this.layout.w, this.layout.h, out, 3 * s);
+    for (let i = 0; i < n; i++) out[i].w = 1.5;
+    this._jetCount = n;
+    return n;
   }
 
   /** Screen rect the lock reticle (box, ticks and LOCK / ACQ plate) covers, or null. */
@@ -942,7 +1022,10 @@ export class Hud {
     cands.push(out, side(-out.dir));
     // leader line: the block (name over range) pulled clear of a crowd
     const h = (name ? nameSize * 1.15 : 0) + 13 * s;
-    for (const ls of leaderSlots(x, y, m + (t.isAce || t.isTarget ? 6 * s : 0), w + 2 * pad, h + 2 * pad, [16 * s, 40 * s])) {
+    // a longer reach, last, when the own jet is on screen: a marker over the
+    // airframe can still put its label out on the sky or the ground beside it
+    const gaps = this._jetCount ? [16 * s, 40 * s, 64 * s] : [16 * s, 40 * s];
+    for (const ls of leaderSlots(x, y, m + (t.isAce || t.isTarget ? 6 * s : 0), w + 2 * pad, h + 2 * pad, gaps)) {
       cands.push({ mode: 'leader', name, range, rw, ...ls, boxes: [ls.box] });
     }
     return cands;
@@ -1345,6 +1428,12 @@ export class Hud {
     const th0 = L.speed.y + L.tapeH * 0.42;
     const tH = L.tapeH * 0.5;
     const ctl = Math.min(1, Math.max(0, d.throttle));
+    if (th.plate) {
+      // daylight: a dark well under the bar, so the fill and the empty part
+      // both read over snow (the boxed readouts use the same treatment)
+      ctx.fillStyle = th.plate;
+      ctx.fillRect(tx - 2 * s, th0 - tH - 2 * s, 9 * s, tH + 4 * s);
+    }
     ctx.beginPath();
     ctx.rect(tx, th0 - tH, 5 * s, tH);
     this._stroke(th.faint, 1);
@@ -1446,7 +1535,9 @@ export class Hud {
       if (Math.abs(yy - y) < 16 * s) continue;
       if (v < 0) continue;
       const fade = 1 - Math.pow(Math.abs(yy - y) / half, 4);
-      ctx.globalAlpha = (this.settings.hudOpacity ?? 1) * Math.max(0, fade);
+      // the end-of-tape fade halves a numeral's halo too; in daylight it stops
+      // at 0.6 so the outer numerals do not wash out over cloud
+      ctx.globalAlpha = (this.settings.hudOpacity ?? 1) * (fade > 0 ? Math.max(fade, 0.6 * th.k) : 0);
       this._text(label(v), edge + side * 14 * s, yy, th.dim, 11 * s, { font: FONT_SANS, align: side < 0 ? 'right' : 'left' });
     }
     ctx.globalAlpha = this.settings.hudOpacity ?? 1;
@@ -1619,6 +1710,10 @@ export class Hud {
       const by = ly - 2 * s;
       const seg = Math.min(12, o.total);
       const sw = Math.min(18 * s, (maxW - tw - 60 * s) / seg);
+      if (th.plate) {
+        ctx.fillStyle = th.plate;
+        ctx.fillRect(bx - 2 * s, by - 2 * s, seg * (sw + 3 * s) + 1 * s, 8 * s);
+      }
       for (let i = 0; i < seg; i++) {
         const filled = i < Math.round((prog / o.total) * seg);
         ctx.fillStyle = filled ? th.priority : th.faint;
@@ -1718,6 +1813,10 @@ export class Hud {
     this._text('AIRFRAME', x, by - 12 * s, th.dim, 10 * s, { align: 'left' });
     this._text(formatPercent(h), x + segs * (sw + 2 * s) + 6 * s, by + sh / 2, col, 13 * s, { align: 'left', weight: 700 });
     const filled = Math.ceil(h * segs - 0.001);
+    if (th.plate) {
+      ctx.fillStyle = th.plate;
+      ctx.fillRect(x - 2 * s, by - 2 * s, segs * (sw + 2 * s) + 2 * s, sh + 4 * s);
+    }
     for (let i = 0; i < segs; i++) {
       ctx.fillStyle = i < filled ? col : th.faint;
       ctx.fillRect(x + i * (sw + 2 * s), by, sw, sh);
