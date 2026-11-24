@@ -111,7 +111,7 @@ export const SECTIONS = [
       },
       { key: 'cameraFov', label: 'Field of view', type: 'range', min: -10, max: 15, step: 1, fmt: (v) => `${v > 0 ? '+' : ''}${v}°` },
       { key: 'cameraShake', label: 'Camera shake', type: 'range', min: 0, max: 1, step: 0.1, fmt: pct },
-      { key: 'killCam', label: 'Kill camera', type: 'toggle', note: 'A short look at each air kill, when nothing is threatening you.' },
+      { key: 'killCam', label: 'Kill camera', type: 'toggle', note: 'A short look at your kills; now and then a slow-motion ride on the missile. Never while you are threatened. Fire or change view to skip.' },
       { key: 'missileCam', label: 'Follow your missiles', type: 'toggle' },
     ],
   },

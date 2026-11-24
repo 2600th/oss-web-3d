@@ -1252,3 +1252,60 @@ and write-up: `docs/v2/evidence/afterburner/`.
 
 ### G greyout relaxed for play (changed)
 `src/fx/ScreenState.js` — G stress now builds from 6.5 G (was 5.2) at 0.12 per s per G (was 0.22), recovers faster (0.6/s), and the first desaturation shows at stress 0.3. A held 7 G dogfight turn and the 7.5 G terrain pull-up stay clear; full-stick 8–9 G greys out after about 3 s and clears about 2 s after release (it used to grey a held 8 G turn out in about 1.6 s). Redout starts at -2 G. Purely visual: the flight model's G limits are unchanged.
+
+### Kill cam (changed)
+
+Owner paths: `src/camera/**`, the kill and missile parts of `src/flight/CameraRig.js`. There is also one listener in `src/ui/UI.js`. Evidence: `docs/v2/evidence/killcam/`.
+
+- **Two shots (changed):**
+  - The *projectile cam* is for special kills: the last of a group, a launch at 4.2 km or more, or a launch 40° or more off the nose.
+    - It runs only when the shot is predicted to kill. The camera rides the missile or rocket from 0.3 game s out.
+    - Time follows the time-to-go: 0.45 at the cut-in, 0.22 at 0.1 s out, 0.07 in the last metres.
+    - At 0.045 s out the lens lets the projectile go and holds station on the target.
+    - At detonation it cuts to the target's flank under the flash (air kills), runs time at 0.5 through the flash, swings at about 0.2, then flies away.
+    - The whole sequence lasts 2.7-2.9 s of real time.
+  - The *fast shot* covers everything else.
+    - An air kill gets one of `lowSide`, `frontQuarter`, `topDown` or `debris`. It is never one of the last two used, and never `lowSide` within 90 m of the ground. Time dips to 0.45, and the shot lasts 1.85 s.
+    - A ground kill gets a 2.1 s orbit of the wreck at 0.35.
+  - The old 2.5 s slow orbit at 0.2 is gone.
+- **When it runs (changed):** chances, cooldown and limits are in `KILL` (`src/camera/killCam.js`).
+  - Special kills get the projectile cam 85 % of the time; ordinary missile and rocket kills 10 %. Ground kills get a shot at all 70 % of the time.
+  - Cooldown: 5 real s after the last kill cam ended.
+  - Never in danger (`cameraMath.inDanger`): no shot starts, and a running one ends that frame.
+  - Never with `options.killCam` off.
+  - With `options.reducedMotion`, every kill gets the `brief` shot: 1.3 s, held, real time, a plain cut back.
+  - The projectile cam needs `options.slowMo`.
+  - Any `fireMissile`, `fireGun`, `camera`, `cinematicCam` or `missileCam` press, or holding `lookTarget`, skips it. The camera keys do only that on that frame.
+- **Hand-back (changed):**
+  - When the lens ends within 260 m of the player, it blends back over 0.55 s, carrying the lens's drift relative to the jet.
+  - Otherwise it cuts, and the chase boom starts 22 m further back and 5 m up, then springs in.
+  - The rig now also cuts on the frame after an override that ends while posing. Before this, the chase aim lagged for about 5 frames after a kill cam.
+- **Clamps:** the lens is clamped against the terrain under it and along its line of sight to the subject (a ground subject's mid-height). It is also pushed out of keep-out spheres:
+  - the airframe, 13 m;
+  - a ground target, 1.6 x its radius;
+  - the player's jet, 13 m;
+  - the fireball after a detonation, 22-45 m by blast size, drifting at 0.3 of the target's velocity.
+- **Stricken airframe (new, `src/camera/wreckProxy.js`):**
+  - The ai drops a dead fighter's model from the scene. For an air shot, the camera system borrows that model (`target.object3d`) and flies it down the same dragged ballistic path as the VFX's burning hulk (`Emitters.wreck`), so the fire trail streams from it.
+  - It rolls at 2.2-3.8 rad/s with the nose dropping. Three or four control surfaces tear off and tumble; one is thrown to pass about 2.4 m from the lens.
+  - The pilot figure is hidden and LOD0 is forced.
+  - It is removed at the ground or after 14 game s, and on `player:respawn`. At most 3 at a time.
+- **Events (new):** `camera:killcam`, with these phases:
+  - `start`: `{shot: 'projectile' | 'air' | 'ground' | 'brief', angle?, target, position}`.
+  - `impact`: `{shot, target, position, thump}`. `thump` is `{gain, cutoff Hz, attack, hold, release}` in real seconds: a low-pass duck for the audio owner. No audio consumes it yet.
+  - `return`: the fly-away has begun.
+  - `end`: `{shot, reason: 'done' | 'skip' | 'danger' | 'miss' | 'reset'}`.
+- **UI (one listener):** the HUD canvas is hidden from `camera:killcam` `start` to `end`. The score, the `SPLASH +points` callout and the pilot's instruments stay off the kill cam.
+- **CameraRig API:**
+  - `killCam(target, position, opts)` gained `opts`: `{shot, angle, side, proxy}`. Without it, the rig picks the shot from the target's class.
+  - New: `projectileCam(projectile, target, {side})`, `endKill(reason)`, `killPhase`, `killSince`.
+  - `_startBlend(dur, vel)` and `_endOverride(blend, vel)` take an optional momentum.
+- **TimeWarp (additive):**
+  - `drive(scale)` sets the scale each frame, with a 0.3 s watchdog that releases it.
+  - `release(seconds)` eases back to 1. `scale` is a getter.
+  - The rig ends a kill with `release(0.2)` instead of `cancel()`. A danger end still cancels.
+- **Removed:** `killView` from `src/camera/views.js`. It is now in `src/camera/killSequence.js`.
+- **Dev:**
+  - New scenarios `__camTest('killMissile', {weapon, range, off, turn})` and `__camTest('killGround', {type, weapon, shot})`.
+  - `kill` takes `{angle}`. Every scenario takes `{defer: true}`, which returns `go()` for frame-exact capture.
+  - `game.systems.camera.forceProjectile`, `forceKillShot` and `forceAngle` skip the rolls.

@@ -5,6 +5,14 @@ import { waterDrivers, rainFrom } from '../fx/waterModel.js';
 import {
   explosionTrauma, flightRumble, inDanger, clamp, smoothstep, speedOfSound, machCrossing, hitSeverity,
 } from './cameraMath.js';
+import {
+  KILL, predictIntercept, predictKill, lastOfGroup, isSpecial, wantsProjectileCam, killShot, pickAirAngle,
+  shotScale, impactScale, realTimeFor,
+} from './killCam.js';
+import { airShotOffset, impactPlan, impactLensOffset, passPoint } from './killSequence.js';
+import { WreckProxies } from './wreckProxy.js';
+import { damageAgainst } from '../combat/weapons.js';
+import { terrainHeight } from '../world/terrain/heightfield.js';
 
 export const order = 85;
 
@@ -49,6 +57,12 @@ export function createSystem(game) {
   let lastFlow = null;
   let pendingSortie = false;
   let actionPick = 0;
+  // kill cam: the player's projectiles in flight ({launchRange, offBoresight,
+  // decided}), the air angles used so far, the stricken airframes
+  const shots = new Map();
+  const recentAngles = [];
+  const proxies = new WreckProxies(game);
+  const rng = Math.random;
 
   rig.attach(game);
   if (post?.options) rig.options.reducedMotion = post.options.reducedMotion;
@@ -86,6 +100,18 @@ export function createSystem(game) {
       rig.addTrauma(rocket ? 0.06 : 0.14);
       rig.fovPulse?.(rocket ? -3 : -9);
       if (rig.options.missileCam && (missile.kind ?? 'aam') !== 'rocket' && !dangerNow()) rig.followMissile(missile);
+      if (missile.kind !== 'bomb') {
+        // for the kill cam: how hard was this shot?
+        const f = game.flight;
+        const t = missile.target;
+        let launchRange = 0, offBoresight = 0;
+        if (t?.position) {
+          _v.copy(t.position).sub(f.position);
+          launchRange = _v.length();
+          offBoresight = launchRange > 1 ? _v.angleTo(f.forward ?? _g.set(0, 0, -1).applyQuaternion(f.orientation)) : 0;
+        }
+        shots.set(missile, { launchRange, offBoresight, decided: false });
+      }
     } else {
       hostileMissiles.add(missile);
     }
@@ -101,7 +127,7 @@ export function createSystem(game) {
   });
   on('target:destroyed', ({ target, killer, position } = {}) => {
     if (!isPlayer(killer)) return;
-    if (!dangerNow()) rig.killCam(target, position);
+    onKill(target, position);
   });
   on('player:destroyed', ({ position, velocity } = {}) => {
     rig.addTrauma(1);
@@ -112,6 +138,8 @@ export function createSystem(game) {
     if (rig.view !== 'death') rig.deathCam(position ?? game.flight.position);
   });
   on('player:respawn', () => {
+    proxies.clear();
+    shots.clear();
     screen.reset();
     rig.reset(game.flight);
     post?.water?.clear();
@@ -186,6 +214,108 @@ export function createSystem(game) {
       health: h.health ?? 1,
       crashed: game.flight.crashed,
     });
+  }
+
+  // --- kill cam -------------------------------------------------------------
+  const slowOk = () => rig.options.slowMo && !rig.options.reducedMotion;
+  const world = () => game.systems.combat?.world;
+
+  /** A kill by the player: the projectile cam's impact, or a fast shot. */
+  function onKill(target, position) {
+    const pos = position ?? target?.position;
+    if (!pos) return;
+    const riding = rig.killPhase === 'projectile' && rig._override.target === target;
+    if (riding) {
+      // the ridden shot landed: impact, with the airframe breaking up
+      let proxy = null;
+      if (target?.class === 'air' && !rig.options.reducedMotion) {
+        const plan = impactPlan(rig.camera.position, pos, rig._override.side, true, target.velocity);
+        const at = 0.18;
+        const tr = slowOk() ? realTimeFor((t) => impactScale(t), at) : at;
+        proxy = proxies.spawn(target, { rng, pass: { offset: passPoint(impactLensOffset(plan, tr)), at } });
+      }
+      rig.killCam(target, pos, { proxy });
+      return;
+    }
+    const air = target ? target.class === 'air' : false;
+    const shot = killShot({
+      enabled: rig.options.killCam, reducedMotion: rig.options.reducedMotion, danger: dangerNow(),
+      sinceLast: rig.killSince, air, distance: pos.distanceTo(playerPos()), roll: api.forceKillShot ? 0 : rng(),
+    });
+    if (!shot) return;
+    if (rig._override && rig._override.view !== 'missile') return;
+    const side = rng() < 0.5 ? -1 : 1;
+    let angle;
+    let proxy = null;
+    if (shot === 'air') {
+      angle = api.forceAngle ?? pickAirAngle(recentAngles, rng(), { agl: pos.y - terrainHeight(pos.x, pos.z) });
+      recentAngles.push(angle);
+      if (recentAngles.length > 4) recentAngles.shift();
+      // the same heading frame the shot uses (killSequence.shotState)
+      const v = target.velocity ?? _v.set(0, 0, 0);
+      const f = _v.set(v.x, 0, v.z);
+      if (f.lengthSq() < 1) f.set(pos.x - playerPos().x, 0, pos.z - playerPos().z);
+      if (f.lengthSq() < 1) f.set(0, 0, -1);
+      f.normalize();
+      const r = _g.crossVectors(f, THREE.Object3D.DEFAULT_UP).normalize();
+      const at = 0.3;
+      const tr = slowOk() ? realTimeFor((t) => shotScale(t, KILL.air, 0.45), at) : at;
+      const lens = airShotOffset(angle, tr, side, f, r);
+      proxy = proxies.spawn(target, { rng, pass: { offset: passPoint(lens), at } });
+    } else if (shot === 'brief' && air) {
+      proxy = proxies.spawn(target, { rng });
+    }
+    rig.killCam(target, pos, { shot, angle, side, proxy });
+  }
+
+  /**
+   * Watch the player's projectiles: when one is about to land a killing
+   * hit (KILL.trigger game seconds out), roll once for the projectile cam.
+   */
+  function watchShots() {
+    const w = world();
+    for (const [m, s] of shots) {
+      if (m.alive === false || !w) { shots.delete(m); continue; }
+      if (s.decided || (m.age ?? 1) < 0.15) continue;
+      const guided = m.kind !== 'rocket';
+      let target = guided ? m.target : null;
+      let best = null;
+      if (guided) {
+        if (!target || target.isFlare || target.alive === false || target.team !== 'hostile') continue;
+        best = intercept(m, target);
+      } else {
+        // unguided: whichever live hostile its straight line runs into first
+        for (const t of w.targets) {
+          if (!t.alive || t.team !== 'hostile' || t.isFlare) continue;
+          if (Math.abs(t.position.x - m.position.x) > 1500 || Math.abs(t.position.z - m.position.z) > 1500) continue;
+          const p = intercept(m, t);
+          if (p.miss <= (t.radius ?? 8) + (m.weapon?.fuse ?? 6) && (!best || p.tgo < best.tgo)) { best = p; target = t; }
+        }
+        if (!best) continue;
+      }
+      if (!(best.tgo <= KILL.trigger)) continue;
+      s.decided = true;
+      if (rig._override && rig._override.view !== 'missile') continue;
+      const wpn = m.weapon ?? {};
+      const lethal = predictKill({
+        tgo: best.tgo, miss: best.miss, hitRadius: (target.radius ?? 8) + (wpn.fuse ?? 10),
+        damage: damageAgainst(wpn, target.armor), health: target.health ?? 0, guided,
+      });
+      if (!lethal) continue;
+      const special = isSpecial({ last: lastOfGroup(target, w.targets), launchRange: s.launchRange, offBoresight: s.offBoresight, weapon: wpn.id });
+      if (wantsProjectileCam({
+        enabled: rig.options.killCam, slowMo: rig.options.slowMo, reducedMotion: rig.options.reducedMotion,
+        danger: dangerNow(), sinceLast: rig.killSince, special, roll: api.forceProjectile ? 0 : rng(),
+      })) rig.projectileCam(m, target);
+    }
+  }
+
+  function intercept(m, t) {
+    const tv = t.velocity ?? _g.set(0, 0, 0);
+    return predictIntercept(
+      { x: t.position.x - m.position.x, y: t.position.y - m.position.y, z: t.position.z - m.position.z },
+      { x: m.velocity.x - tv.x, y: m.velocity.y - tv.y, z: m.velocity.z - tv.z },
+    );
   }
 
   /** The enemy the action camera frames: the selected air target, else the nearest hostile fighter within 3.5 km. */
@@ -279,12 +409,26 @@ export function createSystem(game) {
     },
 
     update(dt) {
-      if (actionPressed('camera', 'KeyC')) rig.cycleMode();
-      if (actionPressed('missileCam', 'KeyB')) rig.options.missileCam = !rig.options.missileCam;
+      // Kill cam: any fire or camera input skips it (the camera keys do only
+      // that this frame); danger ends it at once.
+      let skipped = false;
+      if (rig.killPhase) {
+        const p = input?.pressed ?? {};
+        if (dangerNow()) rig.endKill('danger');
+        else if (p.fireMissile || p.fireGun || p.camera || p.cinematicCam || p.missileCam || actionHeld('lookTarget', 'KeyV')) {
+          rig.endKill('skip');
+          skipped = true;
+        }
+      }
+      watchShots();
+      proxies.update(dt);
+
+      if (!skipped && actionPressed('camera', 'KeyC')) rig.cycleMode();
+      if (!skipped && actionPressed('missileCam', 'KeyB')) rig.options.missileCam = !rig.options.missileCam;
       // Cinematic camera: the director cuts between shots around the jet while
       // the player flies; toggled off, or ended by a threat, a weapon, the
       // camera key or the jet coming down.
-      if (actionPressed('cinematicCam', 'KeyH') && game.playerControl) {
+      if (!skipped && actionPressed('cinematicCam', 'KeyH') && game.playerControl) {
         if (rig.cinematicName === 'director') rig.stopCinematic('director');
         else if (!dangerNow()) rig.playCinematic('director', { blendOut: 0.8 }).catch(() => {});
       }
@@ -414,6 +558,7 @@ export function createSystem(game) {
     },
 
     dispose() {
+      proxies.clear();
       for (const o of off) o();
       if (canvas?.removeEventListener) {
         canvas.removeEventListener('pointerdown', onDown);

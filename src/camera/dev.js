@@ -6,7 +6,9 @@
 //   await __camTest('cloud')     overcast, flying through the deck at 6.6 km
 //   await __camTest('rain')      storm preset under the base, heavy rain
 //   await __camTest('cockpitRain')  same, cockpit view
-//   await __camTest('kill')      a bandit ahead is destroyed: slow-mo kill cam
+//   await __camTest('kill')      a bandit ahead is destroyed: the fast air kill shot
+//   await __camTest('killMissile', {weapon, range})  missile kill, projectile cam forced
+//   await __camTest('killGround', {type, weapon, shot})  ground kill (projectile cam or orbit)
 //   await __camTest('lock')      a bandit 1.6 km ahead, lock cam held
 //   await __camTest('sun')       nose on the sun at 20 deg elevation
 //   await __camTest('title')     the title flyby cinematic
@@ -17,6 +19,7 @@
 import { Autopilot } from '../game/Autopilot.js';
 import { terrainHeight, maxHeightAlong } from '../world/terrain/heightfield.js';
 import { traceValleyRoad } from '../ai/sites.js';
+import { WEAPONS, damageAgainst } from '../combat/weapons.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,6 +41,9 @@ export function installCameraDev(game, sys) {
     rig.lockHeld = false;
     rig.devHold = false;
     sys.devLock = false;
+    sys.forceProjectile = false;
+    sys.forceKillShot = false;
+    rig._killEnd = -1e9; // no cooldown between scenarios
     sys.weatherOverride = null;
     if (saved) {
       game.env?.setPreset?.(saved.preset);
@@ -132,11 +138,82 @@ export function installCameraDev(game, sys) {
       await wait(900);
       const combat = game.systems.combat;
       rig.devHold = !!opts.hold;
-      e.alive = false;
-      game.events.emit('explosion', { position: e.position.clone(), size: 'large', kind: 'air', velocity: e.velocity?.clone?.() });
-      game.events.emit('target:destroyed', { target: e, killer: combat.player, position: e.position.clone(), score: 100 });
+      const go = () => {
+        sys.forceAngle = opts.angle ?? null; // 'lowSide' | 'frontQuarter' | 'topDown' | 'debris'
+        combat.world.kill(e, combat.player);
+        sys.forceAngle = null;
+      };
+      if (opts.defer) return { e, go };
+      go();
       await wait(opts.after ?? 500);
       return e;
+    },
+    /**
+     * A missile kill with the projectile cam forced on (the roll is skipped).
+     * opts: weapon ('msl' | 'hobs' | 'lraam'), range (m), off (m, the
+     * bandit's lateral offset), wait (ms after the launch to return).
+     */
+    async killMissile(opts = {}) {
+      save(); rig.setMode('chase');
+      cruise(1400);
+      await wait(1500);
+      const f = game.flight;
+      const p = ahead(opts.range ?? 1500, 20);
+      const lat = opts.off ?? 0;
+      const [e] = game.systems.ai.spawnFighters({ at: { x: p.x + f.right.x * lat, z: p.z + f.right.z * lat, alt: p.alt }, count: 1, heading: headingDeg() + (opts.turn ?? 0), speed: 220 });
+      await wait(700);
+      const combat = game.systems.combat;
+      sys.forceProjectile = opts.force !== false;
+      const w = WEAPONS[opts.weapon ?? 'msl'];
+      e.health = Math.min(e.health, w.damage * 0.95); // one hit kills it
+      const go = () => {
+        const pos = f.position.clone().addScaledVector(f.right, 2.1).addScaledVector(f.up, -1.25).addScaledVector(f.forward, 1);
+        return combat.world.fireMissile({ weapon: w, owner: combat.player, target: e, position: pos, direction: f.forward.clone(), velocity: f.velocity.clone() });
+      };
+      if (opts.defer) return { e, go }; // the caller fires (capture: frame-exact)
+      const m = go();
+      await wait(opts.wait ?? 400);
+      return { e, m };
+    },
+    /**
+     * A ground kill. opts: type ('truck' | 'sangar' | ...), weapon ('msl' |
+     * 'rkt'), dist (m ahead), shot ('projectile' | 'shot': the fast orbit).
+     */
+    async killGround(opts = {}) {
+      save(); rig.setMode('chase');
+      cruise(opts.agl ?? 1100);
+      await wait(1500);
+      const f = game.flight;
+      const p = ahead(opts.dist ?? 2400);
+      const ai = game.systems.ai;
+      const u = ai.spawnGround(opts.type ?? 'truck', p.x, p.z, {});
+      const e = u.entity;
+      await wait(900);
+      const combat = game.systems.combat;
+      const wid = opts.weapon ?? 'msl';
+      const w = WEAPONS[wid];
+      if (opts.shot === 'shot') {
+        sys.forceProjectile = false;
+        sys.forceKillShot = true; // skip the ground-shot roll
+        const go = () => e.alive && combat.world.kill(e, combat.player);
+        if (opts.defer) return { e, go };
+        go();
+        await wait(opts.wait ?? 400);
+        return { e };
+      }
+      sys.forceProjectile = true;
+      e.health = Math.min(e.health, damageAgainst(w, e.armor) * 0.95);
+      const go = () => {
+        const pos = f.position.clone().addScaledVector(f.up, -1.25).addScaledVector(f.forward, 1);
+        const dir = e.position.clone().sub(pos);
+        if (w.type === 'rocket') dir.y += 0.25 * 9.81 * (dir.length() / 700) ** 2; // the drop
+        dir.normalize();
+        return combat.world.fireMissile({ weapon: w, owner: combat.player, target: w.type === 'missile' ? e : null, position: pos, direction: dir, velocity: f.velocity.clone() });
+      };
+      if (opts.defer) return { e, go };
+      const m = go();
+      await wait(opts.wait ?? 400);
+      return { e, m };
     },
     async lock() {
       save(); rig.setMode('chase');
