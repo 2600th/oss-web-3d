@@ -18,8 +18,9 @@
  *    composited. Normal map and KHR_materials_specular texture are untouched.
  * 2. public/models/mig21_cockpit.glb, overlay screens: screen_mfd and
  *    screen_text (256 px, aliased 1 px lines from tools/blender/build_cockpit.py)
- *    become 512 px anti-aliased drawings with the same layout (radar B-scope:
- *    range arcs, azimuth limits, centre line, blips; amber segment readouts).
+ *    become 512 px anti-aliased drawings (radar B-scope: range arcs, azimuth
+ *    limits, centre line, blips; amber segment readouts, six lines of four
+ *    characters laid out for the upright gunsight displays, see textSVG).
  *
  * Idempotent guard: the atlas is only rebuilt while it is still 1024 px, so
  * re-running after `tools/blender/build-mig-player.mjs` is safe; running it
@@ -300,22 +301,34 @@ function segDigit(ch, x, y) {
   return s;
 }
 
+// The readout is drawn for the glass it is read on: the two displays beside
+// the gunsight, 21 x 34 mm upright (TEXT_ASPECT in build_cockpit.py). The SVG
+// is laid out in that shape and rendered into the square texture without
+// keeping its aspect, so the quad's 0..1 UVs show it undistorted. The square
+// aux_screen_c shows the top four of the six rows.
+const TEXT_W = 61.9, TEXT_H = 100, TEXT_ROWS = ['0540', '-127', '3245', '18.6', '1200', '0395'];
+
 function textSVG(n) {
-  let s = '<rect width="256" height="256" fill="rgb(0,9,5)"/>';
-  // Four characters a row: the side displays are narrow quads (~1:1.4), so
-  // eight-character rows squeezed into unreadable noise there.
-  const rows = ['0540', '-127', '3245', '18.6', '1200', '0395'];
-  const k = 2.6; // digit scale (12 x 18 units each)
-  rows.forEach((row, ri) => {
-    const y = 10 + ri * 41;
-    let x = 18;
+  let s = `<rect width="${TEXT_W}" height="${TEXT_H}" fill="rgb(0,9,5)"/>`;
+  // Four characters a row, and rows that read as rows: the gap between two
+  // characters (3.6) is smaller than the gap between two lines (5.3), and a
+  // faint rule separates the lines. The first layout had it the other way
+  // round (1 unit between lines, 27 between characters), so on a display 45 px
+  // wide the digits fused into four columns and the text read top to bottom.
+  const band = TEXT_H / TEXT_ROWS.length; // one line
+  const gw = 9.2, gh = 11.4, pitch = 12.8; // glyph box and character pitch
+  const x0 = (TEXT_W - (3 * pitch + gw)) / 2;
+  TEXT_ROWS.forEach((row, ri) => {
+    const y = ri * band + (band - gh) / 2;
+    let x = x0;
     for (const ch of row) {
-      if (ch === '.') { s += `<rect x="${x - 9}" y="${y + 18 * k * 0.85 - 6}" width="6" height="6" fill="#ff9e26"/>`; continue; }
-      if (ch !== ' ') s += `<g transform="translate(${x} ${y}) scale(${k} ${k * 0.85})">${segDigit(ch, 0, 0)}</g>`;
-      x += 58;
+      if (ch === '.') { s += `<rect x="${(x - (pitch - gw) / 2 - 0.8).toFixed(2)}" y="${(y + gh - 1.7).toFixed(2)}" width="1.6" height="1.7" fill="#ff9e26"/>`; continue; }
+      if (ch !== ' ') s += `<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${gw / 12} ${gh / 18})">${segDigit(ch, 0, 0)}</g>`;
+      x += pitch;
     }
+    if (ri) s += `<rect x="4" y="${(ri * band - 0.2).toFixed(2)}" width="${TEXT_W - 8}" height="0.4" fill="#ff9e26" opacity="0.28"/>`;
   });
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 256 256">${s}</svg>`);
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 ${TEXT_W} ${TEXT_H}" preserveAspectRatio="none">${s}</svg>`);
 }
 
 // ------------------------------------------------------------------ main
