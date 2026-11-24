@@ -83,8 +83,15 @@ export function installTrailer(game, dev) {
     missileCam(on = true) { rig.options.missileCam = on; },
     killCam(on = true) { rig.options.killCam = on; },
 
-    /** Record `seconds` to captures/<clip>/ (capture.js). */
-    rec(clip, seconds, opts = {}) { return window.__capture.record({ clip, seconds, ...opts }); },
+    /**
+     * Record `seconds` to captures/<clip>/ (capture.js). opts.pre (s, default
+     * 1.5): rendered but unsaved lead-in, so auto-exposure, TAA and the
+     * camera settle (the headless sim never runs post-processing).
+     */
+    async rec(clip, seconds, { pre = 1.5, ...opts } = {}) {
+      if (pre > 0) await window.__capture.step(pre);
+      return window.__capture.record({ clip, seconds, ...opts });
+    },
 
     /** Height of the ground under the jet, and AGL. */
     agl() { const p = game.flight.position; return p.y - terrainHeight(p.x, p.z); },
