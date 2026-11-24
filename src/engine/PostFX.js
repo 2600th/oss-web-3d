@@ -322,6 +322,7 @@ export class PostFX {
     const vis = visNode.x; // 1x1 target: the node's own uv() samples the only texel
 
     // --- [realism] low-sun crepuscular rays (skipped while their strength is 0) --
+    this._rays?.history.dispose(); // the pipeline is rebuilt for every stage added
     this._rays = null;
     if (cfg.godRays) {
       const g = createGodRays({
@@ -329,9 +330,9 @@ export class PostFX {
         samples: cfg.godRays.samples, scale: cfg.godRays.scale,
         u: { floor: u.godRayFloor, cap: u.godRayCap, decay: u.godRayDecay, airLength: u.godRayAir },
       });
-      for (const node of [g.mask, g]) {
+      for (const node of [g.mask, g.history, g]) {
         const run = node.updateBefore.bind(node);
-        node.updateBefore = (frame) => { if (u.godRays.value > 0.001) run(frame); };
+        node.updateBefore = (frame) => { if (u.godRays.value > 0.001) run(frame); else g.history.restart(); };
       }
       this._rays = g;
     }
@@ -548,6 +549,7 @@ export class PostFX {
     if (!this._vpPrimed || this._cutFrames > 0) { this._prevVP.value.copy(_m); this._vpPrimed = true; }
     else this._prevVP.value.copy(this._curVP.value);
     this._curVP.value.copy(_m);
+    this._rays?.updateCamera(cam, this._cutFrames > 0);
 
     // flight-path focus on screen (speed zoom, streaks, shock): the point the
     // world streams out of. Falls back to the centre when it is off-screen.

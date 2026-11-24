@@ -170,3 +170,44 @@ test('rainFrom: override > weather owner > env.rain > storm heuristic under the 
   assert.equal(rainFrom({ preset: 'default', presets: { default: {} } }, 2000), 0);
   assert.equal(rainFrom(null, 0), 0);
 });
+
+test('god rays: overlapping emitter footprints do not depend on sub-pixel alignment', async () => {
+  const { emitterTaps, footprintEmission, emitterBlend, EMITTER_BLEND, rayMarchLod, rayTapShare } = await import('./post/godRayMath.js');
+  // sixteen taps, each on a source-pixel corner (odd multiples of half a pixel = scale / 2 mask texels)
+  const taps = emitterTaps(0.25);
+  assert.equal(taps.length, 16);
+  for (const [x, y] of taps) {
+    for (const v of [x, y]) {
+      const px = v / 0.25; // source pixels from the texel centre
+      assert.ok(Math.abs(px - Math.round(px)) < 1e-9, `tap ${v} is not on a pixel corner`);
+      assert.ok(Math.abs(v) <= 0.5 + 1e-9);
+    }
+  }
+  // a two-pixel feature far brighter than the cap, at two alignments
+  const row = (at) => { const r = new Array(12).fill(0); r[at] = 5000; r[at + 1] = 5000; return r; };
+  const cap = 4, floor = 1;
+  // side by side (the old mask): one footprint or two, a factor of 2 between frames
+  assert.equal(footprintEmission(row(4), 2, floor, cap), cap);
+  assert.equal(footprintEmission(row(5), 2, floor, cap), 2 * cap);
+  // overlapping: the same either way, and equal to the old average
+  const a = footprintEmission(row(4), 1, floor, cap), b = footprintEmission(row(5), 1, floor, cap);
+  assert.equal(a, b);
+  assert.equal(a, 1.5 * cap);
+  // accumulation: restart replaces, otherwise the fixed blend
+  assert.equal(emitterBlend(true), 1);
+  assert.equal(emitterBlend(false), EMITTER_BLEND);
+});
+
+test('god rays: reading the mask at the step-length mip collects every emitter along the ray', async () => {
+  const { rayMarchLod, rayTapShare } = await import('./post/godRayMath.js');
+  assert.equal(rayMarchLod(0.3), 0);
+  assert.equal(rayMarchLod(4), 2);
+  const step = 4;
+  const shares = (lod) => [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875].map((ph) => rayTapShare(step, ph, lod));
+  // level 0: a tap hits the emitter or steps over it
+  const s0 = shares(0);
+  assert.equal(Math.max(...s0), 1);
+  assert.equal(Math.min(...s0), 0);
+  // matching level: the true share 1 / step wherever the emitter sits
+  for (const s of shares(rayMarchLod(step))) assert.ok(Math.abs(s - 1 / step) < 1e-12);
+});
