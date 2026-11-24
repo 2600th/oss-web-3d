@@ -1309,3 +1309,30 @@ Owner paths: `src/camera/**`, the kill and missile parts of `src/flight/CameraRi
   - New scenarios `__camTest('killMissile', {weapon, range, off, turn})` and `__camTest('killGround', {type, weapon, shot})`.
   - `kill` takes `{angle}`. Every scenario takes `{defer: true}`, which returns `go()` for frame-exact capture.
   - `game.systems.camera.forceProjectile`, `forceKillShot` and `forceAngle` skip the rolls.
+
+### HUD legibility over bright terrain (changed)
+
+Owner paths: `src/ui/Hud.js`, `src/ui/theme.js`, `src/ui/ownJet.js` (new). Evidence and measured contrast: `docs/v2/evidence/hud-legibility/`.
+
+- **Daylight halo (`theme.js` `DAY`, `adaptTheme(base, k)`, `daylight(stats)`):**
+  - The HUD derives a daylight factor `k` from the post chain's metered luminance, `post.stats.adaptedLog2 + ev`. PostFX already reads its 1x1 meter back; the HUD adds no readback. A missing meter counts as day.
+  - `k` eases over about a second, and the theme is rebuilt only on a 0.05 step.
+  - At `k = 1`:
+    - Strokes: the halo goes from 0.8 to 0.92 alpha and from 2.6 to 3.2 px wider than the ink.
+    - Glyphs: the halo goes from 0.68 to 0.90, with a slightly wider clamp.
+    - A soft wide halo (0.3 alpha, +3.6 px) is drawn under strokes and glyphs.
+    - `dim` ink goes from 0.74 to 0.90 alpha, `faint` from 0.40 to 0.62.
+    - Dark plates go under the THR column, the AIRFRAME segments and the objective progress.
+    - The tape-end numeral fade stops at 0.6.
+  - `k = 0` (night) is exactly the previous theme.
+  - Measured: every symbology region is at or above 3:1 against its immediate surround (halo included) over cloud, snow, sunlit rock and the burner. Night is unchanged.
+- **Own jet as a label obstacle (`ownJet.js`):**
+  - In the outside views, six model-space boxes of the MiG-21 are projected to screen rects each frame (48 points, no allocation): fuselage and nozzle glow, fin, inner wing, stabilators and the two outer panels.
+  - Target labels avoid them the way they avoid the instruments, at weight 1.5. Leader slots gain a 64-unit reach while the jet is on screen.
+  - Markers still draw. Not applied in first person (`cockpit`, `hud`).
+  - The flight path marker (last frame's position) is now a label obstacle in every view.
+- **Hud fields (dev / evidence):**
+  - `hud.haloBoost` (null = metered; 0..1 pins `k`).
+  - `hud.ownJetObstacle` (default true).
+  - Capture and measurement helpers: `tools/hud/hud-capture.js` (in page) and `tools/hud/hud-contrast.mjs`.
+- **Cost:** about +0.04 ms CPU per HUD redraw (24 targets, 0.21–0.23 ms at night style, 0.25–0.28 ms at day style).
