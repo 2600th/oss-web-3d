@@ -2,7 +2,7 @@ import {
   Fn, float, vec2, ivec2, uniform, reference, renderGroup, texture, textureLoad, If, clamp, step,
   screenCoordinate, interleavedGradientNoise, vogelDiskSample,
 } from 'three/tsl';
-import { ShadowNode } from 'three/webgpu';
+import { ShadowNode, Vector3 } from 'three/webgpu';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import {
   cascadeSplits, cascadeBias, penumbraSlope, fallbackRadius, sunShadowConfig, SUN_ANGULAR_DIAMETER, MOON_ANGULAR_DIAMETER,
@@ -50,6 +50,7 @@ const FAR_SLAB = 6;
 const FAR_SEPARATION = 110; // 0.51 m: fades a 0.16 m mast past ~6 m like the PCSS path does
 
 const _filters = new WeakMap();
+const _c = new Vector3();
 
 /** Per-shadow uniforms shared by every material using that cascade. */
 function shadowUniforms(shadow) {
@@ -224,6 +225,122 @@ class SunCascades extends CSMShadowNode {
     this._gameCamera = camera;
     this._cfg = cfg;
     this._filter = filter;
+    /**
+     * [engine perf] Do not redraw a cascade that nothing can sample this frame
+     * (see _markReceivers). false = redraw every cascade every frame.
+     */
+    this.cullEmpty = true;
+    /** (cameraPosition, radius) => true when no terrain is within `radius` (set by Terrain). */
+    this.terrainClear = null;
+    /** Per cascade: 1 when it was needed in the last render (dev / tests). */
+    this.needed = new Uint8Array(cfg.cascades).fill(1);
+    this._lo = new Float32Array(cfg.cascades);
+    this._hi = new Float32Array(cfg.cascades);
+    this._view = { px: 0, py: 0, pz: 0, fx: 0, fy: 0, fz: -1, mask: 0, left: 0, terrain: false };
+  }
+
+  updateBefore(frame) {
+    super.updateBefore(frame);
+    this._markReceivers(frame);
+  }
+
+  /**
+   * [engine perf] Which cascades can be sampled in this render. A pixel reads
+   * cascade i only when its view depth lies in that cascade's slice (plus the
+   * fade band, see CSMShadowNode._setupFade), and only objects with
+   * `receiveShadow` read the shadow at all. So a cascade whose slice holds no
+   * receiver is never sampled, and drawing its map (every caster in it, again)
+   * buys nothing: at altitude the jet alone sits in the first slice and the
+   * ground in the last one. The test is conservative: bounding boxes with
+   * slack by depth only (no side planes), anything it cannot bound counts for
+   * every cascade, and the terrain (group.userData.cascadeReceiver) is asked
+   * for through `terrainClear` with the distance of the slice's far corners.
+   * A skipped map keeps its old content until its slice has a receiver again;
+   * it is redrawn in that same render, before anything samples it.
+   */
+  _markReceivers(frame) {
+    const lights = this.lights;
+    const n = lights.length;
+    const need = this.needed;
+    const cam = frame?.camera;
+    const scene = frame?.scene;
+    if (!this.cullEmpty || !cam || !scene || !this.camera) {
+      for (let i = 0; i < n; i++) { need[i] = 1; lights[i].shadow.autoUpdate = true; }
+      return;
+    }
+    // slices in metres of view depth, as the shader computes them
+    const near = this.camera.near;
+    const span = Math.min(this.maxFar, this.camera.far) - near;
+    for (let i = 0; i < n; i++) {
+      const c = this._cascades[i];
+      this._lo[i] = near + (c.x - 0.125 * c.x * c.x) * span - 0.5;
+      this._hi[i] = near + (i === n - 1 ? c.y : c.y + 0.125 * c.y * c.y) * span + 0.5;
+      need[i] = 0;
+    }
+    const e = cam.matrixWorld.elements;
+    const v = this._view;
+    const fl = Math.hypot(e[8], e[9], e[10]) || 1;
+    v.fx = -e[8] / fl; v.fy = -e[9] / fl; v.fz = -e[10] / fl;
+    v.px = e[12]; v.py = e[13]; v.pz = e[14];
+    v.mask = cam.layers.mask;
+    v.left = n;
+    v.terrain = false;
+    this._walk(scene);
+    if (v.terrain && v.left > 0) {
+      // Terrain in view at distance r has view depth >= r * cos(angle of the
+      // frustum's corner rays): clear of it out to hi / cos means none in the slice.
+      let k = 0;
+      if (this.terrainClear && cam.isPerspectiveCamera) {
+        const t = Math.tan(cam.fov * Math.PI / 360) / (cam.zoom || 1);
+        k = Math.sqrt(1 + t * t * (1 + cam.aspect * cam.aspect)) * 1.05;
+      }
+      _c.set(v.px, v.py, v.pz);
+      for (let i = 0; i < n; i++) {
+        if (need[i] === 0 && !(k > 0 && this.terrainClear(_c, this._hi[i] * k))) need[i] = 1;
+      }
+    }
+    for (let i = 0; i < n; i++) lights[i].shadow.autoUpdate = need[i] === 1;
+  }
+
+  _markAll() {
+    this.needed.fill(1);
+    this._view.left = 0;
+  }
+
+  _walk(o) {
+    const v = this._view;
+    if (o.visible === false || v.left === 0) return;
+    if (o.userData.cascadeReceiver === 'terrain') { v.terrain = true; return; }
+    if (o.receiveShadow === true && (o.isMesh || o.isLine || o.isPoints || o.isSprite) && (o.layers.mask & v.mask) !== 0) {
+      const g = o.geometry;
+      if (!g || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
+        this._markAll();
+        return;
+      }
+      if (g.boundingBox === null) g.computeBoundingBox();
+      const bb = g.boundingBox;
+      const hx = (bb.max.x - bb.min.x) / 2;
+      const hy = (bb.max.y - bb.min.y) / 2;
+      const hz = (bb.max.z - bb.min.z) / 2;
+      if (!(hx >= 0 && hy >= 0 && hz >= 0) || !Number.isFinite(hx + hy + hz)) {
+        this._markAll();
+        return;
+      }
+      // depth extent of the oriented box along the view direction: a fuselage
+      // seen from the side is thin, a sphere around it is not
+      const m = o.matrixWorld.elements;
+      _c.set((bb.max.x + bb.min.x) / 2, (bb.max.y + bb.min.y) / 2, (bb.max.z + bb.min.z) / 2).applyMatrix4(o.matrixWorld);
+      const r = (Math.abs(m[0] * v.fx + m[1] * v.fy + m[2] * v.fz) * hx
+        + Math.abs(m[4] * v.fx + m[5] * v.fy + m[6] * v.fz) * hy
+        + Math.abs(m[8] * v.fx + m[9] * v.fy + m[10] * v.fz) * hz) * 1.1 + 0.5; // slack
+      const d = (_c.x - v.px) * v.fx + (_c.y - v.py) * v.fy + (_c.z - v.pz) * v.fz;
+      const need = this.needed;
+      for (let i = 0; i < need.length; i++) {
+        if (need[i] === 0 && d + r >= this._lo[i] && d - r <= this._hi[i]) { need[i] = 1; v.left--; }
+      }
+    }
+    const ch = o.children;
+    for (let i = 0; i < ch.length; i++) this._walk(ch[i]);
   }
 
   // CSMShadowNode takes the camera of whatever first builds a lit material;
@@ -239,6 +356,7 @@ class SunCascades extends CSMShadowNode {
       s.camera.updateProjectionMatrix();
       if (this._filter) s.filterNode = this._filter;
       s.radius = this._cfg.pcfRadius;
+      s.needsUpdate = true; // draw every map once, also one that starts out empty
     }
     this.refreshBias();
   }

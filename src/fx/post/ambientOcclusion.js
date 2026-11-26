@@ -168,7 +168,8 @@ export class NearFieldAO {
     a.matrix.copy(c.matrixWorld);
     // the main camera's layers: 0 (objects) + the terrain's view layer; the
     // terrain only reaches the prepass within `far`, and only on tiers that ask
-    a.layers.mask = this.cfg.terrain ? c.layers.mask : 1;
+    // `terrainLayer` (set by Terrain.bindNearAO): the blocks within `far`
+    a.layers.mask = !this.cfg.terrain ? 1 : this.terrainLayer != null ? 1 | (1 << this.terrainLayer) : c.layers.mask;
   }
 
   /** Render prepass + GTAO for this frame. Call before the main pipeline. */

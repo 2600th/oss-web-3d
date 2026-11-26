@@ -11,9 +11,15 @@ import { InspectorBase } from 'three/webgpu';
  * attributed to passes, then groups them into categories (shadow, scene,
  * atmosphere, clouds, vfx, post ...).
  *
- * Cost: one Map insert per pass while enabled, and one query resolve
- * (`mapAsync`, never awaited by the frame) per frame. When the renderer was not
- * created with timestamps it does nothing at all.
+ * Two modes. By default (`detailed = false`, what players run) it only keeps
+ * the frame total, which is all the adaptive resolution reads: no labels, no
+ * per-pass bookkeeping. With `detailed` (`?gputime` / `?perfhud`) it also
+ * records one label per pass and keeps the per-pass samples; the summary over
+ * the window is built when `result` or `summary()` is read, not every frame.
+ *
+ * Cost: one query resolve (`mapAsync`, never awaited by the frame) per frame,
+ * plus one Map insert per pass when detailed. When the renderer was not created
+ * with timestamps it does nothing at all.
  */
 
 /** Raw pass label -> category. First match wins. */
@@ -38,14 +44,20 @@ export class GpuProfiler extends InspectorBase {
     super();
     this.r = r;
     this.labels = new Map();
-    /** Latest smoothed result: { total, cats: {name: ms}, passes: [{label, ms, n}] }. */
-    this.result = null;
+    /** Record per-pass labels and samples (set by Perf for `?gputime` / `?perfhud`). */
+    this.detailed = false;
+    /** Benchmarks only: rebuild the summary on every frame, as this class did before it was lazy. */
+    this.eager = false;
+    this._result = null;
+    this._resultAt = -1;
     this._samples = []; // last N frames of {total, cats, passes}
     this.window = 60;
     this._pending = false;
     this.available = false;
     this.lastTotal = NaN;
     this.sampleCount = 0;
+    /** Set by Perf in detailed mode: `async` gets the ms this class spends in its query callback. */
+    this.cpuSum = null;
   }
 
   /** Install on the renderer. Returns false when timestamps are unavailable. */
@@ -75,12 +87,23 @@ export class GpuProfiler extends InspectorBase {
     return name;
   }
 
+  /** Latest smoothed result: { total, cats: {name: ms}, passes: [{label, ms, n}] }, or null. */
+  get result() {
+    if (this._resultAt !== this.sampleCount) {
+      this._resultAt = this.sampleCount;
+      this._result = this.summary();
+    }
+    return this._result;
+  }
+
   beginRender(uid, scene, camera, renderTarget) {
+    if (!this.detailed) return;
     if (this.labels.size > 4096) this.labels.clear();
     this.labels.set(uid, this._label(scene, camera, renderTarget));
   }
 
   beginCompute(uid, computeNodes) {
+    if (!this.detailed) return;
     if (this.labels.size > 4096) this.labels.clear();
     const n = Array.isArray(computeNodes) ? computeNodes[0] : computeNodes;
     this.labels.set(uid, 'compute: ' + (n?.name || n?.computeNode?.name || 'compute'));
@@ -92,10 +115,13 @@ export class GpuProfiler extends InspectorBase {
     const renderer = this.r.renderer;
     const backend = renderer.backend;
     this._pending = true;
+    let t0 = 0;
     Promise.all([
       renderer.resolveTimestampsAsync('render'),
       renderer.resolveTimestampsAsync('compute'),
     ]).then(() => {
+      t0 = this.cpuSum ? performance.now() : 0;
+      if (!this.detailed) { this._pushTotals(backend); return; }
       const frames = new Map();
       for (const type of ['render', 'compute']) {
         const pool = backend.timestampQueryPool?.[type];
@@ -110,7 +136,31 @@ export class GpuProfiler extends InspectorBase {
         }
       }
       for (const fr of frames.values()) this._push(fr);
-    }).catch(() => {}).finally(() => { this._pending = false; });
+    }).catch(() => {}).finally(() => {
+      if (this.cpuSum && t0) this.cpuSum.async += performance.now() - t0;
+      this._pending = false;
+    });
+  }
+
+  /** The frame totals alone (not detailed): one number per resolved frame. */
+  _pushTotals(backend) {
+    const totals = this._totals ?? (this._totals = new Map());
+    totals.clear();
+    for (const type of ['render', 'compute']) {
+      const pool = backend.timestampQueryPool?.[type];
+      if (!pool) continue;
+      for (const [uid, ms] of pool.timestamps) {
+        const i = uid.lastIndexOf(':f');
+        const f = i < 0 ? 0 : +uid.slice(i + 2);
+        totals.set(f, (totals.get(f) ?? 0) + ms);
+      }
+    }
+    for (const total of totals.values()) {
+      this._samples.push({ total, cats: null, passes: null });
+      if (this._samples.length > this.window) this._samples.shift();
+      this.lastTotal = total;
+      this.sampleCount++;
+    }
   }
 
   _push(entries) {
@@ -127,9 +177,9 @@ export class GpuProfiler extends InspectorBase {
     }
     this._samples.push({ total, cats, passes });
     this.lastTotal = total;
-    this.sampleCount = (this.sampleCount ?? 0) + 1;
+    this.sampleCount++;
     if (this._samples.length > this.window) this._samples.shift();
-    this.result = this.summary();
+    if (this.eager) { this._resultAt = this.sampleCount; this._result = this.summary(); }
   }
 
   /**
@@ -152,18 +202,18 @@ export class GpuProfiler extends InspectorBase {
     };
     const catNames = new Set();
     const passNames = new Set();
-    for (const f of s) { Object.keys(f.cats).forEach((k) => catNames.add(k)); Object.keys(f.passes).forEach((k) => passNames.add(k)); }
+    for (const f of s) { if (!f.cats) continue; Object.keys(f.cats).forEach((k) => catNames.add(k)); Object.keys(f.passes).forEach((k) => passNames.add(k)); }
     const cats = {};
-    for (const c of catNames) cats[c] = +med(s.map((f) => f.cats[c] ?? 0)).toFixed(3);
+    for (const c of catNames) cats[c] = +med(s.map((f) => f.cats?.[c] ?? 0)).toFixed(3);
     const passes = [];
     for (const p of passNames) {
-      passes.push({ label: p, cat: categorize(p), ms: +med(s.map((f) => f.passes[p]?.ms ?? 0)).toFixed(3), n: Math.max(...s.map((f) => f.passes[p]?.n ?? 0)) });
+      passes.push({ label: p, cat: categorize(p), ms: +med(s.map((f) => f.passes?.[p]?.ms ?? 0)).toFixed(3), n: Math.max(...s.map((f) => f.passes?.[p]?.n ?? 0)) });
     }
     passes.sort((a, b) => b.ms - a.ms);
     return { frames: s.length, total: +med(s.map((f) => f.total)).toFixed(3), cats, passes };
   }
 
-  reset() { this._samples.length = 0; this.result = null; }
+  reset() { this._samples.length = 0; this._result = null; this._resultAt = -1; }
 }
 
 export { categorize };

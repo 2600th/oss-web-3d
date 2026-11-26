@@ -28,6 +28,9 @@ import {
 
 const SKY_W = 192;
 const SKY_H = 108;
+// the sky-view LUT is redrawn when the altitude (km) or the sun's sin(elevation) moved this far
+const SKY_STEP_KM = 0.002;
+const SKY_STEP_MU = 2e-5;
 const AP_TILE = 32;
 const AP_TILES_X = 8;
 const AP_TILES_Y = 4;
@@ -40,6 +43,8 @@ export class Atmosphere {
   constructor(renderer, camera, params = {}) {
     this.renderer = renderer;
     this.camera = camera;
+    /** Redraw the sky-view LUT every frame (the behaviour before the input check in update()). */
+    this.skyViewAlways = false;
     this.params = { ...DEFAULT_ATMOSPHERE, ...params };
 
     this.u = {
@@ -104,6 +109,7 @@ export class Atmosphere {
     this.transmittanceTexture.needsUpdate = true;
     this.multiScatterTexture.needsUpdate = true;
     this.u.haze.value = a.haze;
+    this._lutVersion = (this._lutVersion ?? 0) + 1; // the sky-view LUT integrates through these
   }
 
   setHaze(haze) {
@@ -397,9 +403,23 @@ export class Atmosphere {
     const renderer = this.renderer;
     this.syncCamera(camera);
     this._state = THREE.RendererUtils.resetRendererState(renderer, this._state);
-    this._quad.material = this._skyViewMaterial;
-    renderer.setRenderTarget(this.skyViewTarget);
-    this._quad.render(renderer);
+    // [engine perf] The sky-view LUT is a function of the camera's altitude,
+    // the sun's elevation (it is laid out around the sun's azimuth), the haze
+    // and the two precomputed LUTs, nothing else: redraw it when one of those
+    // has moved, not every frame. The steps are far below what shows (2 m of
+    // altitude against an 8 km scale height, 0.001 degrees of sun), and the
+    // drift never adds up: the stored values are the ones last drawn with.
+    const u = this.u;
+    const sky = this._sky ??= { km: NaN, mu: NaN, haze: NaN, version: -1 };
+    const km = u.cameraKm.value;
+    const mu = u.sunDir.value.y;
+    if (this.skyViewAlways || !(Math.abs(km - sky.km) <= SKY_STEP_KM) || !(Math.abs(mu - sky.mu) <= SKY_STEP_MU)
+      || u.haze.value !== sky.haze || sky.version !== this._lutVersion) {
+      sky.km = km; sky.mu = mu; sky.haze = u.haze.value; sky.version = this._lutVersion;
+      this._quad.material = this._skyViewMaterial;
+      renderer.setRenderTarget(this.skyViewTarget);
+      this._quad.render(renderer);
+    }
     this._quad.material = this._apMaterial;
     renderer.setRenderTarget(this.apTarget);
     this._quad.render(renderer);

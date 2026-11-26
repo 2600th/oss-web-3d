@@ -343,6 +343,11 @@ Non-obvious decisions that are still true in the code. Check here before "fixing
 - Cloud temporal resolve keeps guesses and history on the pixel's own surface (`sameSurface`)
   and resets history on a camera cut (`cameraCut`). This stops horizon flicker at low sun.
 - God rays accumulate their emitter mask over time (`EmitterHistory`) so shafts do not pulse.
+- Above a cloud deck the lower half of the environment light is sunlit cloud top, not ground:
+  the cloud probe measures `clouds.deckCover` under the camera and `Environment._deckFactor`
+  blends it in (hemisphere fill and the PMREM, rebuilt at most every 1.5 s).
+- At a low sun the directionless sun fill inside clouds (`deep`, `diffuse`) scales down to
+  `clouds.u.lowSunFill` (0.2), so shaded flanks take the sky's colour; 1 switches it off.
 - A failing cloud pass is reported once by `PassGuard` and backs off; it does not throw per frame.
 - FRAME-type nodes (cloud passes, TRAA, god-ray history) only advance when three's animation loop
   ticks. Rendering by hand outside it freezes them; `__capture` runs on the loop for this reason.
@@ -395,6 +400,14 @@ Non-obvious decisions that are still true in the code. Check here before "fixing
 - Adaptive resolution (`src/engine/AdaptiveResolution.js`) scales the tier's pixel ratio to hold
   a GPU budget.
 - PostFX meters (auto-exposure, sun visibility) render and read back every 4th frame.
+- Frame-time work that is skipped when it cannot change the picture, each with a runtime switch
+  (table in `tools/perf/README.md`): timestamp queries run on about 20 frames a second (enough for
+  the adaptive resolution's median), the profiler keeps per-pass detail only with `?gputime` /
+  `?perfhud`, the cloud shadow map and deck probe redraw about 30 times a second, the sky-view LUT
+  redraws when its inputs move, the AO depth prepass draws only terrain within the AO range, and a
+  sun cascade is not redrawn while no shadow receiver lies in its depth slice
+  (`SunCascades._markReceivers`; `tools/perf/cullcheck.js` asserts the two culling tests in flight).
+- Measure frame time with `tools/perf/frame.js` and compare with `tools/perf/abx.js` (interleaved A/B).
 - The GPU profiler labels passes by render-target or quad material name. Name yours.
 - Ground units and hostile jets use LODs (`UnitLOD`, `src/ai/models.js`); hostile MiG LOD1 at 600 m.
 - Analytics are not injected on localhost.

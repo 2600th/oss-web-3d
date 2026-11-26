@@ -20,6 +20,13 @@ DevTools snippet. Write result files to `captures/perf/` (gitignored).
   poll it with a second call.
 - **Wall-clock numbers** (flush, load) are affected by every other tab using
   the GPU process. Repeat them and report the median.
+- **Frame time (CPU + GPU) A/B: interleave.** Whole rounds of `frame.js` differ
+  by several percent from one to the next (other load on the machine, the
+  scene itself), which hides a 1 to 3 % change. Give the change a runtime
+  switch and run `abx.js`: the two settings alternate every 0.4 s in one run,
+  and the result carries its own standard error. Do not record a trace at the
+  same time (the sampling profiler adds about 70 % CPU), and close every other
+  tab that runs the game.
 
 ## URL flags (engine)
 
@@ -41,6 +48,11 @@ DevTools snippet. Write result files to `captures/perf/` (gitignored).
 | `bench.js` | GPU benchmark, busy-combat scenario at a fixed pose. Per-category and top-pass GPU ms, flush wall time, draws, CPU. Open `?mission=free&gputime&quality=X`, set the viewport (`emulate 2560x1440x1`), run with `filePath` = `<dir>/<prefix>-<tier>-<res>.json` |
 | `summarize.mjs` | `node tools/perf/summarize.mjs <dir> <prefix>`: markdown table of bench results |
 | `regress.mjs` | `node tools/perf/regress.mjs [dir=captures/perf] [new] [base=after] [tol=0.25]`: fails (exit 1) if a tier/res grew beyond tolerance or broke its hard budget |
+| `frame.js` + `framesum.mjs` | whole-frame cost at the display's pace: CPU ms per frame (update, render, tail) plus GPU ms, at a fixed pose, `combat` or `cruise`. Runs on the plain URL (`?mission=free&quality=X`, no `gputime`), so it measures what players run. `framesum.mjs` prints one line per result file |
+| `abx.js` | interleaved A/B of one runtime switch (`window.__abx = { set, scenario, seconds }`): ms per frame for both settings, the change in percent and its standard error |
+| `traceprofile.mjs` | self and inclusive CPU time per function from a Chrome trace: for finding hot spots, not for measuring |
+| `shotdiff.mjs` | compares two sets of reference frames (clips `<tag>-<view>` under `captures/`): mean difference, pixels over a threshold, brightness. Capture the same build twice first: that is the noise floor |
+| `cullcheck.js` | asserts, frame by frame over a set of poses, that nothing visible lies in a sun cascade that was skipped or in the AO range while the AO prepass draws no terrain |
 | `ab.js` | A/B cost of one scene component at a time (hide, measure, restore) from the GPU total. Use for things inside the main scene pass, and on WebGL2 |
 | `imgdiff.mjs` | pixel diff of two screenshots, to show a perf change is invisible |
 | `sortie.js` | flies a full mission with the dev bot (invulnerable) plus assisted kills, until the debrief. Used for the WebGL2 runs. The dev bot alone loops `weapon:switch` and never finishes a strike phase |
@@ -63,3 +75,17 @@ node tools/perf/regress.mjs captures/perf new after
 There is no checked-in baseline. Run the same loop on the commit you compare
 against first, with prefix `after` instead of `new`. Without base files the
 script still checks the hard budgets in `regress.mjs`.
+
+## Runtime switches for A/B
+
+Every frame-time optimisation keeps a switch that restores the old behaviour,
+so `abx.js` can measure it and a suspected regression can be bisected live:
+
+| switch (old behaviour) | what the new behaviour does |
+|---|---|
+| `__perf.profiler.detailed = true; __perf.profiler.eager = true` | profiler keeps per-pass labels and rebuilds its summary every frame (`?gputime` / `?perfhud` still do the former) |
+| `__perf.trackInterval = 0` | timestamp queries on every frame instead of about 20 frames a second |
+| `__game.env.clouds.slowInterval = 0` | cloud shadow map and deck probe every frame instead of about 30 times a second |
+| `__game.terrain.nearCull = false` | AO depth prepass draws every terrain block in view, not only those within the AO range |
+| `__game.env.sunShadows.node.cullEmpty = false` | every sun cascade is redrawn every frame, also one whose slice has nothing to receive it |
+| `__game.env.atmosphere.skyViewAlways = true` | sky-view LUT redrawn every frame instead of when altitude, sun elevation or haze moved |

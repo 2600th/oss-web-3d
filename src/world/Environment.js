@@ -49,6 +49,8 @@ export const PRESETS = {
 };
 
 const GROUND_ALBEDO = [0.26, 0.23, 0.2];
+// What a thick cloud top sends back up of the light that falls on it.
+const CLOUD_ALBEDO = 0.62;
 
 /**
  * [shadows] `receivedShadowNode` is a function, not a node, so three leaves it
@@ -249,19 +251,26 @@ export class Environment {
     const up = Math.max(this.sunDirection.y, 0);
     const vis = this.clouds ? 0.35 + 0.65 * this.sunVisibility : 1;
     const ground = GROUND_ALBEDO.map((a, i) => a * (e[i] * up * vis + amb.irradiance[i]) / Math.PI);
+    // Above a cloud deck the lower hemisphere is sunlit cloud top, not ground:
+    // several times brighter by day, and blue-grey at a low sun, when the
+    // tops are lit by the sky more than by the sun. `ground` itself stays the
+    // real ground, because it also lights the cloud bases from below.
+    const deck = this._deckFactor(altitude);
+    this._deckApplied = deck;
+    const lower = ground.map((g, i) => g + (CLOUD_ALBEDO * (e[i] * up + amb.irradiance[i]) / Math.PI - g) * deck);
     // Hemisphere fill: irradiance from above / from the ground, scaled down
     // because scene.environment already provides the image-based ambient.
     const f = this.ambientFill;
     const sm = Math.max(...amb.irradiance, 1e-4);
     this.ambient.color.setRGB(amb.irradiance[0] / sm, amb.irradiance[1] / sm, amb.irradiance[2] / sm);
-    const gi = ground.map((g) => g * Math.PI);
+    const gi = lower.map((g) => g * Math.PI);
     this.ambient.groundColor.setRGB(gi[0] / sm, gi[1] / sm, gi[2] / sm);
     this.ambient.intensity = sm * f;
     this._sunBase = m;
     this._ambientBase = sm * f;
 
     const t = this._envTintScalar ?? 1;
-    this._envGround.value.set(ground[0], ground[1], ground[2]);
+    this._envGround.value.set(lower[0], lower[1], lower[2]);
     this._envTint.value.set(t, t, t);
 
     if (this.clouds) {
@@ -279,7 +288,21 @@ export class Environment {
     this.skyAmbient = amb;
   }
 
+  /**
+   * 0..1: how much of what lies below the camera is cloud top. Zero under and
+   * inside the layer; above it, the cover the cloud probe measured.
+   */
+  _deckFactor(altitude) {
+    const c = this.clouds;
+    if (!c) return 0;
+    const base = c.u.base.value;
+    const depth = c.u.top.value - base;
+    const above = THREE.MathUtils.smoothstep(altitude, base + depth * 0.25, base + depth * 0.7);
+    return c.deckCover * above * (1 - THREE.MathUtils.clamp(this.inCloud, 0, 1));
+  }
+
   _updateEnvironmentMap(scene) {
+    this._envDeck = this._deckApplied ?? 0;
     const old = this._envTarget;
     this._envTarget = this._pmrem.fromScene(this._envScene, 0, 0.1, 100, { size: 128, renderTarget: old ?? null });
     if (scene && scene.environment !== this._envTarget.texture) scene.environment = this._envTarget.texture;
@@ -297,7 +320,11 @@ export class Environment {
     atm.u.sunDir.value.copy(this.solarDirection ?? this.sunDirection);
 
     const alt = camera.position.y;
-    if (this._dirty || this._lightsDirty || Math.abs(alt - this._lightAltitude) > 150) {
+    // the cloud deck came under the camera or left it: relight, and (no more
+    // than every 1.5 s) rebuild the reflection map with the new lower half
+    const deck = this._deckFactor(alt);
+    const deckMoved = Math.abs(deck - (this._deckApplied ?? 0)) > 0.04;
+    if (this._dirty || this._lightsDirty || deckMoved || Math.abs(alt - this._lightAltitude) > 150) {
       this._lightsDirty = false;
       this._lightAltitude = alt;
       this._updateLights(alt);
@@ -321,7 +348,8 @@ export class Environment {
     atm.update(camera);
 
     this._envAge += dt;
-    if (this._dirty || (this._envAge > 2 && Math.abs(alt - this._envAltitude) > 400)) {
+    const envDeckMoved = this._envAge > 1.5 && Math.abs((this._deckApplied ?? 0) - (this._envDeck ?? 0)) > 0.08;
+    if (this._dirty || envDeckMoved || (this._envAge > 2 && Math.abs(alt - this._envAltitude) > 400)) {
       this._envAltitude = alt;
       this._envAge = 0;
       this._updateEnvironmentMap(this._scene);

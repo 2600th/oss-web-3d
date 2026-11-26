@@ -7,7 +7,7 @@
 //
 //   await __capture.record({ clip: 'ridge', seconds: 4 })
 //   await __capture.record({ clip: 'launch', seconds: 3, each: (t, i) => { if (i === 10) fire(); } })
-//   __capture.step(seconds)      advance without saving (set a scene up)
+//   __capture.step(seconds, fps, each)   advance without saving (set a scene up)
 //
 // The tab must be visible (a background tab never presents its canvas; a
 // separate window works). Size the viewport to the output first (e.g.
@@ -75,7 +75,7 @@ export function installCapture(game) {
     // Driven by the renderer's animation loop, like record(): frame-based
     // nodes (the clouds' temporal resolve, TRAA history) only advance on its
     // ticks, so a plain loop of renders left them frozen through the lead-in.
-    async step(seconds, fps = 30) {
+    async step(seconds, fps = 30, each = null) {
       if (busy) throw new Error('capture busy');
       busy = true;
       hold();
@@ -85,7 +85,7 @@ export function installCapture(game) {
         const done = (err) => { r.renderer.setAnimationLoop(null); busy = false; release(); if (err) reject(err); else resolve(); };
         r.renderer.setAnimationLoop(() => {
           if (i >= n) return done(null);
-          try { frame(1 / fps); r.poll?.(); } catch (e) { return done(e); }
+          try { each?.(i / fps, i); frame(1 / fps); r.poll?.(); } catch (e) { return done(e); }
           i++;
         });
       });

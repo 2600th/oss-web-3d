@@ -58,8 +58,14 @@ const SHADOW_CAST_CELL = 0;
 // other object stays). A block is on one, both or neither (see update()).
 export const VIEW_LAYER = 1;
 export const SHADOW_LAYER = 2;
+// The near-field AO depth prepass has the main camera's frustum cut off at a
+// few hundred metres (`nearRange`). Blocks that reach into it are also on
+// NEAR_LAYER, which is all of the terrain that prepass camera looks at; before,
+// it drew every block in view, kilometres past its far plane.
+export const NEAR_LAYER = 3;
 const VIEW_MASK = 1 << VIEW_LAYER;
 const SHADOW_MASK = 1 << SHADOW_LAYER;
+const NEAR_MASK = 1 << NEAR_LAYER;
 // [terrain-2] AO texture until the post chain's GTAO is bound: rg = (1, 1)
 // means "ao 1 at distance -1", which never matches a surface (see material.js).
 const AO_PLACEHOLDER = (() => {
@@ -87,6 +93,7 @@ export class Terrain {
     this.levels = LEVELS;
     this.group = new THREE.Group();
     this.group.name = 'terrain';
+    this.group.userData.cascadeReceiver = 'terrain'; // SunShadows asks _clearOf instead of bounding the blocks
     this.stats = { finest: 0, visible: 0, total: 0, clearance: 0 };
 
     const maxAniso = r?.renderer?.getMaxAnisotropy?.() ?? 1;
@@ -162,6 +169,15 @@ export class Terrain {
     this.groundReady = this._buildGround();
 
     this._frustum = new THREE.Frustum();
+    /** Far plane (m) of the near-field AO prepass; 0 = nothing goes on NEAR_LAYER. */
+    this.nearRange = 0;
+    /** false: the AO prepass draws every block in view, as it did before NEAR_LAYER (A/B). */
+    this.nearCull = true;
+    this._nearCam = new THREE.PerspectiveCamera();
+    this._nearFrustum = new THREE.Frustum();
+    /** No ground within `radius` metres of `p`? (conservative; see _maxHeightNear) */
+    this._clearOf = (p, radius) => !!this._mm && p.y - this._maxHeightNear(p.x, p.z, radius) > radius;
+    this._nearPv = new THREE.Matrix4();
     this._pv = new THREE.Matrix4();
     this._inv = new THREE.Matrix4();
     this._box = new THREE.Box3();
@@ -253,18 +269,51 @@ export class Terrain {
     const n = DEM.res;
     const mn = new Float32Array(G * G).fill(Infinity);
     const mx = new Float32Array(G * G).fill(-Infinity);
+    // a finer grid of maxima (about 100 m cells) for _maxHeightNear
+    const F = Math.min(1024, n);
+    const fmx = new Float32Array(F * F).fill(-Infinity);
     const s = G / n;
+    const sf = F / n;
     const H = DEM.data;
     for (let j = 0; j < n; j++) {
       const gj = Math.min(G - 1, Math.floor(j * s)) * G;
+      const fj = Math.min(F - 1, Math.floor(j * sf)) * F;
       for (let i = 0; i < n; i++) {
         const k = gj + Math.min(G - 1, Math.floor(i * s));
         const v = H[j * n + i];
         if (v < mn[k]) mn[k] = v;
         if (v > mx[k]) mx[k] = v;
+        const kf = fj + Math.min(F - 1, Math.floor(i * sf));
+        if (v > fmx[kf]) fmx[kf] = v;
       }
     }
-    this._mm = { G, mn, mx };
+    this._mm = { G, mn, mx, F, fmx };
+  }
+
+  /**
+   * Highest the terrain can be within `radius` metres (horizontally) of a
+   * point, or Infinity when that reaches past the DEM. Conservative: whole
+   * cells of the fine maxima grid, one cell of margin, plus the detail pad.
+   */
+  _maxHeightNear(x, z, radius) {
+    const { F, fmx } = this._mm;
+    const x0 = x - radius;
+    const x1 = x + radius;
+    const z0 = z - radius;
+    const z1 = z + radius;
+    if (!(x0 >= DEM.minX && x1 <= DEM.maxX && z0 >= DEM.minZ && z1 <= DEM.maxZ)) return Infinity;
+    const fx = F / (DEM.maxX - DEM.minX);
+    const fz = F / (DEM.maxZ - DEM.minZ);
+    const i0 = Math.max(0, Math.floor((x0 - DEM.minX) * fx) - 1);
+    const i1 = Math.min(F - 1, Math.floor((x1 - DEM.minX) * fx) + 1);
+    const j0 = Math.max(0, Math.floor((z0 - DEM.minZ) * fz) - 1);
+    const j1 = Math.min(F - 1, Math.floor((z1 - DEM.minZ) * fz) + 1);
+    let hi = -Infinity;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const v = fmx[j * F + i];
+      if (v > hi) hi = v;
+    }
+    return hi + AMP_MAX * 1.9 + 4;
   }
 
   /** Conservative height range of the terrain over a world rectangle. */
@@ -344,11 +393,36 @@ export class Terrain {
     this._pv.multiplyMatrices(camera.projectionMatrix, this._inv);
     this._frustum.setFromProjectionMatrix(this._pv, camera.coordinateSystem, camera.reversedDepth);
 
+    // the same view cut off at nearRange (2 % slack), for NEAR_LAYER
+    let nearFrustum = null;
+    // Nothing of that cut-off view can hold terrain while the camera is more
+    // than its length above every summit within reach: skip the tests then.
+    const farNear = this.nearRange * 1.02;
+    const overAll = this.nearRange > 0 && p.y - this._maxHeightNear(p.x, p.z, farNear) > farNear;
+    if (this.nearRange > 0 && !overAll && camera.isPerspectiveCamera) {
+      const nc = this._nearCam;
+      nc.fov = camera.fov;
+      nc.aspect = camera.aspect;
+      nc.near = camera.near;
+      nc.far = Math.min(camera.far, farNear);
+      nc.zoom = camera.zoom;
+      nc.filmGauge = camera.filmGauge;
+      nc.filmOffset = camera.filmOffset;
+      nc.coordinateSystem = camera.coordinateSystem;
+      nc._reversedDepth = camera.reversedDepth; // read-only on Camera; the renderer sets it the same way
+      nc.updateProjectionMatrix();
+      this._nearPv.multiplyMatrices(nc.projectionMatrix, this._inv);
+      nearFrustum = this._nearFrustum.setFromProjectionMatrix(this._nearPv, camera.coordinateSystem, camera.reversedDepth);
+    }
+
     // [engine perf] layer setup + the sun's shadow frustum for caster culling
     // (Game updates env before terrain, so the sun already sits on the focus).
     camera.layers.enable(VIEW_LAYER);
     const sun = this.env?.sun;
     let shadowFrustum = null;
+    // [engine perf] the sun cascades ask whether any ground is within reach of a slice
+    const cascades = this.env?.sunShadows?.node;
+    if (cascades && cascades.terrainClear !== this._clearOf) cascades.terrainClear = this._clearOf;
     if (sun?.castShadow && sun.shadow) {
       // A shadow camera mask with any bit above layer 0 is used as-is by three
       // (ShadowNode); otherwise it would copy the main camera's mask.
@@ -401,7 +475,8 @@ export class Terrain {
         this._box.max.set(x1, r[1], z1);
         const inView = this._frustum.intersectsBox(this._box);
         const inShadow = caster && shadowFrustum.intersectsBox(this._box);
-        mesh.layers.mask = (inView ? VIEW_MASK : 0) | (inShadow ? SHADOW_MASK : 0);
+        const inNear = inView && nearFrustum !== null && nearFrustum.intersectsBox(this._box);
+        mesh.layers.mask = (inView ? VIEW_MASK : 0) | (inShadow ? SHADOW_MASK : 0) | (inNear ? NEAR_MASK : 0);
         mesh.visible = inView || inShadow;
         if (inView) visible++;
       };
@@ -483,6 +558,9 @@ export class Terrain {
    */
   bindNearAO(ao) {
     const t = ao && ao.enabled !== false ? ao.gtao?._aoRenderTarget?.texture ?? null : null;
+    // the prepass draws the terrain only on tiers that ask; tell it which layer
+    this.nearRange = t && ao.cfg?.terrain ? (ao.cfg.far ?? 400) : 0;
+    if (ao) ao.terrainLayer = this.nearCull ? NEAR_LAYER : null;
     const u = this.uniforms;
     const want = t ?? AO_PLACEHOLDER;
     if (u.aoTex.value !== want) u.aoTex.value = want;

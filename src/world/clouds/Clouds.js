@@ -51,6 +51,19 @@ const TOP_FRAC_MIN = 0.3;
 const SUB = 2;
 const BAYER = [[0, 0], [1, 1], [1, 0], [0, 1]];
 const GOLDEN = 0.61803398875;
+// The sun shadow map and the camera probe change slowly (cloud drift, a 110 km
+// map, values that are smoothed over 60-170 ms): refresh them at this interval,
+// not every frame. The shadow map is still redrawn at once when its centre,
+// the sun or the weather map changes, so nothing ever samples a stale layout.
+const SLOW_INTERVAL = 0.03;
+// Deck-cover taps [x, z, weight], in units of the probe radius: the centre, a
+// ring at 0.6 and a ring at 1.6 turned 45 degrees. Weights follow the cosine
+// falloff of light arriving from below.
+const DECK_TAPS = [
+  [0, 0, 0.2],
+  [0.6, 0, 0.13], [-0.6, 0, 0.13], [0, 0.6, 0.13], [0, -0.6, 0.13],
+  [1.13, 1.13, 0.07], [-1.13, 1.13, 0.07], [1.13, -1.13, 0.07], [-1.13, -1.13, 0.07],
+];
 
 const hg = (c, g) => {
   const g2 = g * g;
@@ -70,6 +83,10 @@ export class Clouds {
     this.time = 0;
     this.inCloud = 0;
     this.sunVisibility = 1;
+    /** 0..1, how much of the ground below the camera is hidden by cloud (see _probePass). */
+    this.deckCover = 0;
+    /** Seconds between refreshes of the sun shadow map and the camera probe (0 = every frame). */
+    this.slowInterval = SLOW_INTERVAL;
     this.wind = new THREE.Vector3(9, 0, 4); // m/s, world
 
     this.u = {
@@ -124,6 +141,10 @@ export class Clouds {
       shadowStrength: uniform(0.45),
       probePos: uniform(new THREE.Vector3()),
       focusPos: uniform(new THREE.Vector3()),
+      probeRadius: uniform(2000),
+      // How much of the directionless sun fill (`deep`, `diffuse`) is left
+      // when the sun is on the horizon. 1 = the same at every sun height.
+      lowSunFill: uniform(0.2),
       blendFresh: uniform(0.12),
       blendStale: uniform(0.02),
       // Near field: finer steps for the first kilometres (same tier scaling),
@@ -519,7 +540,23 @@ export class Clouds {
       const p = u.probePos;
       const w = this._weatherAt(p).toVar();
       const d = this._density(p, p.y, w, true);
-      return vec4(saturate(d.mul(3)), this.shadowAt(u.focusPos), 0, 1);
+      // Deck cover: the vertical opacity of the cloud column at nine points
+      // under the camera (centre, a near ring and a far ring), from the
+      // undetailed density at three heights. Environment turns it into the
+      // light that a cloud deck below sends back up.
+      const cover = float(0).toVar();
+      const thick = u.top.sub(u.base).div(3);
+      DECK_TAPS.forEach(([x, z, wt]) => {
+        const q = vec3(p.x.add(u.probeRadius.mul(x)), 0, p.z.add(u.probeRadius.mul(z))).toVar();
+        const qw = this._weatherAt(q).toVar();
+        const tau = float(0).toVar();
+        for (const hf of [0.15, 0.38, 0.62]) {
+          const y = mix(u.base, u.top, hf);
+          tau.addAssign(this._density(vec3(q.x, y, q.z), y, qw, false).mul(thick).mul(u.sigma));
+        }
+        cover.addAssign(float(1).sub(exp(tau.negate())).mul(wt));
+      });
+      return vec4(saturate(d.mul(3)), this.shadowAt(u.focusPos), saturate(cover), 1);
     })();
   }
 
@@ -605,6 +642,11 @@ export class Clouds {
       // [terrain-2] 35 % shorter steps in the sun-glow region (more samples
       // across each bright rim, less depth noise to resolve temporally)
       const glowStep = float(1).sub(glow.mul(0.35));
+      // The sunlight that diffuses through a cloud layer is what enters its
+      // top, which goes with the sine of the sun's height. At a low sun that
+      // is little: shaded flanks and valleys are lit by the blue sky, and only
+      // the crests and sun-facing sides stay warm.
+      const sunFill = mix(u.lowSunFill, float(1), smoothstep(0.03, 0.42, u.sunDir.y)).toVar();
       const stepAt = (tt) => max(min(u.stepMin, max(min(u.stepNear, tt.mul(0.3).add(3)), tt.mul(0.03))), tt.mul(u.stepGrow)).mul(glowStep);
       const t = t0.add(blue.mul(stepAt(t0))).toVar();
       const T = float(1).toVar();
@@ -719,12 +761,12 @@ export class Clouds {
             // Deep multiple scattering: light that has lost all direction still
             // fills the interior, more so near the top (keeps the inside of a
             // sunlit cloud bright when you fly through it).
-            sun.addAssign(u.deep.mul(mix(float(0.35), float(1), hs)));
+            sun.addAssign(u.deep.mul(sunFill).mul(mix(float(0.35), float(1), hs)));
             // Diffuse transmission (two-stream): sunlight that has scattered its
             // way down through the whole cloud. It falls off as 1/(1 + k tau),
             // not exponentially, which is why a thin cloud has a bright base
             // and a deep one a dark base, grading from the core to the rim.
-            sun.addAssign(u.diffuse.mul(saturate(tau.mul(0.15))).div(tau.mul(0.11).add(1)));
+            sun.addAssign(u.diffuse.mul(sunFill).mul(saturate(tau.mul(0.15))).div(tau.mul(0.11).add(1)));
             // Lightning: a point source inside the volume.
             const fv = p.sub(u.flashPos);
             const fd = dot(fv, fv).div(u.flashRadius.mul(u.flashRadius)).add(1);
@@ -1190,11 +1232,49 @@ export class Clouds {
     u.shadowSunDir.value.set(s.x, Math.max(s.y, 0.07), s.z).normalize();
     u.probePos.value.copy(camera.position);
     u.focusPos.value.copy(focus);
+    // the deck is seen from the camera's height above the middle of the layer
+    u.probeRadius.value = Math.max(1200, camera.position.y - (u.base.value + u.top.value) * 0.5);
 
+    u.windShear.value.set(w.x, w.z);
+    this._slowAge = (this._slowAge ?? this.slowInterval) + dt;
+    const due = this._slowAge >= this.slowInterval;
+    if (due) this._slowAge = 0;
+    this._weatherAge += dt;
+    const weatherDue = this._weatherAge > 0.5 || this.weatherDirty;
+    const texel = SHADOW_EXTENT / this.shadowTarget.width;
+    const cx = Math.round(camera.position.x / texel) * texel;
+    const cz = Math.round(camera.position.z / texel) * texel;
+    const sd = u.shadowSunDir.value;
+    const key = this._shadowKey ?? (this._shadowKey = { x: NaN, z: NaN, sun: new THREE.Vector3(NaN, 0, 0) });
+    const moved = Number.isFinite(cx + cz) && (cx !== key.x || cz !== key.z);
+    const shadowDue = due || weatherDue || moved || Number.isNaN(key.sun.x) || key.sun.distanceToSquared(sd) > 1e-12;
+    const probeDue = due && !this._probePending;
+    if (weatherDue || shadowDue || probeDue) this._slowPasses(renderer, weatherDue, shadowDue, probeDue, cx, cz, key);
+
+    if (probeDue) {
+      this._probePending = true;
+      renderer.readRenderTargetPixelsAsync(this.probeTarget, 0, 0, 1, 1).then((px) => {
+        this._probeDensity = px[0] / 255;
+        this._probeShadow = px[1] / 255;
+        this._probeCover = px[2] / 255;
+        this._probePending = false;
+      }).catch(() => { this._probePending = false; });
+    }
+    const k = 1 - Math.exp(-dt * 6);
+    // leave a cloud faster than you enter it: the exit should be a clean break
+    const target = this._probeDensity ?? 0;
+    this.inCloud += (target - this.inCloud) * (target < this.inCloud ? 1 - Math.exp(-dt * 16) : k);
+    if (this.inCloud < 0.004 && target === 0) this.inCloud = 0;
+    this.sunVisibility += ((this._probeShadow ?? 1) - this.sunVisibility) * k;
+    this.deckCover += ((this._probeCover ?? 0) - this.deckCover) * (1 - Math.exp(-dt * 2));
+  }
+
+  /** The amortised passes of update(): weather map, sun shadow map, camera probe. */
+  _slowPasses(renderer, weatherDue, shadowDue, probeDue, cx, cz, key) {
+    const u = this.u;
     this._state2 = THREE.RendererUtils.resetRendererState(renderer, this._state2);
     try { // [ground polish] never leave the renderer bound to a cloud target
-      this._weatherAge += dt;
-      if (this._weatherAge > 0.5 || this.weatherDirty) {
+      if (weatherDue) {
         this._weatherAge = 0;
         this.weatherDirty = false;
         this._quad.material = this._weatherMaterial;
@@ -1214,35 +1294,21 @@ export class Clouds {
         const wl = Math.hypot(this.wind.x, this.wind.z);
         if (wl > 0.5) u.anvilDir.value.set(this.wind.x / wl, this.wind.z / wl);
       }
-      u.windShear.value.set(this.wind.x, this.wind.z);
-      const texel = SHADOW_EXTENT / this.shadowTarget.width;
-      const cx = Math.round(camera.position.x / texel) * texel;
-      const cz = Math.round(camera.position.z / texel) * texel;
-      if (Number.isFinite(cx + cz)) u.shadowCentre.value.set(cx, cz);
-      this._quad.material = this._shadowMaterial;
-      renderer.setRenderTarget(this.shadowTarget);
-      this._quad.render(renderer);
-      this._quad.material = this._probeMaterial;
-      renderer.setRenderTarget(this.probeTarget);
-      this._quad.render(renderer);
+      if (shadowDue) {
+        if (Number.isFinite(cx + cz)) { u.shadowCentre.value.set(cx, cz); key.x = cx; key.z = cz; }
+        key.sun.copy(u.shadowSunDir.value);
+        this._quad.material = this._shadowMaterial;
+        renderer.setRenderTarget(this.shadowTarget);
+        this._quad.render(renderer);
+      }
+      if (probeDue) {
+        this._quad.material = this._probeMaterial;
+        renderer.setRenderTarget(this.probeTarget);
+        this._quad.render(renderer);
+      }
     } finally {
       THREE.RendererUtils.restoreRendererState(renderer, this._state2);
     }
-
-    if (!this._probePending) {
-      this._probePending = true;
-      renderer.readRenderTargetPixelsAsync(this.probeTarget, 0, 0, 1, 1).then((px) => {
-        this._probeDensity = px[0] / 255;
-        this._probeShadow = px[1] / 255;
-        this._probePending = false;
-      }).catch(() => { this._probePending = false; });
-    }
-    const k = 1 - Math.exp(-dt * 6);
-    // leave a cloud faster than you enter it: the exit should be a clean break
-    const target = this._probeDensity ?? 0;
-    this.inCloud += (target - this.inCloud) * (target < this.inCloud ? 1 - Math.exp(-dt * 16) : k);
-    if (this.inCloud < 0.004 && target === 0) this.inCloud = 0;
-    this.sunVisibility += ((this._probeShadow ?? 1) - this.sunVisibility) * k;
   }
 
   /** Drop the history (teleports, preset changes). */
