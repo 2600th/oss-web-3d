@@ -107,8 +107,12 @@ export class Terrain {
     // the GPU has its copy. The layer arrays are rewritten by layers.load(), so
     // only after the loaded upload. (Device loss restarts the page, so nothing
     // ever needs to re-upload them; the shadow texture is dynamic and kept.)
+    // `userData.uploaded`: the GPU holds a full copy (fillGround may then send one layer)
     const release = (tex, ready = () => true) => {
-      tex.onUpdate = () => { if (ready() && tex.image?.data) tex.image.data = null; };
+      tex.onUpdate = () => {
+        tex.userData.uploaded = true;
+        if (ready() && tex.image?.data) tex.image.data = null;
+      };
     };
     for (const k of ['height', 'outer', 'amp', 'tile', 'outerSurf']) if (this.textures[k]) release(this.textures[k]);
     // [terrain-2] the land array keeps its CPU copy until the ground layer is in

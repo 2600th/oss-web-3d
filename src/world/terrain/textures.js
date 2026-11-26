@@ -235,15 +235,24 @@ export function buildTerrainTextures(DEM, { aniso = 8 } = {}) {
 
 /**
  * Write the ground-data layer (groundData.js output, res^2 RGBA8) into the
- * `land` array and schedule an upload of that layer only. Returns false when
- * the texture's CPU copy has already been released.
+ * `land` array and schedule its upload. Returns false when the texture's CPU
+ * copy has already been released.
+ *
+ * Only the ground layer is re-sent when the array is already on the GPU
+ * (`land.userData.uploaded`, set by the owner's onUpdate). Before its first
+ * upload the whole array must go: three uploads only the listed layers even
+ * into a freshly created GPU texture, so a ground worker that finished before
+ * the terrain's first frame (a background tab, a slow first shader compile)
+ * left the surf and river layers zero, and the owner then dropped the CPU
+ * copy. The near terrain rendered flat, unlit and fogged over for the session.
  */
 export function fillGround(land, data) {
   const img = land.image;
   if (!img?.data) return false;
   const n = img.width;
   img.data.set(data, n * n * 4 * LAND.ground);
-  if (typeof land.addLayerUpdate === 'function') land.addLayerUpdate(LAND.ground);
+  if (land.userData?.uploaded === true && typeof land.addLayerUpdate === 'function') land.addLayerUpdate(LAND.ground);
+  else land.clearLayerUpdates?.();
   land.needsUpdate = true;
   return true;
 }
